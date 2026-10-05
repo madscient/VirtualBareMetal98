@@ -1,0 +1,78 @@
+# 開発環境の準備
+
+読者: 開発者・AI。新しいマシンでビルドと試験を走らせられるようにするまでの手順。
+進捗と残作業は [worklog.md](worklog.md)。
+
+## 必要なもの
+
+| 用途 | 道具 | 備考 |
+| --- | --- | --- |
+| ホスト OS 上の試験 | C コンパイラ（gcc）、Python 3 | gcc 8.3 と Python 3.8 で動かしている。標準ライブラリだけを使う |
+| DOS 向けのビルド | gcc-ia16（`ia16-elf-gcc`、binutils、newlib、libi86） | Linux 上で動かす。Windows では WSL を使う |
+| DOS 上の試験 | DOSBox 0.74-3 | PC-98 は再現しない。機種に依らない範囲の確認に使う |
+| PC-98 上の試験 | NP21/W | 自動実行の仕組みは未整備（[worklog.md](worklog.md)） |
+
+## gcc-ia16
+
+配布元は Ubuntu の PPA `ppa:tkchia/build-ia16`。配布対象のリリースは時期によって変わる
+（2026-10 時点で 20.04 / 22.04 / 24.04。18.04 向けは打ち切られていて、索引が空）。
+
+### 配布対象の Ubuntu の場合
+
+```
+sudo add-apt-repository ppa:tkchia/build-ia16
+sudo apt update
+sudo apt install gcc-ia16-elf libi86-ia16-elf
+```
+
+確度: 未検証（この手順そのものは実行していない。下の方法で入れた）。
+
+### 配布対象でない環境の場合
+
+`apt install` は「パッケージが見つからない」で失敗する。配布対象のリリース向けのパッケージを
+取ってきて、任意のディレクトリに展開すれば動く。管理者権限は要らない。
+
+1. PPA の索引 `dists/<リリース名>/main/binary-amd64/Packages.gz` から、次の 4 つのパッケージの
+   `Filename` と `SHA256` を引く: `binutils-ia16-elf`、`gcc-ia16-elf`、`libnewlib-ia16-elf`、`libi86-ia16-elf`
+2. それぞれをダウンロードし、ハッシュが索引と一致することを確かめる
+3. `dpkg-deb -x <パッケージ> <展開先>` で 4 つとも同じ場所に展開する
+4. 使う前に次の 2 つを設定する
+   - `PATH` に `<展開先>/usr/bin` を加える
+   - `LD_LIBRARY_PATH` に `<展開先>/usr/x86_64-linux-gnu/ia16-elf/lib` を設定する。
+     binutils が同梱の共有ライブラリを見つけるのに要る。これがないとアセンブラとリンカが起動しない
+
+確度: 確認済み。Ubuntu 18.04 上に 20.04 向けのパッケージ（gcc 6.3.0、binutils 2.39）を展開し、
+このリポジトリのビルドと試験が通った。20.04 向けのパッケージが要求する glibc は 2.27 以上。
+
+### 動作の確認
+
+```
+ia16-elf-gcc --version
+sh tools/build16.sh
+```
+
+`build/dos/` に `IMGDUMP.EXE` と `MONPROBE.EXE` ができれば使える。
+
+## 試験の走らせ方
+
+| コマンド | 内容 | 要るもの |
+| --- | --- | --- |
+| `python tests/run_host_tests.py` | ディスクイメージ層（ホスト OS 上） | gcc、Python |
+| `sh tools/build16.sh` | DOS 向けのビルド | gcc-ia16 |
+| `python tests/run_dos_tests.py` | ディスクイメージ層（16 ビット）とモニタ核を DOS 上で | 上のビルド結果、DOSBox |
+
+`run_dos_tests.py` は、環境変数 `VBM_DOSBOX` に DOSBox の実行ファイルのパスを入れてから走らせる。
+DOSBox は窓を出さずに起動し、バッチを流して終了する。所要は 1 分半ほど。
+
+ビルドを Linux（WSL）で、試験の実行を Windows で、と分けて行ってよい。受け渡しは `build/dos/` の
+実行ファイルだけで、どちらからも同じ作業ツリーが見えていればよい。
+
+## エミュレータについて分かっていること
+
+| エミュレータ | 分かっていること |
+| --- | --- |
+| DOSBox 0.74-3 | `-conf <設定> -noconsole -exit` と環境変数 `SDL_VIDEODRIVER=dummy` で、窓なしの無人実行ができる（`tests/dosenv.py`）。保護モードを使う試験は CPU の再現方式を `core=normal` にして走らせている |
+| NP21/W スターターセット | FreeDOS(98) の起動イメージ、ホストのフォルダを Z: として見せる HOSTDRV、エミュレータを終了させる `PWOFF.COM` が入っている。設定ファイルは実行ファイルと同名の `.ini`（UTF-16）で、起動イメージ（`HDD1FILE`）と共有フォルダ（`hdrvroot`）を相対パスで指している。起動中は起動イメージが排他ロックされ、他から読めない |
+| MS-DOS Player | DOS の実行ファイルをコンソールで直接走らせるもの。標準入出力をパイプにして起動すると戻ってこなかった。原因は調べていない。使っていない |
+
+エミュレータを新しい形で起動するときは、必ず時間切れを付ける。対話待ちになって戻らないことがある。
