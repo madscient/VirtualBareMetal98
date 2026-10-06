@@ -49,8 +49,7 @@ struct opts {
 /*
  * テキスト VRAM (PC-98: 文字が A0000h、属性が A2000h、各 8KB)。退避・復元は面ごと全部を扱うが、
  * 消すのは見えている 80 桁 × 25 行 (4000 バイト) だけにする。属性面の末尾 A3FE0h〜A3FFFh は
- * メモリスイッチの置き場で (実機では電池で保持される)、ここを潰すとゲストの初期化が別の道を
- * 通る (確認済み: 面全体を消すとソーサリアンが VSYNC 割り込みを使い始めず、起動直後で止まった)
+ * メモリスイッチの置き場 (実機では電池で保持される) なので触らない。ゲストにはそのページの写しを見せる
  */
 #define TVRAM_SEG   0xA000
 #define TVRAM_ATTR  0x2000
@@ -382,18 +381,38 @@ static void screen_host(void)
 }
 
 /*
- * -memsw の値をゲストに見せる。メモリスイッチ 1〜8 は属性面の末尾 A3FE2h から 4 バイトおき
- * (NP2 系の bios/biosmem.h の MEMB_MSW1〜8 と同じ。design.md §15)。
- * ホストの値は screen_guest が属性面ごと退避してあり、screen_host が戻す
+ * メモリスイッチ 1〜8 は属性面の末尾 A3FE2h から 4 バイトおき (NP2 系の bios/biosmem.h の MEMB_MSW1〜8 と
+ * 同じ。design.md §15)。実物には触らず、ゲストにはそのページ (A3000h〜) の写しを見せる (setup_guest)。
+ * -memsw の値はその写しに書く
  */
-#define MEMSW_OFF 0x3FE2
+#define MEMSW_OFF      0x3FE2
+#define MEMSW_PAGE_LIN 0xA3000UL
+#define MEMSW_PAGE_SEG 0xA300
+static u32 mswpage;         /* ゲストに見せるメモリスイッチのページ (物理番地) */
+
 static void memsw_guest(const u8 *sw)
 {
-    u8 __far *p = MK_FP(TVRAM_SEG, MEMSW_OFF);
-    u16 i;
+    u8 __far *base = MK_FP((u16)(mswpage >> 4), 0xFE0);
+    u8 buf[32];
+    u8 i;
 
-    for (i = 0; i < 32; i += 4)
-        p[i] = sw[i >> 2];
+    _fmemcpy(buf, base, 32);
+    for (i = 0; i < 8; i++)
+        buf[2 + i * 4] = sw[i];
+    _fmemcpy(base, buf, 32);
+}
+
+/* base (A3FE0h にあたる 32 バイト) からメモリスイッチ 1〜8 を表示する。-memsw の値を組むときの元にする */
+static void print_memsw(const char *label, const u8 __far *base)
+{
+    u8 buf[32];
+    u8 i;
+
+    _fmemcpy(buf, base, 32);
+    printf("VBM98: %s memsw 1-8:", label);
+    for (i = 0; i < 8; i++)
+        printf(" %02X", buf[2 + i * 4]);
+    printf("\n");
 }
 
 /* ---------------------------------------------------------------- 表示系 */
@@ -555,6 +574,16 @@ static int setup_guest(u32 tables)
     monmem_build(&pg, tables, phys);
     monmem_map(HOOK_PAGE_LIN, hookpage);
     monmem_map(RESET_LIN & ~0xFFFUL, rompage);
+    /*
+     * メモリスイッチのあるページ (A3000h〜A3FFFh。80 桁 × 25 行の属性は A2F9Fh までなので表示には使われない)
+     * はゲスト専用の写しに差し替える。NP21/W は実物の領域への書き込みを無視するし、実機では電池で保持される
+     * 値を汚さずに済む。ゲストが書いた値は終了時に捨てる (design.md §15)
+     */
+    mswpage = alloc_pages(1);
+    if (!mswpage)
+        return 1;
+    _fmemcpy(page_ptr(mswpage), MK_FP(MEMSW_PAGE_SEG, 0), 0x1000);
+    monmem_map(MEMSW_PAGE_LIN, mswpage);
     mon_init(&pg);
     mon_hook_add(HOOK_PAGE_LIN, HOOK_INT1B);
     mon_hook_add(RESET_LIN, HOOK_RESET);
@@ -874,6 +903,7 @@ int main(int argc, char **argv)
     printf("VBM98: booting from drive 0 (host IMR %02X %02X, guest IMR %02X %02X; IRR %02X %02X ISR %02X %02X)\n",
            host_imr_m, host_imr_s, guest_imr_m, guest_imr_s,
            pic_read(0x00, 0x0A), pic_read(0x08, 0x0A), pic_read(0x00, 0x0B), pic_read(0x08, 0x0B));
+    print_memsw("host", MK_FP(TVRAM_SEG, MEMSW_OFF - 2));
     if (dev_tick) {
         /* 8253 のカウンタ 0 を約 10ms (2.4576MHz / 6000h) の矩形波にし、IRQ0 をモニタの時計にする */
         mon_trap_port(PIC_M_IMR, 1);
@@ -883,8 +913,10 @@ int main(int argc, char **argv)
         pio_out8(0x71, 0x60);
     }
     screen_guest();
-    if (o.have_memsw)
+    if (o.have_memsw) {
         memsw_guest(o.memsw);
+        print_memsw("guest", MK_FP((u16)(mswpage >> 4), 0xFE0));
+    }
     /* -fdd0 がなければここで選ばせる (spec.md)。取り消したら起動せずに戻る */
     if (!fb.img[0] && !menu_pick_boot())
         running = 0;
