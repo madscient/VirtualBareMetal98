@@ -95,6 +95,24 @@ void mon_init(const struct mon_paging *pg)
     mon_pde0_guest = pg->pde0_guest;
 }
 
+extern struct mon_hook mon_hooks[MON_HOOK_MAX];
+extern u16 mon_hook_count;
+
+int mon_hook_add(u32 lin, u8 id)
+{
+    if (mon_hook_count >= MON_HOOK_MAX)
+        return 1;
+    mon_hooks[mon_hook_count].lin = lin;
+    mon_hooks[mon_hook_count].id = id;
+    mon_hook_count++;
+    return 0;
+}
+
+void mon_hook_clear(void)
+{
+    mon_hook_count = 0;
+}
+
 void mon_trap_port(u16 port, int on)
 {
     u8 *b = mon_tss + MON_TSS_BASE + (port >> 3);

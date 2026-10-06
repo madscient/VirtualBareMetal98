@@ -8,10 +8,17 @@
  */
 #include "mon.h"
 
+#define OP_HLT 0xF4
+
 extern struct mon_vframe mon_vframe;
+
+u16 mon_halt_wait(void);
 
 /* 終了を決めた時点の汎用レジスタ像の位置。中身を写さないのは、構造体の複写が memcpy の呼び出しになるため */
 struct mon_gregs *mon_exit_gregs;
+
+struct mon_hook mon_hooks[MON_HOOK_MAX];
+u16 mon_hook_count;
 
 static void set_ip(struct mon_vframe *f, u16 ip)
 {
@@ -71,6 +78,25 @@ static int io_trap(struct mon_vframe *f, struct mon_gregs *r, u16 *rc)
     return 1;
 }
 
+/* ゲストが HLT を実行した */
+static u16 halt(struct mon_vframe *f, struct mon_gregs *r)
+{
+    u32 lin = mon_lin((u16)f->cs, (u16)f->eip);
+    u16 i;
+
+    for (i = 0; i < mon_hook_count; i++)
+        if (mon_hooks[i].lin == lin)
+            return mon_on_hook(mon_hooks[i].id, f, r);
+    if (!(f->eflags & EFL_IF))
+        return MON_HALT;
+    /*
+     * 本物の HLT と同じく次の割り込みまで待ち、その割り込みを「HLT の次の命令」を戻り先にして
+     * ゲストへ渡す。渡し方は他のハードウェア割り込みと同じで、組み込む側に任せる
+     */
+    set_ip(f, (u16)(f->eip + 1));
+    return mon_on_int((u8)mon_halt_wait(), f, r);
+}
+
 /* monasm.S の trap_common から呼ばれる */
 u16 mon_trap(u16 vec, u16 has_err, struct mon_gregs *r)
 {
@@ -85,6 +111,8 @@ u16 mon_trap(u16 vec, u16 has_err, struct mon_gregs *r)
             set_ip(f, (u16)(f->eip + 2));
             mon_reflect((u8)((u16)err >> 3), f);
             rc = 0;
+        } else if (vec == 13 && err == 0 && mon_peek8(mon_lin((u16)f->cs, (u16)f->eip)) == OP_HLT) {
+            rc = halt(f, r);
         } else if (vec == 13 && err == 0 && io_trap(f, r, &rc)) {
             /* I/O は io_trap が処理した */
         } else {

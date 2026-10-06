@@ -68,8 +68,25 @@ struct mon_panic {
 };
 
 #define MON_PANIC 0xFF00
+/* mon_run の戻り値: ゲストが割り込み禁止のまま HLT を実行した。起こせる割り込みがない */
+#define MON_HALT  0xFE00
+
+/* HLT を横取り印として登録する表の 1 項 */
+#define MON_HOOK_MAX 16
+struct mon_hook {
+    u32 lin;
+    u8  id;
+    u8  pad[3];
+};
 
 /* ---- リアルモードで呼ぶもの ---- */
+
+/*
+ * 線形番地 lin にある HLT を横取り印として登録する。ゲストがそこで HLT を実行すると
+ * mon_on_hook(id) が呼ばれる。登録しない HLT は本物の HLT として扱う (次の割り込みまで待つ)
+ */
+int mon_hook_add(u32 lin, u8 id);
+void mon_hook_clear(void);
 
 /*
  * ページ表を組む。tables_phys は 4KB 境界で MONMEM_TABLE_PAGES ページぶんの物理メモリ。
@@ -106,6 +123,11 @@ u16 mon_on_fault(u8 vec, u32 err, struct mon_vframe *f, struct mon_gregs *r);
 /* トラップしたポートの I/O。size は 1・2・4。0 を返せばゲストは次の命令へ進む */
 u16 mon_on_in(u16 port, u8 size, u32 *val);
 u16 mon_on_out(u16 port, u8 size, u32 val);
+/*
+ * 登録した横取り印の HLT をゲストが実行した。戻り先の CS:IP は f に設定する
+ * (そのままなら同じ HLT で再び止まる)。0 を返せばゲストへ戻る
+ */
+u16 mon_on_hook(u8 id, struct mon_vframe *f, struct mon_gregs *r);
 
 /* ---- ring 0 専用 ---- */
 

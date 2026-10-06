@@ -3,6 +3,8 @@
 
 /* 試験でトラップするポート。guest.S からも使う */
 #define PROBE_PORT 0x300
+/* 横取り印の識別子 */
+#define HOOK_RESET 1
 
 #ifndef __ASSEMBLER__
 

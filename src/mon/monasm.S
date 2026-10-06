@@ -42,6 +42,8 @@ mon_rm_cs:      .skip   2
 rm_ds:          .skip   2
 exit_code:      .skip   2
 mon_panic_vec:  .skip   2
+mon_halt_bp:    .skip   2
+mon_halt_vec:   .skip   2
 
 /*
  * 仮想86モードからの進入では、CPU は必ず ring 0 スタックの頂上から積み始める。
@@ -166,7 +168,10 @@ trap_common:
         je      1f
         inc     cx
         cmp     bp, offset trap_bp_err
-        jne     trap_in_monitor
+        je      1f
+        cmp     bp, [mon_halt_bp]
+        je      trap_in_halt
+        jmp     trap_in_monitor
 1:      push    bp
         push    cx
         push    word ptr [bp + 32]
@@ -179,7 +184,21 @@ trap_common:
         iretd
 
 /*
- * スタックの位置がどちらの形とも合わない = 仮想86モードからの進入ではない。
+ * ring 0 で HLT して割り込みを待っている最中 (mon_halt_wait) に来た割り込み。
+ * ベクタ番号だけ控え、取り込まずに (EOI を出さずに) 待っていた場所へ戻る。ゲストへ渡すのは
+ * 呼び出し側。戻り先の EFLAGS から IF を落として、戻った直後に二つ目の割り込みが入らないようにする。
+ * 積まれている並びは、ベクタ番号の上に EIP・CS・EFLAGS (各 4 バイト)。
+ */
+trap_in_halt:
+        mov     ax, [bp + 32]
+        mov     [mon_halt_vec], ax
+        and     dword ptr [bp + 42], 0xFFFFFDFF
+        popad
+        add     sp, 2
+        iretd
+
+/*
+ * スタックの位置がどの形とも合わない = 仮想86モードからの進入ではない。
  * モニタ自身の実行中の例外なので、続行せずに抜ける。
  */
 trap_in_monitor:
@@ -246,6 +265,26 @@ rm_back:
         pop     di
         pop     si
         pop     bp
+        ret
+
+/*
+ * u16 mon_halt_wait(void)  ring 0 専用
+ * 割り込みを許可して HLT し、来た割り込みのベクタ番号を返す。割り込み自体は取り込まずに戻る
+ * (EOI を出さない) ので、呼び出し側がゲストへ渡す。入口・出口とも割り込み禁止。
+ * STI の直後の HLT には割り込みが割り込めない (STI の効果は次の命令の後) ので、取りこぼさない。
+ * 割り込みが積む 12 バイト、入口が積むベクタ番号 2 バイト、PUSHAD の 32 バイトを引いた位置を
+ * trap_common に教え、この待ちの最中に来たものだと見分けさせる。
+ */
+        .global mon_halt_wait
+mon_halt_wait:
+        mov     ax, sp
+        sub     ax, 12 + 2 + 32
+        mov     [mon_halt_bp], ax
+        sti
+        hlt
+        cli
+        mov     word ptr [mon_halt_bp], 0
+        mov     ax, [mon_halt_vec]
         ret
 
 /*

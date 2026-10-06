@@ -9,7 +9,8 @@
         .intel_syntax noprefix
         .code16
         .text
-        .global g_exit, g_iopl, g_hlt, g_hlt_at, g_remap, g_reset, g_priv, g_priv_at
+        .global g_exit, g_iopl, g_hlt, g_hlt_at, g_hlt_cli, g_hlt_cli_at
+        .global g_remap, g_reset, g_priv, g_priv_at
         .global g_io, g_io_native, g_irq, g_sep, g_sep_end
 
 g_exit:
@@ -27,12 +28,22 @@ g_iopl:
         int     0x80
         int     0xFE
 
-/* 報告: HLT の前に 1111h、後に 2222h */
+/* 報告: HLT の前に 1111h、後に 2222h。HLT は次の割り込みで抜けるはず */
 g_hlt:
         mov     ax, 0x1111
         int     0x80
 g_hlt_at:
         hlt
+        mov     ax, 0x2222
+        int     0x80
+        int     0xFE
+
+/* 割り込み禁止の HLT。先へは進まないはず */
+g_hlt_cli:
+        cli
+g_hlt_cli_at:
+        hlt
+        sti
         mov     ax, 0x2222
         int     0x80
         int     0xFE

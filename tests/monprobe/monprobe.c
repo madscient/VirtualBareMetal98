@@ -12,7 +12,7 @@
 #include "xms.h"
 
 extern u16 mon_rm_cs;
-extern void g_exit(void), g_iopl(void), g_hlt(void), g_hlt_at(void);
+extern void g_exit(void), g_iopl(void), g_hlt(void), g_hlt_at(void), g_hlt_cli(void), g_hlt_cli_at(void);
 extern void g_reflect(void), g_int0d(void), g_int06(void), g_int00(void);
 extern void g_remap(void), g_reset(void), g_priv(void), g_priv_at(void);
 extern void g_io(void), g_io_native(void), g_irq(void), g_sep(void), g_sep_end(void);
@@ -29,6 +29,7 @@ static u8 gstack[512];
 static u16 checks, failures;
 static struct mon_paging pg;
 static u32 tables;
+static struct mon_guest last_g;
 
 static void check(const char *name, int ok)
 {
@@ -58,6 +59,7 @@ static u16 run_at(u16 cs, u16 ip, u16 ds, u16 es, u16 ss, u16 sp, u32 eflags)
     g.esp = sp;
     g.eflags = eflags;
     rc = mon_run(&g);
+    last_g = g;
 
     if ((rc & 0xFF00) == MON_PANIC) {
         struct mon_panic pn;
@@ -112,6 +114,17 @@ static const struct event *fault_at(u16 cs, u16 ip)
     for (i = 0; i < nev; i++)
         if (ev[i].kind != EV_INT && ev[i].cs == cs && ev[i].ip == ip)
             return &ev[i];
+    return 0;
+}
+
+/* ハードウェア割り込み (ベクタ 08h〜17h) が、ゲストの cs:ip を戻り先にして届いたか */
+static int irq_at(u16 cs, u16 ip)
+{
+    u16 i;
+
+    for (i = 0; i < nev; i++)
+        if (ev[i].kind == EV_INT && ev[i].vec >= 0x08 && ev[i].vec <= 0x17 && ev[i].cs == cs && ev[i].ip == ip)
+            return 1;
     return 0;
 }
 
@@ -290,10 +303,14 @@ int main(void)
     check("iopl: guest sees IOPL=3", (rep[0] & EFL_IOPL3) == EFL_IOPL3);
 
     rc = run(g_hlt, 0);
-    e = fault_at(cs, code_off(g_hlt_at));
-    check("hlt: finishes", rc == X_DONE);
-    check("hlt: raises #GP with error code 0 at the HLT", e && e->vec == VEC_GP && e->err == 0 && faults() == 1);
-    check("hlt: execution continues after it", nrep == 2 && rep[0] == 0x1111 && rep[1] == 0x2222);
+    check("hlt: finishes", rc == X_DONE && nrep == 2 && rep[0] == 0x1111 && rep[1] == 0x2222);
+    check("hlt: handled inside the monitor, no exception reaches the embedder", faults() == 0);
+    check("hlt: the waking interrupt is delivered with the return address after the HLT",
+          irq_at(cs, (u16)(code_off(g_hlt_at) + 1)));
+
+    rc = run(g_hlt_cli, 0);
+    check("hlt with IF=0: reported to the host as a halt, guest left at the HLT",
+          rc == MON_HALT && nrep == 0 && last_g.cs == cs && last_g.ip == code_off(g_hlt_cli_at));
 
     test_reflect("int 81h", g_reflect, 0x81, 1);
     /* 一般保護例外と同じ番号のベクタでも、INT 命令で来たものはエラーコードが無いので見分けられる */
@@ -322,10 +339,12 @@ int main(void)
     orig = rom[0xFF0];
     p[0xFF0] = OP_HLT;
     monmem_map(0xFF000UL, pc);
+    mon_hook_add(0xFFFF0UL, HOOK_RESET);
     rc = run(g_reset, 0);
+    mon_hook_clear();
     monmem_map(0xFF000UL, 0xFF000UL);
-    e = fault_at(0xFFFF, 0);
-    check("reset: jump to FFFF:0000 is caught through the shadowed ROM page", rc == X_RESET && e && e->vec == VEC_GP);
+    check("reset: jump to FFFF:0000 is caught through the shadowed ROM page and the hook table",
+          rc == X_RESET && faults() == 0 && last_g.cs == 0xFFFF && last_g.ip == 0);
     check("reset: the ROM itself is unchanged", orig != OP_HLT && rom[0xFF0] == orig);
 
     rc = run(g_priv, 0);
