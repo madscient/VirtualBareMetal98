@@ -49,6 +49,14 @@ start:
         inc     di
         loop    2b
 
+        /* 割り込みを許可したまましばらく回る。ハードウェア割り込みがゲストに届いても壊れないことを見る */
+        sti
+        mov     dx, 20
+3:      xor     cx, cx
+4:      loop    4b
+        dec     dx
+        jnz     3b
+
         mov     ax, 0x5590              /* WRITE DATA: 自分の 1024 バイトをセクタ 3 へ */
         mov     bx, 1024
         mov     cx, 0x0300

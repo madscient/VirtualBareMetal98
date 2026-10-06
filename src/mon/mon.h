@@ -72,7 +72,7 @@ struct mon_panic {
 #define MON_HALT  0xFE00
 
 /* HLT を横取り印として登録する表の 1 項 */
-#define MON_HOOK_MAX 16
+#define MON_HOOK_MAX 48
 struct mon_hook {
     u32 lin;
     u8  id;
@@ -128,6 +128,8 @@ u16 mon_on_out(u16 port, u8 size, u32 val);
  * (そのままなら同じ HLT で再び止まる)。0 を返せばゲストへ戻る
  */
 u16 mon_on_hook(u8 id, struct mon_vframe *f, struct mon_gregs *r);
+/* ゲストの HLT で待ったあと、起こした割り込みを mon_on_int へ渡す直前に呼ばれる (記録用) */
+void mon_on_halt_wake(void);
 
 /* ---- ring 0 専用 ---- */
 
@@ -142,6 +144,8 @@ void mon_poke16(u32 lin, u16 val);
 
 u32 mon_lin(u16 seg, u16 off);
 u16 mon_data_seg(void);
+void mon_out8(u16 port, u8 val);
+u8 mon_in8(u16 port);
 
 #endif
 

@@ -305,6 +305,28 @@ mon_lin:
         pop     bp
         ret
 
+/* void mon_out8(u16 port, u8 val)。壊す: AX, DX */
+        .global mon_out8
+mon_out8:
+        push    bp
+        mov     bp, sp
+        mov     dx, [bp + 4]
+        mov     al, [bp + 6]
+        out     dx, al
+        pop     bp
+        ret
+
+/* u8 mon_in8(u16 port)。壊す: AX, DX */
+        .global mon_in8
+mon_in8:
+        push    bp
+        mov     bp, sp
+        mov     dx, [bp + 4]
+        in      al, dx
+        xor     ah, ah
+        pop     bp
+        ret
+
 /*
  * ゲストのメモリへのアクセス。ring 0 専用で、FS が全域セグメントを指していること
  * (trap_common が設定する)。引数は線形番地。壊す: AX, DX と EDX の上位。

@@ -5,11 +5,12 @@
 
     img   ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
     mon   モニタ核。保護モード・仮想86モード・ページングの動作
-    boot  本体 (VBM98.EXE)。試験用の IPL を起動し、INT 1Bh の読み書きが届くか
+    boot  本体 (VBM98.EXE)。試験用の IPL を起動し、INT 1Bh の読み書きが届くか。PC-98 の環境でだけ走る
 
-引数を省くと両方を走らせる。事前に tools/build16.sh でビルドしておく。
+引数を省くと全部を走らせる。事前に tools/build16.sh でビルドしておく。
 DOS の実行環境は環境変数で選ぶ (tests/dosenv.py)。DOSBox は PC-98 ではないので機種に依らない
-範囲の確認、NP21/W は PC-98 としての確認になる。
+範囲の確認、NP21/W は PC-98 としての確認になる。本体は起動時に PC-98 の BIOS (INT 18h) と I/O ポートで
+表示系を初期化するので、PC の DOSBox では走らせない (PC の INT 18h は ROM BASIC)。
 """
 import os
 import shutil
@@ -48,6 +49,9 @@ def test_mon(work):
 
 def test_boot(work):
     """IPL が起動し、INT 1Bh の読み書きがイメージに届き、HLT で DOS に戻ることを見る"""
+    if dosenv.name() != 'np21w':
+        print('起動: この環境は PC-98 ではないので走らせない (本体が INT 18h と PC-98 の I/O ポートを使う)')
+        return True
     with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
         ipl = f.read()
     if len(ipl) != 1024:

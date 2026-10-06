@@ -56,6 +56,10 @@ u16 mon_on_hook(u8 id, struct mon_vframe *f, struct mon_gregs *r)
     return id == HOOK_RESET ? X_RESET : X_FAULT;
 }
 
+void mon_on_halt_wake(void)
+{
+}
+
 u16 mon_on_in(u16 port, u8 size, u32 *val)
 {
     if (port != PROBE_PORT)

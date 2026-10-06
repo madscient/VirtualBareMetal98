@@ -94,6 +94,7 @@ static u16 halt(struct mon_vframe *f, struct mon_gregs *r)
      * ゲストへ渡す。渡し方は他のハードウェア割り込みと同じで、組み込む側に任せる
      */
     set_ip(f, (u16)(f->eip + 1));
+    mon_on_halt_wake();
     return mon_on_int((u8)mon_halt_wait(), f, r);
 }
 
