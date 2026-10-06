@@ -1,8 +1,11 @@
 /*
- * モニタ核のうち、モード切替と例外の入口・出口。判断はすべて mon.c (ring 0 で動く C) に任せる。
+ * モニタ核のうち、モード切替と例外の入口・出口。判断はすべて mon_r0.c (ring 0 で動く C) に任せる。
  *
- * 保護モードのコード・データセグメントは、リアルモードでの CS・DS と同じ場所を指す 16 ビット
- * セグメントにしてある。だから C のコードはリアルモードでも ring 0 でも同じ番地で動く。
+ * 保護モードでは、モニタ自身のコードとデータを「別名」の線形番地 (MON_ALIAS_BASE + 物理番地) で見る。
+ * ゲストの下位メモリを別の物理メモリに差し替えても、モニタの置き場所が見えなくなることがないため。
+ * ただしモード切替の瞬間だけは、実行中の番地が恒等写像になっている必要がある。そこでは低位の
+ * 線形番地を指すセレクタ (MON_SEL_*_LOW) を使い、下位 4MB の写像を恒等写像に戻してから抜ける。
+ * コードセグメントのオフセットは別名でも低位でも同じなので、C のコードはどちらでもそのまま動く。
  */
 #include "mon.h"
 
@@ -15,7 +18,9 @@
         .bss
         .balign 4
         .global mon_gdt, mon_idt, mon_tss, mon_gdt_ptr, mon_idt_ptr
-        .global mon_stack_top, mon_vframe, mon_gregs_entry, mon_pd_phys, mon_rm_cs
+        .global mon_stack_top, mon_vframe, mon_gregs_entry
+        .global mon_pd_phys, mon_pd_lin, mon_pde0_host, mon_pde0_guest
+        .global mon_rm_cs, mon_panic_vec, mon_panic_stack
 
 mon_stack:      .skip   MON_STACK_SIZE
 mon_stack_top:
@@ -24,7 +29,11 @@ mon_idt:        .skip   256 * 8
 mon_tss:        .skip   MON_TSS_SIZE
         .balign 4
 mon_pd_phys:    .skip   4
+mon_pd_lin:     .skip   4
+mon_pde0_host:  .skip   4
+mon_pde0_guest: .skip   4
 rm_cr0:         .skip   4
+mon_panic_stack: .skip  16
 mon_gdt_ptr:    .skip   6
 mon_idt_ptr:    .skip   6
 rm_idt_ptr:     .skip   6
@@ -32,9 +41,6 @@ rm_sp:          .skip   2
 mon_rm_cs:      .skip   2
 rm_ds:          .skip   2
 exit_code:      .skip   2
-        .balign 4
-        .global mon_panic_vec, mon_panic_stack
-mon_panic_stack: .skip  16
 mon_panic_vec:  .skip   2
 
 /*
@@ -94,6 +100,7 @@ mon_enter:
         mov     [rm_cr0], eax
         or      eax, 0x80000001
         mov     cr0, eax
+        /* ここまでは恒等写像で実行している。この jmp で別名の番地へ移る */
         jmp     MON_SEL_CODE:pm_start
 
 pm_start:
@@ -102,9 +109,16 @@ pm_start:
         mov     es, ax
         mov     ss, ax
         mov     sp, offset mon_gregs_entry
+        mov     ax, MON_SEL_FLAT
+        mov     fs, ax
+        /* 下位 4MB をゲスト向けの写像に切り替える。CR3 の再設定で TLB を捨てる */
+        mov     edx, [mon_pd_lin]
+        mov     eax, [mon_pde0_guest]
+        mov     fs:[edx], eax
+        mov     eax, [mon_pd_phys]
+        mov     cr3, eax
         xor     ax, ax
         lldt    ax
-        mov     fs, ax
         mov     gs, ax
         mov     ax, MON_SEL_TSS
         ltr     ax
@@ -181,13 +195,24 @@ trap_in_monitor:
         mov     sp, offset mon_vframe
 
 /*
- * 入口: ring 0。AX = 終了コード。
- * ページングを先に止め、次に保護モードを抜ける。セグメントレジスタには 64KB 限界の
- * ディスクリプタを入れておく (リアルモードに戻ってもキャッシュされた限界が残るため)。
+ * 入口: ring 0、DS = MON_SEL_DATA。AX = 終了コード。
+ * 下位 4MB を恒等写像に戻し、低位のセレクタへ移ってから、ページングと保護モードを抜ける。
+ * セグメントレジスタには 64KB 限界のディスクリプタを入れておく (リアルモードに戻っても
+ * キャッシュされた限界が残るため)。
  */
 leave_pm:
         mov     [exit_code], ax
-        mov     ax, MON_SEL_DATA
+        mov     ax, MON_SEL_FLAT
+        mov     fs, ax
+        mov     edx, [mon_pd_lin]
+        mov     eax, [mon_pde0_host]
+        mov     fs:[edx], eax
+        mov     eax, [mon_pd_phys]
+        mov     cr3, eax
+        jmp     MON_SEL_CODE_LOW:leave_low
+
+leave_low:
+        mov     ax, MON_SEL_DATA_LOW
         mov     ds, ax
         mov     es, ax
         mov     ss, ax

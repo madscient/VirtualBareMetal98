@@ -25,7 +25,12 @@ sudo apt update
 sudo apt install gcc-ia16-elf libi86-ia16-elf
 ```
 
-確度: 未検証（この手順そのものは実行していない。下の方法で入れた）。
+`gcc-ia16-elf` だけを入れると、`dos.h` や `i86.h` が無いと言われてビルドが止まる。これらは `libi86-ia16-elf` が
+提供する。パッケージを入れずに展開した場所で使うときは、`include/` と `lib/` のある階層を環境変数
+`IA16_LIBI86` で `tools/build16.sh` に渡す。
+
+確度: 確認済み（Ubuntu 26.04 に PPA から入れた gcc-ia16-elf 6.3.0 でビルドが通った。libi86 は展開した
+ものを `IA16_LIBI86` で渡した）。
 
 ### 配布対象でない環境の場合
 

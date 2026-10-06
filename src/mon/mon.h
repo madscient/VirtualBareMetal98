@@ -1,11 +1,13 @@
 #ifndef MON_H
 #define MON_H
 
-#define MON_SEL_CODE    0x08
-#define MON_SEL_DATA    0x10
-#define MON_SEL_FLAT    0x18
-#define MON_SEL_TSS     0x20
-#define MON_GDT_SIZE    0x28
+#define MON_SEL_CODE      0x08
+#define MON_SEL_DATA      0x10
+#define MON_SEL_FLAT      0x18
+#define MON_SEL_TSS       0x20
+#define MON_SEL_CODE_LOW  0x28
+#define MON_SEL_DATA_LOW  0x30
+#define MON_GDT_SIZE      0x38
 
 #define MON_STACK_SIZE  1024
 #define MON_TSS_BASE    104
@@ -26,6 +28,22 @@
 
 #define EFL_VM          0x00020000UL
 
+/*
+ * 保護モードでモニタが自分自身を見る線形番地の下駄 (物理番地 + この値)。ゲストの下位メモリを
+ * 別の物理メモリに差し替えても、モニタの置き場所が見えなくなることがないようにする。
+ * 4MB 境界 (ページディレクトリの 1 項) であること
+ */
+#define MON_ALIAS_BASE  0x00400000UL
+
+/* monmem_build が使う領域の大きさ (4KB 境界に揃えたページ数) */
+#define MONMEM_TABLE_PAGES 4
+
+struct mon_paging {
+    u32 pd_phys;      /* ページディレクトリの物理番地 */
+    u32 pde0_host;    /* 線形 0〜3FFFFF を恒等写像にするディレクトリ項。モード切替の瞬間に使う */
+    u32 pde0_guest;   /* 同じ範囲のゲスト向けの写像 */
+};
+
 /* 仮想86モードから ring 0 へ入ったときに CPU が積む並び */
 struct mon_vframe {
     u32 eip, cs, eflags, esp, ss, es, ds, fs, gs;
@@ -37,8 +55,9 @@ struct mon_gregs {
 };
 
 struct mon_guest {
-    u16 ax, bx, cx, dx, si, di, bp;
-    u16 ds, es, ss, sp, cs, ip, flags;
+    u32 eax, ebx, ecx, edx, esi, edi, ebp, esp;
+    u32 eflags;
+    u16 ip, cs, ss, ds, es, fs, gs;
 };
 
 /* モニタ自身の実行中に起きた例外の記録 */
@@ -50,35 +69,55 @@ struct mon_panic {
 
 #define MON_PANIC 0xFF00
 
-/* pd_phys はページディレクトリの物理番地。下位 1MB が恒等写像になっていること */
-void mon_init(u32 pd_phys);
+/* ---- リアルモードで呼ぶもの ---- */
 
 /*
- * g の状態からゲストを仮想86モードで走らせる。mon_on_int / mon_on_fault が 0 以外を
- * 返すと、その値を戻り値にしてリアルモードへ戻り、g に終了時の状態を入れる。
- * モニタ自身の実行中に例外が起きた場合は MON_PANIC + ベクタ番号を返す。
- * そのときの詳細は mon_panic_get で取れる。
+ * ページ表を組む。tables_phys は 4KB 境界で MONMEM_TABLE_PAGES ページぶんの物理メモリ。
+ * guest_phys はゲストの下位 640KB を置く物理番地 (4KB 境界)。0 なら恒等写像のまま。
+ * 下位 640KB 以外 (A0000〜3FFFFF) は恒等写像
+ */
+void monmem_build(struct mon_paging *pg, u32 tables_phys, u32 guest_phys);
+/* ゲスト向けの写像で、線形 lin (4MB 未満) のページの先を phys に差し替える */
+void monmem_map(u32 lin, u32 phys);
+
+void mon_init(const struct mon_paging *pg);
+
+/* ポートの I/O をトラップするかどうか。トラップしたものは mon_on_in / mon_on_out に届く */
+void mon_trap_port(u16 port, int on);
+
+/*
+ * g の状態からゲストを仮想86モードで走らせる。mon_on_* が 0 以外を返すと、その値を戻り値にして
+ * リアルモードへ戻り、g に終了時の状態を入れる。
+ * モニタ自身の実行中に例外が起きた場合は MON_PANIC + ベクタ番号を返す。詳細は mon_panic_get
  */
 u16 mon_run(struct mon_guest *g);
 void mon_panic_get(struct mon_panic *p);
 
-/*
- * モニタを組み込む側が用意する。ring 0 の 16 ビット保護モードで、割り込み禁止のまま呼ばれる。
- * 定義は名前が _r0.c で終わるファイルに置く (理由は mon_r0.c の先頭)。
- * この中から DOS や BIOS は呼べない。far ポインタも使えない (セグメント値がセレクタになる)。
- * ゲストのメモリには mon_peek / mon_poke で線形番地を指定して触る。
- */
-u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r);
-u16 mon_on_fault(u8 vec, u32 err, struct mon_vframe *f, struct mon_gregs *r);
+/* ---- モニタを組み込む側が用意するもの。ring 0 で呼ばれる (制約は mon_r0.c の先頭) ---- */
 
-/* 以下は ring 0 専用 */
+/* ソフトウェア割り込みとハードウェア割り込み (ベクタ 0・6 以外) */
+u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r);
+/*
+ * CPU の例外。エラーコードを持つものと、ベクタ 0・6。
+ * ベクタ 0・6 のゲートは DPL=0 なので、ゲストの INT 0 / INT 6 はここへは来ず、一般保護例外に
+ * なってモニタが反射する。したがってここに届く 0・6 は例外だけ
+ */
+u16 mon_on_fault(u8 vec, u32 err, struct mon_vframe *f, struct mon_gregs *r);
+/* トラップしたポートの I/O。size は 1・2・4。0 を返せばゲストは次の命令へ進む */
+u16 mon_on_in(u16 port, u8 size, u32 *val);
+u16 mon_on_out(u16 port, u8 size, u32 val);
+
+/* ---- ring 0 専用 ---- */
+
+/* リアルモードの CPU が割り込みを受けたときと同じことを、ゲストのスタックとベクタ表に対して行う */
 void mon_reflect(u8 vec, struct mon_vframe *f);
 u8 mon_peek8(u32 lin);
 u16 mon_peek16(u32 lin);
 void mon_poke8(u32 lin, u8 val);
 void mon_poke16(u32 lin, u16 val);
 
-/* どちらのモードからでも呼べる */
+/* ---- どちらのモードからでも ---- */
+
 u32 mon_lin(u16 seg, u16 off);
 u16 mon_data_seg(void);
 

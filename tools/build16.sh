@@ -11,6 +11,13 @@ model="-mcmodel=small -march=i80286 -Os -std=gnu99"
 strict="-Wall -Wextra -Wconversion -Wshadow -Werror"
 loose="-Wall -Wextra -Werror"
 inc="-I $root/src/core -I $root/src/dos -I $root/src/mon -I $root/tests/imgdump -I $root/tests/monprobe"
+# libi86 (dos.h, i86.h) をパッケージとして入れていない環境では、展開した場所を IA16_LIBI86 で渡す。
+# -isystem にするのは、ヘッダ内のインライン関数が -Werror の警告に引っかからないようにするため
+libs="-li86"
+if [ -n "$IA16_LIBI86" ]; then
+    inc="$inc -isystem $IA16_LIBI86/include"
+    libs="-L $IA16_LIBI86/lib $libs"
+fi
 
 objs=""
 cc() {
@@ -34,7 +41,7 @@ cc_r0() {
 
 link() {
     # shellcheck disable=SC2086
-    ia16-elf-gcc $model -o "$out/$1" $objs -li86
+    ia16-elf-gcc $model -o "$out/$1" $objs $libs
     # shellcheck disable=SC2086
     ia16-elf-size $objs
     ls -l "$out/$1" | awk -v n="$1" '{print $5, "bytes ", n}'
@@ -48,8 +55,11 @@ cc tests/imgdump/plat_dos.c "$loose"
 link IMGDUMP.EXE
 
 cc src/mon/mon.c "$strict"
+cc src/mon/monmem.c "$strict"
 cc_r0 src/mon/mon_r0.c
 cc src/mon/monasm.S ""
+cc src/dos/xms.c "$strict"
+cc src/dos/xmsasm.S ""
 cc tests/monprobe/monprobe.c "$loose"
 cc_r0 tests/monprobe/probe_r0.c
 cc tests/monprobe/guest.S ""
