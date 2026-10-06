@@ -28,6 +28,12 @@
 #define X_HOTKEY_MENU 6   /* DEL: VM メニュー */
 #define X_HOTKEY_FDD0 7   /* テンキー 0: ドライブ 0 のイメージ交換 */
 #define X_HOTKEY_FDD1 8   /* テンキー 1: ドライブ 1 のイメージ交換 */
+#define X_HOTKEY_SHOT 9   /* COPY: スクリーンショット */
+
+/* ゲストが書いたデジタルパレットのレジスタ (A8h, AAh, ACh, AEh の順)。ring 0 側が写しを持つ */
+extern u8 vid_pal[4];
+/* 開発用: COPY の代わりにスクリーンショットにするスキャンコード (0 なら無し)。-stopkey と同じ事情 */
+extern u8 kbd_shot_alt;
 
 /* 横取り印で受けたベクタの回数 (ring 0 側が数える) */
 extern u16 vec_hits[HOOK_VEC_MAX];
@@ -40,6 +46,8 @@ extern u8 kbd_stop_alt;
  * ゲストには割り込みマスクの bit 0 を見せかけで返す (guest_imr0)。時間の物差しと -stopafter の刻みになる
  */
 extern u8 dev_tick, guest_imr0;
+/* 開発用 (-shotat): -tick の刻みがこの数に達したらスクリーンショットを撮る (0 なら無し)。試験で使う */
+extern u32 dev_shot_at;
 
 /* 開発用: モニタに届いたものの記録 (ring 0 側が書き、ホストが止めたときに表示する) */
 #define EVLOG_SIZE 32

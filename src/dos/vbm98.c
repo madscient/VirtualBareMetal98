@@ -21,6 +21,7 @@
 #include <libi86/string.h>
 #include "dosio.h"
 #include "xms.h"
+#include "shot.h"
 
 #define GUEST_KB        640
 #define DRIVES          2
@@ -39,6 +40,7 @@ struct opts {
     int have_dipsw, have_memsw;
     int trace;                  /* 開発用: INT 1Bh の呼び出しを 1 行ずつ出す */
     int have_imr;               /* 開発用: ゲストの割り込みマスクの初期値を指定する */
+    const char *ss;             /* スクリーンショットのファイル名の先頭 (spec.md)。0 なら fdd0 の名前から */
     u8 dipsw[3], memsw[8], imr[2];
 };
 
@@ -149,6 +151,14 @@ static int parse_args(int argc, char **argv, struct opts *o)
             i++;
         } else if (eq(a, "-tick")) {
             dev_tick = 1;
+        } else if (eq(a, "-ss") && v) {
+            o->ss = v;
+            i++;
+        } else if (eq(a, "-shotkey") && v && !hexbytes(v, &kbd_shot_alt, 1)) {
+            i++;
+        } else if (eq(a, "-shotat") && v) {
+            dev_shot_at = (u32)atol(v);
+            i++;
         } else if (eq(a, "-stopafter") && v) {
             stop_after_irqs = (u32)atol(v);
             i++;
@@ -384,10 +394,30 @@ static void video_guest(void)
     pio_out8(0x6A, 0x00);
     pio_out8(0x7C, 0x00);
     /* デジタルパレットの対応は A8h = #3/#7, AAh = #1/#5, ACh = #2/#6, AEh = #0/#4 (上位ニブルが若い番号) */
-    pio_out8(0xA8, 0x37);
-    pio_out8(0xAA, 0x15);
-    pio_out8(0xAC, 0x26);
-    pio_out8(0xAE, 0x04);
+    vid_pal[0] = 0x37;
+    vid_pal[1] = 0x15;
+    vid_pal[2] = 0x26;
+    vid_pal[3] = 0x04;
+    pio_out8(0xA8, vid_pal[0]);
+    pio_out8(0xAA, vid_pal[1]);
+    pio_out8(0xAC, vid_pal[2]);
+    pio_out8(0xAE, vid_pal[3]);
+}
+
+/* スクリーンショットのファイル名の先頭。-ss の値か、ドライブ 0 のイメージのファイル名の先頭 4 文字 (spec.md) */
+static char shot_base[5];
+
+static void set_shot_base(const char *path)
+{
+    const char *p, *name = path;
+    u8 i;
+
+    for (p = path; *p; p++)
+        if (*p == '\\' || *p == '/' || *p == ':')
+            name = p + 1;
+    for (i = 0; i < 4 && name[i] && name[i] != '.'; i++)
+        shot_base[i] = name[i];
+    shot_base[i] = 0;
 }
 
 /*
@@ -666,6 +696,7 @@ int main(int argc, char **argv)
     for (i = 0; i < DRIVES; i++)
         if (o.fdd[i] && open_drive(i, o.fdd[i]))
             return 1;
+    set_shot_base(o.ss ? o.ss : o.fdd[0]);
     if (xfer_alloc()) {
         printf("VBM98: cannot allocate the transfer buffer\n");
         return 1;
@@ -684,6 +715,11 @@ int main(int argc, char **argv)
     /* キーボードはホットキーを見るためにモニタが先に読むので、ゲストにはトラップ経由で見せる (vbm_r0.c) */
     mon_trap_port(0x41, 1);
     mon_trap_port(0x43, 1);
+    /* デジタルパレットの写し (スクリーンショットの色) のため。書き込みは実機へも通る (vbm_r0.c) */
+    mon_trap_port(0xA8, 1);
+    mon_trap_port(0xAA, 1);
+    mon_trap_port(0xAC, 1);
+    mon_trap_port(0xAE, 1);
 
     /* ゲストの割り込みマスクの初期値は、電源投入後の BIOS が残す値に近いホストの現在値 */
     host_imr_m = pio_in8(PIC_M_IMR);
@@ -745,6 +781,18 @@ int main(int argc, char **argv)
             dump_guest(&g);
             running = 0;
             break;
+        case X_HOTKEY_SHOT: {
+            struct shot_info si;
+
+            /* グラフィックが 400 ラインかは、ゲストの BIOS ワークエリアの PRXDUPD bit 2 で見る (§16) */
+            g_read(WA_PRXDUPD & ~1UL, mon_data_seg(), (u16)(unsigned)word_buf, 2);
+            si.base = shot_base;
+            si.lines400 = (word_buf[WA_PRXDUPD & 1] & 0x04) != 0;
+            si.pal = vid_pal;
+            if (shot_save(&si))
+                printf("VBM98: screenshot failed\n");
+            break;
+        }
         case X_HOTKEY_MENU:
         case X_HOTKEY_FDD0:
         case X_HOTKEY_FDD1:

@@ -74,12 +74,15 @@ static void pop_iret(struct mon_vframe *f)
 #define SC_DEL    0x39
 #define SC_PAD0   0x4E
 #define SC_PAD1   0x4A
+#define SC_COPY   0x61
 
 static u8 kbd_ctrl, kbd_grph;   /* 押されている修飾キー */
 static u8 kbd_pending;          /* ゲストがまだ読んでいないスキャンコードがある */
 static u8 kbd_code;
-u8 kbd_stop_alt;
+u8 kbd_stop_alt, kbd_shot_alt;
 u8 dev_tick, guest_imr0;
+u32 dev_shot_at;
+u8 vid_pal[4];
 
 /*
  * キーボード割り込み。ホットキーを見るためにスキャンコードをここで読んでしまうので、ゲストには
@@ -98,6 +101,7 @@ static u16 kbd_irq(void)
         kbd_grph = (u8)!(sc & SC_BREAK);
     else if (kbd_ctrl && kbd_grph && !(sc & SC_BREAK))
         x = (key == SC_STOP || (kbd_stop_alt && key == kbd_stop_alt)) ? X_HOTKEY_STOP :
+            (key == SC_COPY || (kbd_shot_alt && key == kbd_shot_alt)) ? X_HOTKEY_SHOT :
             key == SC_DEL ? X_HOTKEY_MENU : key == SC_PAD0 ? X_HOTKEY_FDD0 : key == SC_PAD1 ? X_HOTKEY_FDD1 : 0;
     if (x) {
         eoi(IRQ_FIRST + 1);
@@ -132,6 +136,10 @@ u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
         if (vec == IRQ_FIRST && dev_tick && guest_imr0) {
             /* ゲストは IRQ0 を閉じているつもりなので渡さない。数えるだけ */
             eoi(vec);
+            if (dev_shot_at && irq_count >= dev_shot_at) {
+                dev_shot_at = 0;
+                return X_HOTKEY_SHOT;
+            }
             return 0;
         }
     } else {
@@ -182,6 +190,9 @@ u16 mon_on_out(u16 port, u8 size, u32 val)
     u16 v = (u16)val;
 
     log_io(1, port, size, v);
+    /* デジタルパレットはスクリーンショットで色を当てるために写しを持つ (書き込みは実機へも通す) */
+    if (port >= 0xA8 && port <= 0xAE && !(port & 1) && size == 1)
+        vid_pal[(port - 0xA8) >> 1] = (u8)v;
     if (port == 0x02 && dev_tick) {
         guest_imr0 = (u8)(v & 1);
         v = (u16)(v & 0xFFFE);

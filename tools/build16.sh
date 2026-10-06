@@ -4,6 +4,7 @@
 #   build/dos/MONPROBE.EXE   モニタ核の試験プログラム
 #   build/dos/VBM98.EXE      本体
 #   build/dos/IPL.BIN        起動の試験に使う IPL (1024 バイトの生のバイナリ)
+#   build/dos/SHOTIPL.BIN    スクリーンショットの試験に使う IPL (同上)
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
 out="$root/build/dos"
@@ -78,9 +79,14 @@ cc src/mon/monmem.c "$strict"
 cc_r0 src/mon/mon_r0.c
 cc src/mon/monasm.S ""
 cc_r0 src/dos/vbm_r0.c
+cc src/core/png.c "$strict"
+cc src/dos/shot.c "$strict"
 cc src/dos/vbm98.c "$strict"
 link VBM98.EXE
 
 ia16-elf-gcc -c "$root/tests/boot/ipl.S" -o "$out/ipl.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/IPL.BIN" "$out/ipl.o"
 ls -l "$out/IPL.BIN" | awk '{print $5, "bytes  IPL.BIN"}'
+ia16-elf-gcc -c "$root/tests/boot/shotipl.S" -o "$out/shotipl.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTIPL.BIN" "$out/shotipl.o"
+ls -l "$out/SHOTIPL.BIN" | awk '{print $5, "bytes  SHOTIPL.BIN"}'

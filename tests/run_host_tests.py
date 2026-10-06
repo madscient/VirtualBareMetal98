@@ -34,17 +34,73 @@ def compile_(core, sources, name):
 
 
 def build(core=None):
-    """imgdump と fdbtest をビルドし、(imgdump, fdbtest) のパスを返す"""
+    """imgdump・fdbtest・pngtest をビルドし、そのパスを返す"""
     core = core or os.path.join(ROOT, 'src', 'core')
     harness = os.path.join(ROOT, 'tests', 'imgdump')
     imgdump = compile_(core, [os.path.join(harness, 'imgdump.c'), os.path.join(harness, 'plat_stdio.c')], 'imgdump')
     fdbtest = compile_(core, [os.path.join(core, 'fdbios.c'), os.path.join(ROOT, 'tests', 'fdbios', 'fdbtest.c')], 'fdbtest')
-    return imgdump, fdbtest
+    pngtest = compile_(core, [os.path.join(core, 'png.c'), os.path.join(ROOT, 'tests', 'png', 'pngtest.c')], 'pngtest')
+    return imgdump, fdbtest, pngtest
+
+
+def check_png(path, width, height, pixels, alpha):
+    """PNG を読み解いて期待と比べる。署名、各チャンクの CRC、IDAT の zlib、画素、tRNS。
+    成功なら None、失敗なら何が違ったかの短い文"""
+    import struct
+    import zlib
+    with open(path, 'rb') as f:
+        data = f.read()
+    if data[:8] != b'\x89PNG\r\n\x1a\n':
+        return '署名'
+    pos, chunks = 8, []
+    while pos + 12 <= len(data):
+        length, ctype = struct.unpack('>I4s', data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        crc = struct.unpack('>I', data[pos + 8 + length:pos + 12 + length])[0]
+        if zlib.crc32(ctype + body) & 0xFFFFFFFF != crc:
+            return 'CRC %s' % ctype.decode()
+        chunks.append((ctype, body))
+        pos += 12 + length
+    if pos != len(data):
+        return '末尾に余り'
+    want = [b'IHDR', b'PLTE'] + ([b'tRNS'] if alpha is not None else []) + [b'IDAT', b'IEND']
+    if [c for c, _ in chunks] != want:
+        return 'チャンクの並び %s' % [c.decode() for c, _ in chunks]
+    byname = dict(chunks)
+    if struct.unpack('>IIBBBBB', byname[b'IHDR']) != (width, height, 4, 3, 0, 0, 0):
+        return 'IHDR'
+    raw = zlib.decompress(byname[b'IDAT'])
+    rb = 1 + width // 2
+    if len(raw) != rb * height:
+        return 'IDAT の長さ %d' % len(raw)
+    got = []
+    for y in range(height):
+        row = raw[y * rb:(y + 1) * rb]
+        if row[0] != 0:
+            return 'フィルタ (行 %d)' % y
+        for b in row[1:]:
+            got += [b >> 4, b & 15]
+    if got != pixels:
+        return '画素'
+    if alpha is not None and byname[b'tRNS'] != bytes(alpha):
+        return 'tRNS'
+    return None
+
+
+def run_png(pngtest):
+    small = os.path.join(BUILD, 'small.png')
+    big = os.path.join(BUILD, 'big.png')
+    p = subprocess.run([pngtest, small, big], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+    err = None if p.returncode == 0 else '書き出し: %s' % p.stdout.strip()
+    err = err or check_png(small, 8, 3, [0, 1, 2, 3, 4, 5, 6, 7, 8, 8, 8, 8, 0, 0, 0, 0, 7, 0, 7, 0, 7, 0, 7, 0], [255] * 8 + [0])
+    err = err or check_png(big, 640, 400, [((x // 80) + (y // 50)) & 7 for y in range(400) for x in range(640)], None)
+    print('PNG: %s' % ('通過' if err is None else '失敗 (%s)' % err))
+    return 0 if err is None else 1
 
 
 def run(exes, verbose=True):
-    """失敗数を返す。ディスクイメージ層の試験のあと、同じイメージで INT 1Bh の意味論を試験する"""
-    imgdump, fdbtest = exes
+    """失敗数を返す。ディスクイメージ層の試験のあと、同じイメージで INT 1Bh の意味論を試験し、PNG の書き出しを試験する"""
+    imgdump, fdbtest, pngtest = exes
     work = os.path.join(BUILD, 'fixtures')
     steps = imgtests.prepare(work)
     imgtests.exec_host(imgdump, work, steps)
@@ -62,6 +118,7 @@ def run(exes, verbose=True):
     if not ok:
         failed += 1
     print('INT 1Bh: %s' % ('通過' if ok else '失敗'))
+    failed += run_png(pngtest)
     return failed
 
 
