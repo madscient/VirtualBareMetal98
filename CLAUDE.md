@@ -33,7 +33,9 @@ python tests/run_dos_tests.py
 ```
 
 DOS 向けにビルドして DOS 上で走らせる。ビルドは `ia16-elf-gcc` に PATH が通った Linux 環境で行う。
-実行には環境変数 `VBM_DOSBOX` に DOSBox の実行ファイルを指定する。
+実行環境は環境変数で選ぶ: `VBM_DOSBOX`（DOSBox の実行ファイル。PC）、`VBM_NP21W`（NP21/W
+スターターセットのフォルダ。PC-98）、両方あるときは `VBM_DOSENV` で `dosbox` / `np21w` を選ぶ。
+モニタ核の試験は両方で走らせる（docs/setup.md）。
 
 - `img`: ホスト OS 上と同じディスクイメージ層の試験。int が 16 ビットの環境でも同じ結果になるかを見る。
   16 ビット幅での演算あふれはコンパイル時の警告では捕まらないので、`src/core/` や `src/dos/` を変えたら走らせる

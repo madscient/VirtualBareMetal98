@@ -11,7 +11,8 @@
         .text
         .global g_exit, g_iopl, g_hlt, g_hlt_at, g_hlt_cli, g_hlt_cli_at
         .global g_remap, g_reset, g_priv, g_priv_at
-        .global g_io, g_io_native, g_irq, g_sep, g_sep_end
+        .global g_io, g_io_native, g_irq, g_irq98, g_sep, g_sep_end, g_bios, g_bios_end
+        .global rm_inb, rm_isr08, rm_isr17, rm_old08, rm_old17, rm_cnt08, rm_cnt17
 
 g_exit:
         int     0xFE
@@ -195,6 +196,86 @@ g_irq_isr:
 
 irq_old:        .skip   4
 irq_count:      .skip   2
+irq_imr:        .skip   1
+
+/*
+ * PC-98 向けの同じ試験。PC-98 の DOS ではタイマ割り込み (IRQ0) がマスクされたままなので、
+ * 自分で許可して 8253 のチャネル 0 を動かす。ハンドラは自分で EOI を出し、元のハンドラへは渡さない。
+ * ポート番号 (PIC 00h/02h、8253 71h/77h) は記憶による (design.md §12)。
+ */
+g_irq98:
+        push    es
+        xor     ax, ax
+        mov     es, ax
+        mov     ax, es:[8 * 4]
+        mov     cs:[irq_old], ax
+        mov     ax, es:[8 * 4 + 2]
+        mov     cs:[irq_old + 2], ax
+        mov     word ptr cs:[irq_count], 0
+        cli
+        mov     word ptr es:[8 * 4], offset g_irq98_isr
+        mov     es:[8 * 4 + 2], cs
+        in      al, 0x02
+        mov     cs:[irq_imr], al
+        and     al, 0xFE
+        out     0x02, al
+        mov     al, 0x36                /* チャネル 0、下位・上位の順、モード 3 */
+        out     0x77, al
+        xor     al, al
+        out     0x71, al                /* 周期 65536。2.4576MHz なら 37.5Hz */
+        out     0x71, al
+        sti
+        mov     dx, 1024
+1:      xor     cx, cx
+2:      cmp     word ptr cs:[irq_count], 2
+        jae     3f
+        loop    2b
+        dec     dx
+        jnz     1b
+3:      cli
+        mov     al, cs:[irq_imr]
+        out     0x02, al
+        mov     ax, cs:[irq_old]
+        mov     es:[8 * 4], ax
+        mov     ax, cs:[irq_old + 2]
+        mov     es:[8 * 4 + 2], ax
+        sti
+        pop     es
+        mov     ax, cs:[irq_count]
+        int     0x80
+        int     0xFE
+
+g_irq98_isr:
+        inc     word ptr cs:[irq_count]
+        push    ax
+        mov     al, 0x20
+        out     0x00, al
+        pop     ax
+        iret
+
+/* ---- リアルモードで C から使う補助 (ゲスト用ではない) ---- */
+
+/* u8 rm_inb(u16 port) */
+rm_inb:
+        push    bp
+        mov     bp, sp
+        mov     dx, [bp + 4]
+        in      al, dx
+        xor     ah, ah
+        pop     bp
+        ret
+
+/* ベクタ 08h・17h の到着を数えて元のハンドラへ渡す。old/cnt は C が CS 相対で読み書きする */
+rm_isr08:
+        inc     word ptr cs:[rm_cnt08]
+        jmp     dword ptr cs:[rm_old08]
+rm_isr17:
+        inc     word ptr cs:[rm_cnt17]
+        jmp     dword ptr cs:[rm_old17]
+rm_old08:       .skip   4
+rm_old17:       .skip   4
+rm_cnt08:       .skip   2
+rm_cnt17:       .skip   2
 
 /*
  * ゲスト専用メモリの確認。07C0:0000 に置かれ、DS = 0、割り込み禁止で走る。
@@ -207,3 +288,21 @@ g_sep:
         int     0x80
         int     0xFE
 g_sep_end:
+
+/*
+ * ゲスト専用メモリの上で BIOS を呼ぶ (PC-98 のみ)。07E0:0000 に置かれ、DS = 0、割り込み禁止で走る。
+ * キーボードバッファの先頭・末尾 (0000:0524 / 0526) に印を書いてから INT 18h AH=03h (キーボード初期化)
+ * を呼び、BIOS がその領域をページングを通して書くか (ゲスト側が変わる)、物理番地で書くか
+ * (ホスト側が変わる) を見る。報告: 呼び出し後の 0524h と 0526h の値
+ */
+g_bios:
+        mov     word ptr ds:[0x0524], 0x5A5A
+        mov     word ptr ds:[0x0526], 0x5A5A
+        mov     ah, 0x03
+        int     0x18
+        mov     ax, ds:[0x0524]
+        int     0x80
+        mov     ax, ds:[0x0526]
+        int     0x80
+        int     0xFE
+g_bios_end:

@@ -15,7 +15,11 @@ extern u16 mon_rm_cs;
 extern void g_exit(void), g_iopl(void), g_hlt(void), g_hlt_at(void), g_hlt_cli(void), g_hlt_cli_at(void);
 extern void g_reflect(void), g_int0d(void), g_int06(void), g_int00(void);
 extern void g_remap(void), g_reset(void), g_priv(void), g_priv_at(void);
-extern void g_io(void), g_io_native(void), g_irq(void), g_sep(void), g_sep_end(void);
+extern void g_io(void), g_io_native(void), g_irq(void), g_irq98(void), g_sep(void), g_sep_end(void);
+extern void g_bios(void), g_bios_end(void);
+extern u8 rm_inb(u16 port);
+extern void rm_isr08(void), rm_isr17(void);
+extern u8 rm_old08[], rm_old17[], rm_cnt08[], rm_cnt17[];
 #define OPCODE_TEST(n) extern void n(void), n##_at(void), n##_resume(void)
 OPCODE_TEST(g_op_0f10);
 OPCODE_TEST(g_op_0f20);
@@ -223,7 +227,74 @@ static void report_opcode(const char *label, void (*entry)(void), u16 at, void (
     check(name, rc == X_DONE && nrep == 2 && rep[0] == 0x1111 && rep[1] == 0x2222);
 }
 
-static void test_separation(void)
+/*
+ * モニタを使わず、リアルモードのままベクタ 08h と 17h の到着を数える。
+ * モニタの下で見える割り込みが、この環境にもともとあるものかを切り分けるための参考情報
+ */
+static void survey_irq(int pc98)
+{
+    u16 cs = mon_rm_cs;
+    u32 __far *old08 = MK_FP(cs, (unsigned)rm_old08);
+    u32 __far *old17 = MK_FP(cs, (unsigned)rm_old17);
+    u16 __far *cnt08 = MK_FP(cs, (unsigned)rm_cnt08);
+    u16 __far *cnt17 = MK_FP(cs, (unsigned)rm_cnt17);
+    void __far *o08 = _dos_getvect(0x08);
+    void __far *o17 = _dos_getvect(0x17);
+    volatile unsigned long spin;
+
+    *old08 = xms_far(FP_SEG(o08), FP_OFF(o08));
+    *old17 = xms_far(FP_SEG(o17), FP_OFF(o17));
+    *cnt08 = *cnt17 = 0;
+    _dos_setvect(0x08, MK_FP(cs, code_off(rm_isr08)));
+    _dos_setvect(0x17, MK_FP(cs, code_off(rm_isr17)));
+    for (spin = 0; spin < 3000000UL; spin++)
+        ;
+    _dos_setvect(0x08, o08);
+    _dos_setvect(0x17, o17);
+    printf("# real mode: int08=%u int17=%u during a spin", *cnt08, *cnt17);
+    if (pc98)
+        printf(", master IMR=%02X slave IMR=%02X", rm_inb(0x02), rm_inb(0x0A));
+    printf("\n");
+}
+
+/*
+ * NP21/W の内蔵 BIOS が BIOS ワークエリアを物理番地で読み書きするか (design.md の D7 の要否) を見る。
+ * ホストの割り込みベクタ表とワークエリアをゲスト専用メモリに写してから、ゲスト側で BIOS を呼ぶ
+ */
+static void survey_bios_workarea(u16 handle, u32 guest_off, u32 phys)
+{
+    u16 __far *h524 = MK_FP(0, 0x524);
+    u16 __far *h526 = MK_FP(0, 0x526);
+    u16 code = code_off(g_bios);
+    u16 len = (u16)((code_off(g_bios_end) - code + 1) & ~1U);
+    u16 b524, b526, g[2] = { 0, 0 };
+    struct mon_paging pg2;
+    u16 rc;
+
+    if (xms_move(handle, guest_off, 0, xms_far(0, 0), 0x600) ||
+        xms_move(handle, guest_off + 0x7E00, 0, xms_far(mon_rm_cs, code), len)) {
+        printf("# bios work area: could not prepare guest memory\n");
+        return;
+    }
+    b524 = *h524;
+    b526 = *h526;
+    monmem_build(&pg2, tables, phys);
+    mon_init(&pg2);
+    rc = run_at(0x07E0, 0, 0, 0, 0, 0x7000, 0);
+    monmem_build(&pg, tables, 0);
+    mon_init(&pg);
+    xms_move(0, xms_far(mon_data_seg(), (u16)(unsigned)g), handle, guest_off + 0x524, 4);
+    printf("# bios work area: rc=%04X guest read 0524=%04X 0526=%04X | guest memory 0524=%04X 0526=%04X | host 0524 %04X->%04X 0526 %04X->%04X\n",
+           rc, nrep > 0 ? rep[0] : 0, nrep > 1 ? rep[1] : 0, g[0], g[1], b524, *h524, b526, *h526);
+    if (rc == X_DONE && nrep == 2 && (rep[0] != 0x5A5A || rep[1] != 0x5A5A))
+        printf("# bios work area: the BIOS wrote through paging (guest side changed)\n");
+    else if (*h524 != b524 || *h526 != b526)
+        printf("# bios work area: the BIOS wrote the physical work area (host side changed) -> D7 needed\n");
+    else
+        printf("# bios work area: no change observed on either side\n");
+}
+
+static void test_separation(int pc98)
 {
     u8 __far *host500 = MK_FP(0, 0x500);
     u16 code = code_off(g_sep);
@@ -267,12 +338,15 @@ static void test_separation(void)
     xms_move(0, xms_far(mon_data_seg(), (u16)(unsigned)back), handle, guest_off + 0x500, 2);
     check("guest memory: the write is visible in the extended memory block", back[0] == 0xA5);
 
+    if (pc98)
+        survey_bios_workarea(handle, guest_off, phys);
+
     xms_a20(0);
     xms_unlock(handle);
     xms_free(handle);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     u32 pa, pb, pc;
     const u8 __far *rom;
@@ -280,7 +354,9 @@ int main(void)
     const struct event *e;
     u16 cs, rc, i;
     u8 orig;
+    int pc98 = argc > 1 && strcmp(argv[1], "pc98") == 0;
 
+    printf("# machine: %s\n", pc98 ? "PC-98" : "PC");
     tables = alloc_pages(MONMEM_TABLE_PAGES);
     pa = alloc_pages(3);
     if (!tables || !pa) {
@@ -352,10 +428,13 @@ int main(void)
     check("priv: MOV from CR0 raises #GP with error code", rc == X_FAULT && e && e->vec == VEC_GP);
     check("priv: guest stopped at the faulting instruction", nrep == 1 && rep[0] == 0x3333);
 
-    /* V30 固有の命令が 386 でどう届くか */
-    test_opcode("0F 10 (TEST1)", g_op_0f10, code_off(g_op_0f10_at), g_op_0f10_resume, VEC_UD, EV_EXC, 0);
+    /*
+     * V30 固有の命令が 386 でどう届くか。0F 10 / 0F 28 / 0F 31 は後の世代の CPU では別の命令
+     * (SSE、RDTSC) として実行されるので、届き方を書くだけにする
+     */
+    report_opcode("0F 10 (TEST1 / MOVUPS)", g_op_0f10, code_off(g_op_0f10_at), g_op_0f10_resume);
     test_opcode("0F 20 (ADD4S)", g_op_0f20, code_off(g_op_0f20_at), g_op_0f20_resume, VEC_GP, EV_FAULT, 0);
-    test_opcode("0F 28 (ROL4)", g_op_0f28, code_off(g_op_0f28_at), g_op_0f28_resume, VEC_UD, EV_EXC, 0);
+    report_opcode("0F 28 (ROL4 / MOVAPS)", g_op_0f28, code_off(g_op_0f28_at), g_op_0f28_resume);
     report_opcode("0F 31 (INS / RDTSC)", g_op_0f31, code_off(g_op_0f31_at), g_op_0f31_resume);
     test_opcode("0F FF (BRKEM)", g_op_0fff, code_off(g_op_0fff_at), g_op_0fff_resume, VEC_UD, EV_EXC, 0);
     test_opcode("64 90 (REPC prefix)", g_op_64, code_off(g_op_64_at), g_op_64_resume, 0, EV_NONE, 0);
@@ -376,12 +455,13 @@ int main(void)
     check("io: trapped I/O is handled inside the monitor, never reported as a fault", faults() == 0);
     check("io: an untrapped port executes without exception", fault_at(cs, code_off(g_io_native)) == 0);
 
-    rc = run(g_irq, 0);
+    survey_irq(pc98);
+    rc = run(pc98 ? g_irq98 : g_irq, 0);
     printf("# irq: handler count=%u, vector 8 arrivals=%u\n", rep[0], count(8, EV_INT));
     check("irq: finishes", rc == X_DONE && nrep == 1);
     check("irq: hardware interrupts are reflected to the guest's handler", rep[0] >= 2 && count(8, EV_INT) >= 2);
 
-    test_separation();
+    test_separation(pc98);
 
     printf("END %u %u\n", failures, checks);
     return failures != 0;

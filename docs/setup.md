@@ -10,7 +10,7 @@
 | ホスト OS 上の試験 | C コンパイラ（gcc）、Python 3 | gcc 8.3 と Python 3.8 で動かしている。標準ライブラリだけを使う |
 | DOS 向けのビルド | gcc-ia16（`ia16-elf-gcc`、binutils、newlib、libi86） | Linux 上で動かす。Windows では WSL を使う |
 | DOS 上の試験 | DOSBox 0.74-3 | PC-98 は再現しない。機種に依らない範囲の確認に使う |
-| PC-98 上の試験 | NP21/W | 自動実行の仕組みは未整備（[worklog.md](worklog.md)） |
+| PC-98 上の試験 | NP21/W スターターセット（FreeDOS(98) の起動イメージと HOSTDRV つき） | 窓は出るが無人で走る |
 
 ## gcc-ia16
 
@@ -66,8 +66,16 @@ sh tools/build16.sh
 | `sh tools/build16.sh` | DOS 向けのビルド | gcc-ia16 |
 | `python tests/run_dos_tests.py` | ディスクイメージ層（16 ビット）とモニタ核を DOS 上で | 上のビルド結果、DOSBox |
 
-`run_dos_tests.py` は、環境変数 `VBM_DOSBOX` に DOSBox の実行ファイルのパスを入れてから走らせる。
-DOSBox は窓を出さずに起動し、バッチを流して終了する。所要は 1 分半ほど。
+`run_dos_tests.py` の実行環境は環境変数で選ぶ（`tests/dosenv.py`）。
+
+| 環境変数 | 内容 |
+| --- | --- |
+| `VBM_DOSBOX` | DOSBox の実行ファイルのパス。窓を出さずに起動し、バッチを流して終了する。PC-98 ではないので機種に依らない範囲の確認 |
+| `VBM_NP21W` | NP21/W スターターセットのフォルダ（`np21x64w.exe`、`fdosboot.hdi`、`share` がある場所）。一式を `build/np2/` に複製し、`share/AUTOEXEC.BAT` を差し替えて試験のバッチを流し、`PWOFF` で終了させる。利用者の一式には書き込まない。窓は出るが操作は要らない |
+| `VBM_DOSENV` | `dosbox` か `np21w`。両方の設定があるときに選ぶ。省略時は dosbox → np21w の順 |
+
+所要は、ディスクイメージ層が 1 分半ほど、モニタ核が DOSBox で 20 秒、NP21/W で 40 秒ほど。
+NP21/W を利用者自身が起動している間は、起動イメージが使用中で複製できない。
 
 ビルドを Linux（WSL）で、試験の実行を Windows で、と分けて行ってよい。受け渡しは `build/dos/` の
 実行ファイルだけで、どちらからも同じ作業ツリーが見えていればよい。
@@ -77,7 +85,7 @@ DOSBox は窓を出さずに起動し、バッチを流して終了する。所�
 | エミュレータ | 分かっていること |
 | --- | --- |
 | DOSBox 0.74-3 | `-conf <設定> -noconsole -exit` と環境変数 `SDL_VIDEODRIVER=dummy` で、窓なしの無人実行ができる（`tests/dosenv.py`）。保護モードを使う試験は CPU の再現方式を `core=normal` にして走らせている |
-| NP21/W スターターセット | FreeDOS(98) の起動イメージ、ホストのフォルダを Z: として見せる HOSTDRV、エミュレータを終了させる `PWOFF.COM` が入っている。設定ファイルは実行ファイルと同名の `.ini`（UTF-16）で、起動イメージ（`HDD1FILE`）と共有フォルダ（`hdrvroot`）を相対パスで指している。起動中は起動イメージが排他ロックされ、他から読めない |
+| NP21/W スターターセット | FreeDOS(98) の起動イメージ、ホストのフォルダを Z: として見せる HOSTDRV、エミュレータを終了させる `PWOFF.COM` が入っている。設定ファイルは実行ファイルと同名の `.ini`（UTF-16）で、起動イメージ（`HDD1FILE`）と共有フォルダ（`hdrvroot`）を相対パスで指している。起動イメージの AUTOEXEC.BAT は `HOSTDRV Z` のあと `Z:\AUTOEXEC.BAT` を呼ぶので、そこを差し替えれば無人で任意のバッチを流せる。FDCONFIG.SYS が FDXMS286.SYS を読むので XMS が使える。起動中は起動イメージが排他ロックされ、他から読めない |
 | MS-DOS Player | DOS の実行ファイルをコンソールで直接走らせるもの。標準入出力をパイプにして起動すると戻ってこなかった。原因は調べていない。使っていない |
 
 エミュレータを新しい形で起動するときは、必ず時間切れを付ける。対話待ちになって戻らないことがある。
