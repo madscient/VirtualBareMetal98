@@ -64,7 +64,7 @@ sh tools/build16.sh
 | --- | --- | --- |
 | `python tests/run_host_tests.py` | ディスクイメージ層（ホスト OS 上） | gcc、Python |
 | `sh tools/build16.sh` | DOS 向けのビルド | gcc-ia16 |
-| `python tests/run_dos_tests.py` | ディスクイメージ層（16 ビット）とモニタ核を DOS 上で | 上のビルド結果、DOSBox |
+| `python tests/run_dos_tests.py` | ディスクイメージ層（16 ビット）、モニタ核、本体の起動を DOS 上で | 上のビルド結果、DOSBox か NP21/W |
 
 `run_dos_tests.py` の実行環境は環境変数で選ぶ（`tests/dosenv.py`）。
 

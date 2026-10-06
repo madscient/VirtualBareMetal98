@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """DOS 向けにビルドした試験プログラムを DOS 上で走らせる。
 
-    python tests/run_dos_tests.py [img] [mon]
+    python tests/run_dos_tests.py [img] [mon] [boot]
 
     img   ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
     mon   モニタ核。保護モード・仮想86モード・ページングの動作
+    boot  本体 (VBM98.EXE)。試験用の IPL を起動し、INT 1Bh の読み書きが届くか
 
 引数を省くと両方を走らせる。事前に tools/build16.sh でビルドしておく。
 DOS の実行環境は環境変数で選ぶ (tests/dosenv.py)。DOSBox は PC-98 ではないので機種に依らない
@@ -45,7 +46,47 @@ def test_mon(work):
     return ok
 
 
-TESTS = (('img', 'IMGDUMP.EXE', test_img), ('mon', 'MONPROBE.EXE', test_mon))
+def test_boot(work):
+    """IPL が起動し、INT 1Bh の読み書きがイメージに届き、HLT で DOS に戻ることを見る"""
+    with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
+        ipl = f.read()
+    if len(ipl) != 1024:
+        print('IPL.BIN が 1024 バイトでない')
+        return False
+    pattern = bytes((i * 13 + 7) & 0xFF for i in range(1024))
+    img = bytearray(77 * 2 * 8 * 1024)
+    img[0:1024] = ipl
+    img[1024:2048] = pattern
+    with open(os.path.join(work, 'B.IMG'), 'wb') as f:
+        f.write(img)
+    out = os.path.join(work, 'BOOT.OUT')
+    if os.path.exists(out):
+        os.remove(out)
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 B.IMG > BOOT.OUT'], 180, core='normal')
+    lines = imgtests.read_lines(work, 'BOOT.OUT') or []
+    for line in lines:
+        print('  ' + line)
+    with open(os.path.join(work, 'B.IMG'), 'rb') as f:
+        rec = f.read()[2048:3072]
+    want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 1024, 2)) & 0xFFFF
+    checks = (
+        ('batch finished', finished),
+        ('guest halted and VBM98 returned to DOS', any('halted' in l for l in lines) and any('back to DOS' in l for l in lines)),
+        ('IPL ran and wrote itself to sector 3', rec[0x300:0x308] == b'VBM98IPL'),
+        ('IPL received the boot DA/UA in AL', rec[0x308] == 0x90),
+        ('INT 1Bh read returned 00h', rec[0x309] == 0),
+        ('sector 2 contents arrived in the guest', int.from_bytes(rec[0x30A:0x30C], 'little') == want_sum),
+        ('result bytes in the work area: ST0=00, next R=3', rec[0x30C] == 0 and rec[0x311] == 3),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('起動: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
+TESTS = (('img', 'IMGDUMP.EXE', test_img), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot))
 
 
 def main(argv):

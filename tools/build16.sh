@@ -2,6 +2,8 @@
 # DOS 向け (gcc-ia16) のビルド。ia16-elf-gcc に PATH が通った環境で実行する。
 #   build/dos/IMGDUMP.EXE    ディスクイメージ層の試験プログラム
 #   build/dos/MONPROBE.EXE   モニタ核の試験プログラム
+#   build/dos/VBM98.EXE      本体
+#   build/dos/IPL.BIN        起動の試験に使う IPL (1024 バイトの生のバイナリ)
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
 out="$root/build/dos"
@@ -54,11 +56,6 @@ cc tests/imgdump/imgdump.c "$loose"
 cc tests/imgdump/plat_dos.c "$loose"
 link IMGDUMP.EXE
 
-# まだ DOS 側の実行ファイルに組み込んでいないが、16 ビット向けに警告なしでコンパイルできることは確かめる
-cc src/core/fdbios.c "$strict"
-ia16-elf-size $objs
-objs=""
-
 cc src/mon/mon.c "$strict"
 cc src/mon/monmem.c "$strict"
 cc_r0 src/mon/mon_r0.c
@@ -69,3 +66,21 @@ cc tests/monprobe/monprobe.c "$loose"
 cc_r0 tests/monprobe/probe_r0.c
 cc tests/monprobe/guest.S ""
 link MONPROBE.EXE
+
+cc src/core/dimg.c "$strict"
+cc src/core/fdbios.c "$strict"
+cc src/dos/dosio.c "$strict"
+cc src/dos/xms.c "$strict"
+cc src/dos/xmsasm.S ""
+cc src/dos/pio.S ""
+cc src/mon/mon.c "$strict"
+cc src/mon/monmem.c "$strict"
+cc_r0 src/mon/mon_r0.c
+cc src/mon/monasm.S ""
+cc_r0 src/dos/vbm_r0.c
+cc src/dos/vbm98.c "$strict"
+link VBM98.EXE
+
+ia16-elf-gcc -c "$root/tests/boot/ipl.S" -o "$out/ipl.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/IPL.BIN" "$out/ipl.o"
+ls -l "$out/IPL.BIN" | awk '{print $5, "bytes  IPL.BIN"}'
