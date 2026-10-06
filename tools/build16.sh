@@ -54,6 +54,11 @@ cc tests/imgdump/imgdump.c "$loose"
 cc tests/imgdump/plat_dos.c "$loose"
 link IMGDUMP.EXE
 
+# まだ DOS 側の実行ファイルに組み込んでいないが、16 ビット向けに警告なしでコンパイルできることは確かめる
+cc src/core/fdbios.c "$strict"
+ia16-elf-size $objs
+objs=""
+
 cc src/mon/mon.c "$strict"
 cc src/mon/monmem.c "$strict"
 cc_r0 src/mon/mon_r0.c

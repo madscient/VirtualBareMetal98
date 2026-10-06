@@ -25,7 +25,8 @@ python tests/run_host_tests.py
 ```
 
 ホスト OS の C コンパイラ（既定は gcc、環境変数 CC で変更）で `src/core/` をビルドし、
-`tools/mkimg.py` が作る合成イメージで読み書きを確かめる。生成物は `build/` に出る。
+`tools/mkimg.py` が作る合成イメージで、ディスクイメージ層の読み書きと INT 1Bh の意味論（fdbios）を
+確かめる。生成物は `build/` に出る。
 
 ```
 sh tools/build16.sh
