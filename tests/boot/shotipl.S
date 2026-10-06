@@ -67,12 +67,15 @@ start:
         mov     byte ptr es:[di + 0x2000], 0xE1
         add     di, 2
         loop    4b
-        /* 1 行目: 漢 (JIS 3441h) 字 (JIS 3B7Ah) 赤。上位バイトは JIS 第 1 バイト - 20h、右半分は bit 7 */
+        /*
+         * 1 行目: 漢 (JIS 3441h) 字 (JIS 3B7Ah) 赤。偶数バイトが JIS 第 1 バイト - 20h (右半分は bit 7)、
+         * 奇数バイトが第 2 バイト (jis.h)。word で書くので下位が偶数バイト
+         */
         mov     di, 160
-        mov     word ptr es:[di], 0x1441
-        mov     word ptr es:[di + 2], 0x9441
-        mov     word ptr es:[di + 4], 0x1B7A
-        mov     word ptr es:[di + 6], 0x9B7A
+        mov     word ptr es:[di], 0x4114
+        mov     word ptr es:[di + 2], 0x4194
+        mov     word ptr es:[di + 4], 0x7A1B
+        mov     word ptr es:[di + 6], 0x7A9B
         mov     byte ptr es:[di + 0x2000], 0x41
         mov     byte ptr es:[di + 0x2002], 0x41
         mov     byte ptr es:[di + 0x2004], 0x41

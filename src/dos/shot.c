@@ -9,6 +9,7 @@
  * VRAM は far ポインタに添字で触ると gcc-ia16 6.3 の内部エラーを起こすので、_fmemcpy で 1 行ずつ写す。
  * 書き出しは転送バッファ (64KB) に溜めてから DOS へ渡す
  */
+#include <string.h>
 #include <dos.h>
 #include <i86.h>
 #include <libi86/string.h>
@@ -41,16 +42,16 @@ u8 pio_in8(u16 port);
 void pio_out8(u16 port, u8 val);
 
 /*
- * CG ROM をポートで読む (design.md §12)。A1h に下位バイト (ANK コード / JIS 第 2 バイト)、A3h に上位
- * バイト (0 / JIS 第 1 バイト − 20h)、A5h にライン番号 (bit 5 を立てると左半分)、A9h からパターン
- * (bit 7 が左端)。right が 0 なら左半分 (8 ドット幅の文字) だけ読む
+ * CG ROM をポートで読む (design.md §12)。A1h にテキスト VRAM の奇数バイト (漢字の JIS 第 2 バイト。
+ * ANK なら 0)、A3h に偶数バイト (ANK のコード、または JIS 第 1 バイト − 20h)、A5h にライン番号
+ * (bit 5 を立てると左半分)、A9h からパターン (bit 7 が左端)。right が 0 なら左半分 (8 ドット幅) だけ読む
  */
-static void cg_read(u8 lo, u8 hi, u8 *left, u8 *right)
+static void cg_read(u8 odd, u8 even, u8 *left, u8 *right)
 {
     u8 line;
 
-    pio_out8(0xA1, lo);
-    pio_out8(0xA3, hi);
+    pio_out8(0xA1, odd);
+    pio_out8(0xA3, even);
     for (line = 0; line < CELL_H; line++) {
         pio_out8(0xA5, (u8)(0x20 | line));
         left[line] = pio_in8(0xA9);
@@ -182,29 +183,30 @@ static u8 cellpat[COLS][CELL_H];                /* 1 行ぶんの、桁ごとの
 static u8 spill[CELL_H];                        /* 右端の桁にある漢字の右半分 (描く場所がない) */
 
 /*
- * 1 行ぶんの文字コードからパターンを集める。コードの上位バイトが 0 なら ANK (8×16)、bit 7 が立って
- * いれば漢字の右半分 (左の桁で描いてある)、09h〜0Bh なら 8 ドット幅の文字 (JIS の 29h〜2Bh 区)、
- * それ以外は 16 ドット幅の漢字で、右半分は次の桁に入れる。上位バイトは JIS の第 1 バイト − 20h
+ * 1 行ぶんの文字コードからパターンを集める。桁の 2 バイトは、偶数バイトが ANK のコードか漢字の
+ * JIS 第 1 バイト − 20h (bit 7 が立っていれば右半分で、左の桁で描いてある)、奇数バイトが ANK なら 0、
+ * 漢字なら JIS 第 2 バイト (jis.h)。偶数バイトが 09h〜0Bh なら 8 ドット幅の文字 (JIS の 29h〜2Bh 区)、
+ * それ以外の漢字は 16 ドット幅で右半分は次の桁に入れる
  */
 static void gather_patterns(void)
 {
     u16 c;
-    u8 i, lo, hi;
+    u8 i, even, odd;
 
     for (c = 0; c < COLS; c++)
         for (i = 0; i < CELL_H; i++)
             cellpat[c][i] = 0;
     for (c = 0; c < COLS; c++) {
-        lo = tcode[c * 2];
-        hi = tcode[c * 2 + 1];
-        if (hi & 0x80)
+        even = tcode[c * 2];
+        odd = tcode[c * 2 + 1];
+        if (even & 0x80)
             continue;
-        if (hi == 0)
-            cg_read(0, lo, cellpat[c], 0);      /* ANK はコードを A3h 側に置く (確認済み: NP21/W。design.md §12) */
-        else if (hi >= 0x09 && hi <= 0x0B)
-            cg_read(lo, hi, cellpat[c], 0);
+        if (odd == 0)
+            cg_read(0, even, cellpat[c], 0);
+        else if (even >= 0x09 && even <= 0x0B)
+            cg_read(odd, even, cellpat[c], 0);
         else
-            cg_read(lo, hi, cellpat[c], c + 1 < COLS ? cellpat[c + 1] : spill);
+            cg_read(odd, even, cellpat[c], c + 1 < COLS ? cellpat[c + 1] : spill);
     }
 }
 
@@ -318,7 +320,7 @@ static int write_file(const char *name, const struct shot_info *si, int graphics
     return rc;
 }
 
-int shot_save(const struct shot_info *si)
+int shot_save(const struct shot_info *si, char *gname)
 {
     char g[13], t[13];
     u16 n;
@@ -331,5 +333,9 @@ int shot_save(const struct shot_info *si)
     }
     if (n > 999)
         return 1;
-    return write_file(g, si, 1) || write_file(t, si, 0);
+    if (write_file(g, si, 1) || write_file(t, si, 0))
+        return 1;
+    if (gname)
+        strcpy(gname, g);
+    return 0;
 }

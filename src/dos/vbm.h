@@ -7,16 +7,19 @@
  * 横取り印の置き場。BASIC ROM 領域の末尾 1 ページを HLT で埋めてゲストに見せる。
  *   +000h          INT 1Bh のベクタの先
  *   +100h + vec*4  ホストの RAM を指していたベクタ vec の先 (vec < 20h)
+ *   +200h          ホストが注入したキー割り込みの戻り先 (design.md §9)
  */
 #define HOOK_PAGE_LIN  0xF7000UL
 #define HOOK_PAGE_SEG  0xF700
 #define HOOK_VEC_OFF   0x100
 #define HOOK_VEC_MAX   0x20
+#define HOOK_KBD_OFF   0x200
 
 /* 横取り印の識別子 */
 #define HOOK_INT1B 1
 #define HOOK_RESET 2
 #define HOOK_VEC   3
+#define HOOK_KBD   4
 
 /* mon_run の戻り値 (組み込み側が決めるもの) */
 #define X_INT1B  1   /* INT 1Bh の処理をホストに頼む。戻り先はもうゲストのスタックから戻してある */
@@ -29,6 +32,7 @@
 #define X_HOTKEY_FDD0 7   /* テンキー 0: ドライブ 0 のイメージ交換 */
 #define X_HOTKEY_FDD1 8   /* テンキー 1: ドライブ 1 のイメージ交換 */
 #define X_HOTKEY_SHOT 9   /* COPY: スクリーンショット */
+#define X_KBD_DONE    10  /* ホストが注入したキー割り込みのハンドラが戻った (HOOK_KBD)。ホストが次を注入するか再開する */
 
 /*
  * ゲストが書いた表示系の写し (ring 0 側が持つ。スクリーンショットの色のため):
@@ -53,6 +57,19 @@ extern u8 kbd_stop_alt;
 extern u8 dev_tick, guest_imr0;
 /* 開発用 (-shotat): -tick の刻みがこの数に達したらスクリーンショットを撮る (0 なら無し。2 回まで)。試験で使う */
 extern u32 dev_shot_at[2];
+/* 開発用 (-menuat): -tick の刻みがこの数に達したら VM メニューを開く (0 なら無し)。試験で使う */
+extern u32 dev_menu_at;
+/*
+ * キーボードの写し (ring 0 側)。モニタが IRQ1 で読んだスキャンコードを、ゲストが 41h を読むときに返す。
+ * ホストがキー割り込みを注入するとき (design.md §9) もここに置いてからゲストのハンドラへ入る
+ */
+extern u8 kbd_pending, kbd_code;
+
+/* ---- ホスト世界の仮想マシン操作 (vbm98.c)。メニュー (menu.c) から呼ぶ ---- */
+int vm_mount(int unit, const char *path, int quiet);   /* 0 で成功。前に入っていたイメージは閉じる */
+void vm_eject(int unit);
+const char *vm_drive_name(int unit);                   /* 入っているイメージのパス。空なら "" */
+int vm_shot(char *gname);                              /* スクリーンショット。gname (13 バイト以上) に G 側のファイル名。0 なら名前はいらない */
 
 /* 開発用: モニタに届いたものの記録 (ring 0 側が書き、ホストが止めたときに表示する) */
 #define EVLOG_SIZE 32

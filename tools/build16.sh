@@ -13,7 +13,7 @@ mkdir -p "$out"
 model="-mcmodel=small -march=i80286 -Os -std=gnu99"
 strict="-Wall -Wextra -Wconversion -Wshadow -Werror"
 loose="-Wall -Wextra -Werror"
-inc="-I $root/src/core -I $root/src/dos -I $root/src/mon -I $root/tests/imgdump -I $root/tests/monprobe"
+inc="-I $root/src/core -I $root/src/dos -I $root/src/mon -I $root/tests/imgdump -I $root/tests/monprobe -I $out"
 # libi86 (dos.h, i86.h) をパッケージとして入れていない環境では、展開した場所を IA16_LIBI86 で渡す。
 # -isystem にするのは、ヘッダ内のインライン関数が -Werror の警告に引っかからないようにするため
 libs="-li86"
@@ -80,7 +80,12 @@ cc_r0 src/mon/mon_r0.c
 cc src/mon/monasm.S ""
 cc_r0 src/dos/vbm_r0.c
 cc src/core/png.c "$strict"
+cc src/core/jis.c "$strict"
 cc src/dos/shot.c "$strict"
+# UI の文言 (UTF-8) を Shift-JIS のヘッダにする。生成物は $out に置き、-I $out で見つける
+python3 "$root/tools/mktext.py" "$root/src/dos/ui_text.txt" "$out/ui_text.h"
+cc src/dos/ui.c "$strict"
+cc src/dos/menu.c "$strict"
 cc src/dos/vbm98.c "$strict"
 link VBM98.EXE
 

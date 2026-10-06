@@ -7,6 +7,7 @@
     mon   モニタ核。保護モード・仮想86モード・ページングの動作
     boot  本体 (VBM98.EXE)。試験用の IPL を起動し、INT 1Bh の読み書きが届くか。PC-98 の環境でだけ走る
     shot  スクリーンショット。試験用の IPL が書いた文字と色の帯が、-shotat で撮った PNG に写るか。同上
+    menu  VM メニュー。-menuat で開き -menukeys で操作して、画面の復元とゲストの再開を見る。同上
 
 引数を省くと全部を走らせる。事前に tools/build16.sh でビルドしておく。
 DOS の実行環境は環境変数で選ぶ (tests/dosenv.py)。DOSBox は PC-98 ではないので機種に依らない
@@ -67,7 +68,8 @@ def test_boot(work):
     out = os.path.join(work, 'BOOT.OUT')
     if os.path.exists(out):
         os.remove(out)
-    finished = dosenv.run_batch(['VBM98.EXE -fdd0 B.IMG > BOOT.OUT'], 180, core='normal')
+    # 割り込み禁止の HLT で VM メニューが開くので、開発用のキー列で「4. 終了」→ Y を押したことにする
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 B.IMG -trace -menukeys 04,15 > BOOT.OUT'], 180, core='normal')
     lines = imgtests.read_lines(work, 'BOOT.OUT') or []
     for line in lines:
         print('  ' + line)
@@ -197,8 +199,51 @@ def test_shot(work):
     return ok
 
 
+def test_menu(work):
+    """VM メニュー: -menuat で開き、開発用のキー列で「3 (スクリーンショット)、ESC (知らせを閉じる)、ESC (閉じる)」を
+    押したことにする。撮れた PNG にはメニューではなく IPL の画面が写り (開く前の画面を戻してから撮る)、
+    ゲストが再開して -stopafter で止まることを見る"""
+    if dosenv.name() != 'np21w':
+        print('VM メニュー: この環境は PC-98 ではないので走らせない')
+        return True
+    with open(os.path.join(BUILT, 'SHOTIPL.BIN'), 'rb') as f:
+        ipl = f.read()
+    img = bytearray(77 * 2 * 8 * 1024)
+    img[0:1024] = ipl
+    with open(os.path.join(work, 'M.IMG'), 'wb') as f:
+        f.write(img)
+    for name in ('MENU.OUT', 'M001G.PNG', 'M001T.PNG'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 M.IMG -tick -menuat 50 -menukeys 03,00,00 -stopafter 150 > MENU.OUT'], 180, core='normal')
+    lines = imgtests.read_lines(work, 'MENU.OUT') or []
+    for line in lines:
+        print('  ' + line)
+    g = read_png4(os.path.join(work, 'M001G.PNG'))
+    t = read_png4(os.path.join(work, 'M001T.PNG'))
+
+    def cell(rows, r, c):
+        return {rows[y][x] for y in range(r * 16, r * 16 + 16) for x in range(c * 8, c * 8 + 8)} - {8}
+
+    checks = (
+        ('batch finished', finished),
+        ('guest resumed after the menu and was stopped by -stopafter', any('stopped after 150' in l for l in lines)),
+        ('screenshot taken from the menu: two PNG files', g is not None and t is not None),
+        ('graphics: the IPL colour bars are in the shot', g is not None and all(g['rows'][y][x] == 1 for x in range(8) for y in range(20, 40))),
+        ('text: the IPL text (white "V") is in the shot, not the menu', t is not None and cell(t['rows'], 0, 0) == {7}),
+        ('text: where the menu frame was drawn is transparent (screen restored before shooting)',
+         t is not None and cell(t['rows'], 6, 18) == set() and cell(t['rows'], 9, 22) == set()),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('VM メニュー: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
-         ('shot', 'VBM98.EXE', test_shot))
+         ('shot', 'VBM98.EXE', test_shot), ('menu', 'VBM98.EXE', test_menu))
 
 
 def main(argv):

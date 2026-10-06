@@ -15,6 +15,7 @@ struct shot_info {
     const u8 *anapal;   /* アナログパレット 16 色 × (R, G, B) 各 4 ビット */
 };
 
-int shot_save(const struct shot_info *si);   /* 0 で成功 */
+/* 0 で成功。gname が 0 でなければ、そこに G 側のファイル名 (13 バイト以内) を入れる */
+int shot_save(const struct shot_info *si, char *gname);
 
 #endif

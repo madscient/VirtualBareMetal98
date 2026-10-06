@@ -22,6 +22,8 @@
 #include "dosio.h"
 #include "xms.h"
 #include "shot.h"
+#include "ui.h"
+#include "menu.h"
 
 #define GUEST_KB        640
 #define DRIVES          2
@@ -64,6 +66,9 @@ static u16 npeek;
 #define TRACEIO_MAX 16
 static u16 trace_ports[TRACEIO_MAX];
 static int ntrace_ports;
+#define MENUKEYS_MAX 16
+static u8 menukeys[MENUKEYS_MAX];   /* 開発用 (-menukeys): メニューのキー入力の代わり */
+static int nmenukeys;
 
 static struct fdb fb;
 static dimg imgs[DRIVES];
@@ -163,6 +168,22 @@ static int parse_args(int argc, char **argv, struct opts *o)
             dev_shot_at[0] = (u32)strtol(v, &end, 10);
             dev_shot_at[1] = *end == ',' ? (u32)strtol(end + 1, 0, 10) : 0;
             i++;
+        } else if (eq(a, "-menuat") && v) {
+            dev_menu_at = (u32)atol(v);
+            i++;
+        } else if (eq(a, "-menukeys") && v) {
+            /* 開発用: メニューのキー入力の代わりに使うスキャンコードの列 (16 進、コンマ区切り) */
+            const char *p = v;
+            char *end;
+
+            while (*p && nmenukeys < MENUKEYS_MAX) {
+                menukeys[nmenukeys++] = (u8)strtol(p, &end, 16);
+                if (end == p)
+                    break;
+                p = *end == ',' ? end + 1 : end;
+            }
+            ui_set_keys(menukeys, nmenukeys);
+            i++;
         } else if (eq(a, "-stopafter") && v) {
             stop_after_irqs = (u32)atol(v);
             i++;
@@ -236,28 +257,55 @@ static u8 __far *page_ptr(u32 phys)
 
 /* ---------------------------------------------------------------- ドライブ */
 
-static int open_drive(int unit, const char *path)
+static char drive_name[DRIVES][64];
+
+/* ---- メニューから呼ぶ仮想マシンの操作 (vbm.h) ---- */
+
+void vm_eject(int unit)
 {
+    if (fb.img[unit]) {
+        dosio_close(&files[unit]);
+        fb.img[unit] = 0;
+    }
+    drive_name[unit][0] = 0;
+}
+
+/* 新しいイメージが開けてから前のを閉じる (開けなければ前のが残る) */
+int vm_mount(int unit, const char *path, int quiet)
+{
+    dos_file f;
     u32 size;
     int rc;
 
-    if (dosio_open(&files[unit], path, 1, &size) && dosio_open(&files[unit], path, 0, &size)) {
-        printf("VBM98: cannot open %s\n", path);
+    if (dosio_open(&f, path, 1, &size) && dosio_open(&f, path, 0, &size)) {
+        if (!quiet)
+            printf("VBM98: cannot open %s\n", path);
         return 1;
     }
+    vm_eject(unit);
+    files[unit] = f;
     dosio_bind(&ios[unit], &files[unit]);
     rc = dimg_mount(&imgs[unit], &ios[unit], size);
     if (rc) {
-        printf("VBM98: %s: not a supported disk image (%d)\n", path, rc);
+        if (!quiet)
+            printf("VBM98: %s: not a supported disk image (%d)\n", path, rc);
         dosio_close(&files[unit]);
         return 1;
     }
     fb.img[unit] = &imgs[unit];
-    printf("VBM98: drive %d: %s (%s, %u cylinders%s)\n", unit, path,
-           imgs[unit].fmt == DIMG_FMT_RAW ? "RAW" : imgs[unit].fmt == DIMG_FMT_FDI ? "FDI" :
-           imgs[unit].fmt == DIMG_FMT_NFD0 ? "NFD r0" : imgs[unit].fmt == DIMG_FMT_NFD1 ? "NFD r1" : "FDD",
-           imgs[unit].cyls, imgs[unit].readonly ? ", write protected" : "");
+    strncpy(drive_name[unit], path, sizeof drive_name[unit] - 1);
+    drive_name[unit][sizeof drive_name[unit] - 1] = 0;
+    if (!quiet)
+        printf("VBM98: drive %d: %s (%s, %u cylinders%s)\n", unit, path,
+               imgs[unit].fmt == DIMG_FMT_RAW ? "RAW" : imgs[unit].fmt == DIMG_FMT_FDI ? "FDI" :
+               imgs[unit].fmt == DIMG_FMT_NFD0 ? "NFD r0" : imgs[unit].fmt == DIMG_FMT_NFD1 ? "NFD r1" : "FDD",
+               imgs[unit].cyls, imgs[unit].readonly ? ", write protected" : "");
     return 0;
+}
+
+const char *vm_drive_name(int unit)
+{
+    return drive_name[unit];
 }
 
 static u8 boot_dua(void)
@@ -510,6 +558,7 @@ static int setup_guest(u32 tables)
     mon_init(&pg);
     mon_hook_add(HOOK_PAGE_LIN, HOOK_INT1B);
     mon_hook_add(RESET_LIN, HOOK_RESET);
+    mon_hook_add(HOOK_PAGE_LIN + HOOK_KBD_OFF, HOOK_KBD);
 
     size = 0x600;
     if (xms_move(xms_handle, guest_off, 0, xms_far(0, 0), size))
@@ -601,6 +650,76 @@ static void print_hits(void)
         if (vec_hits[v])
             printf(" %02X=%u", v, vec_hits[v]);
     printf("\n");
+}
+
+/* ---------------------------------------------------------------- メニューからの再開 */
+
+/*
+ * メニューのあいだに離された CTRL と GRPH の break コードをゲストに届ける (design.md §9)。
+ * ゲストのキーボード割り込みのハンドラを、IRET の戻り先を横取り印 (HOOK_KBD) にして呼ぶ。
+ * ハンドラが 41h を読むとモニタが kbd_code を返す。IRET で横取り印に来たら (X_KBD_DONE) 次を
+ * 注入するか、控えておいた本来の CS:IP に戻す。FLAGS は注入時に積んだ元の値を IRET が戻している
+ */
+static u8 inject_queue[2];
+static u8 inject_n, inject_i;
+static u16 resume_cs, resume_ip;
+
+static void inject_next(struct mon_guest *g)
+{
+    u8 frame[6], vec[4];
+    u16 sp = (u16)g->esp;
+
+    resume_cs = g->cs;
+    resume_ip = g->ip;
+    frame[0] = (u8)HOOK_KBD_OFF;
+    frame[1] = (u8)(HOOK_KBD_OFF >> 8);
+    frame[2] = (u8)HOOK_PAGE_SEG;
+    frame[3] = (u8)(HOOK_PAGE_SEG >> 8);
+    frame[4] = (u8)g->eflags;
+    frame[5] = (u8)(g->eflags >> 8);
+    sp = (u16)(sp - 6);
+    g_write(lin(g->ss, sp), mon_data_seg(), (u16)(unsigned)frame, 6);
+    g->esp = (g->esp & 0xFFFF0000UL) | sp;
+    g_read(0x09 * 4, mon_data_seg(), (u16)(unsigned)vec, 4);
+    g->ip = (u16)(vec[0] | (vec[1] << 8));
+    g->cs = (u16)(vec[2] | (vec[3] << 8));
+    g->eflags &= ~(u32)(EFL_IF | EFL_TF);
+    kbd_code = inject_queue[inject_i++];
+    kbd_pending = 1;
+}
+
+/* メニューから戻るとき。ゲストが割り込みを受けられる状態 (IF=1) のときだけ注入する */
+static void resume_keys(struct mon_guest *g)
+{
+    if (!(g->eflags & EFL_IF))
+        return;
+    inject_queue[0] = 0xF4;     /* CTRL の break (make 74h + 80h) */
+    inject_queue[1] = 0xF3;     /* GRPH の break */
+    inject_n = 2;
+    inject_i = 0;
+    inject_next(g);
+}
+
+static void kbd_done(struct mon_guest *g)
+{
+    g->cs = resume_cs;
+    g->ip = resume_ip;
+    if (inject_i < inject_n)
+        inject_next(g);
+}
+
+int vm_shot(char *gname)
+{
+    struct shot_info si;
+
+    /* グラフィックが 400 ラインかは、ゲストの BIOS ワークエリアの PRXDUPD bit 2 で見る (§16) */
+    g_read(WA_PRXDUPD & ~1UL, mon_data_seg(), (u16)(unsigned)word_buf, 2);
+    si.base = shot_base;
+    si.lines400 = (word_buf[WA_PRXDUPD & 1] & 0x04) != 0;
+    si.pal = vid_pal;
+    si.color16 = vid_color16;
+    si.anapal = vid_anapal;
+    return shot_save(&si, gname);
 }
 
 /* 8259 の IRR (ocw3 = 0Ah) / ISR (0Bh) を読む。読み出し選択は初期値の IRR に戻しておく */
@@ -713,19 +832,15 @@ int main(int argc, char **argv)
     setvbuf(stdout, 0, _IONBF, 0);
     if (parse_args(argc, argv, &o))
         return 2;
-    if (!o.fdd[0]) {
-        printf("VBM98: -fdd0 <image> is required (file selection is not implemented yet)\n");
-        return 2;
-    }
     if (o.have_dipsw || !o.v30)
         printf("VBM98: note: -v30 / -dipsw are accepted but not applied yet\n");
     trace = o.trace;
+    menu_debug = o.trace;
 
     fdb_init(&fb, DRIVES);
     for (i = 0; i < DRIVES; i++)
-        if (o.fdd[i] && open_drive(i, o.fdd[i]))
+        if (o.fdd[i] && vm_mount(i, o.fdd[i], 0))
             return 1;
-    set_shot_base(o.ss ? o.ss : o.fdd[0]);
     if (xfer_alloc()) {
         printf("VBM98: cannot allocate the transfer buffer\n");
         return 1;
@@ -735,7 +850,7 @@ int main(int argc, char **argv)
         return 1;
     /* setup_guest が BIOS ワークエリアを写すので、その前に表示系を電源投入時の状態にしておく */
     video_guest();
-    if (setup_guest(tables) || load_ipl(&g)) {
+    if (setup_guest(tables)) {
         video_host();
         return 1;
     }
@@ -770,6 +885,16 @@ int main(int argc, char **argv)
     screen_guest();
     if (o.have_memsw)
         memsw_guest(o.memsw);
+    /* -fdd0 がなければここで選ばせる (spec.md)。取り消したら起動せずに戻る */
+    if (!fb.img[0] && !menu_pick_boot())
+        running = 0;
+    if (running) {
+        set_shot_base(o.ss ? o.ss : vm_drive_name(0));
+        if (load_ipl(&g)) {
+            running = 0;
+            code = 1;
+        }
+    }
     while (running) {
         /*
          * ゲストの割り込みマスクが効いている間にホストのベクタ表で割り込みを受けてはいけない。
@@ -787,8 +912,11 @@ int main(int argc, char **argv)
             service_int1b(&g);
             break;
         case MON_HALT:
-            printf("VBM98: guest halted with interrupts disabled at %04X:%04X\n", g.cs, g.ip);
-            running = 0;
+            /* アプリが自分で止まった (spec.md): メニューで終了を選ばせる。戻ってもまた同じ HLT で止まる */
+            if (trace)
+                printf("VBM98: guest halted with interrupts disabled at %04X:%04X\n", g.cs, g.ip);
+            if (menu_main() == MENU_EXIT)
+                running = 0;
             break;
         case X_RESET:
             printf("VBM98: guest reset (restart is not implemented yet)\n");
@@ -806,29 +934,31 @@ int main(int argc, char **argv)
             running = 0;
             break;
         case X_HOTKEY_STOP:
-            /* 終了の確認はまだない。開発中はゲストの様子を出して終わる */
-            printf("VBM98: CTRL+GRPH+STOP at %04X:%04X\n", g.cs, g.ip);
-            dump_guest(&g);
-            running = 0;
+            if (menu_confirm_exit())
+                running = 0;
+            else
+                resume_keys(&g);
             break;
-        case X_HOTKEY_SHOT: {
-            struct shot_info si;
-
-            /* グラフィックが 400 ラインかは、ゲストの BIOS ワークエリアの PRXDUPD bit 2 で見る (§16) */
-            g_read(WA_PRXDUPD & ~1UL, mon_data_seg(), (u16)(unsigned)word_buf, 2);
-            si.base = shot_base;
-            si.lines400 = (word_buf[WA_PRXDUPD & 1] & 0x04) != 0;
-            si.pal = vid_pal;
-            si.color16 = vid_color16;
-            si.anapal = vid_anapal;
-            if (shot_save(&si))
+        case X_HOTKEY_MENU:
+            if (menu_main() == MENU_EXIT)
+                running = 0;
+            else
+                resume_keys(&g);
+            break;
+        case X_HOTKEY_FDD0:
+            menu_disk(0);
+            resume_keys(&g);
+            break;
+        case X_HOTKEY_FDD1:
+            menu_disk(1);
+            resume_keys(&g);
+            break;
+        case X_HOTKEY_SHOT:
+            if (vm_shot(0))
                 printf("VBM98: screenshot failed\n");
             break;
-        }
-        case X_HOTKEY_MENU:
-        case X_HOTKEY_FDD0:
-        case X_HOTKEY_FDD1:
-            printf("VBM98: hotkey %u is not implemented yet\n", rc);
+        case X_KBD_DONE:
+            kbd_done(&g);
             break;
         default:
             mon_panic_get(&pn);

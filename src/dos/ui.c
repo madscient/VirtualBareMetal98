@@ -1,0 +1,170 @@
+/*
+ * テキスト画面に直接描く UI (ui.h)。ホスト世界で、ゲストが止まっているあいだに使う。
+ * 文字は Shift-JIS で受け取り、jis.c でテキスト VRAM のコードにして書く。
+ * 1 桁ずつ far ポインタで書く (far ポインタに添字で触る形は gcc-ia16 6.3 の内部エラーを起こすので使わない)
+ */
+#include <stdio.h>
+#include <string.h>
+#include <dos.h>
+#include <i86.h>
+#include <libi86/string.h>
+#include "ui.h"
+#include "jis.h"
+
+#define TVRAM_SEG  0xA000
+#define TVRAM_ATTR 0x2000
+#define SHOWN      (UI_COLS * UI_ROWS * 2)
+
+/* JIS X 0208 の 28 区の罫線 (2821h〜2826h)。テキスト VRAM の値は下位が区 − 20h = 08h、上位が第 2 バイト (jis.h) */
+#define BOX_H  0x2108
+#define BOX_V  0x2208
+#define BOX_TL 0x2308
+#define BOX_TR 0x2408
+#define BOX_BR 0x2508
+#define BOX_BL 0x2608
+
+static u8 save_code[SHOWN], save_attr[SHOWN];
+static const u8 *dev_keys;
+static int dev_nkeys, dev_keyi;
+
+static void int18(u8 ah)
+{
+    union REGS r;
+
+    memset(&r, 0, sizeof r);
+    r.h.ah = ah;
+    int86(0x18, &r, &r);
+}
+
+static void put_cell(u8 row, u8 col, u16 code, u8 attr)
+{
+    u16 off = (u16)((row * UI_COLS + col) * 2);
+    u16 __far *pc = MK_FP(TVRAM_SEG, off);
+    u16 __far *pa = MK_FP(TVRAM_SEG, TVRAM_ATTR + off);
+
+    *pc = code;
+    *pa = attr;
+}
+
+static void put_wide(u8 row, u8 col, u16 code, u8 attr)
+{
+    put_cell(row, col, code, attr);
+    put_cell(row, (u8)(col + 1), (u16)(code | VRAM_RIGHT), attr);
+}
+
+void ui_open(void)
+{
+    _fmemcpy(save_code, MK_FP(TVRAM_SEG, 0), SHOWN);
+    _fmemcpy(save_attr, MK_FP(TVRAM_SEG, TVRAM_ATTR), SHOWN);
+    ui_fill(0, 0, UI_COLS, UI_ROWS, UI_WHITE);
+    int18(0x0C);    /* テキスト表示 ON。ゲストが消していても見えるように (戻すときは触らない。design.md §9) */
+    int18(0x12);    /* カーソルを消す */
+}
+
+void ui_close(void)
+{
+    _fmemcpy(MK_FP(TVRAM_SEG, 0), save_code, SHOWN);
+    _fmemcpy(MK_FP(TVRAM_SEG, TVRAM_ATTR), save_attr, SHOWN);
+}
+
+void ui_fill(u8 row, u8 col, u8 w, u8 h, u8 attr)
+{
+    u8 r, c;
+
+    for (r = 0; r < h; r++)
+        for (c = 0; c < w; c++)
+            put_cell((u8)(row + r), (u8)(col + c), 0x20, attr);
+}
+
+u8 ui_puts(u8 row, u8 col, u8 attr, const char *s)
+{
+    u8 start = col, c;
+    u16 code;
+
+    while ((c = (u8)*s) != 0 && col < UI_COLS) {
+        if (sjis_is_lead(c) && s[1]) {
+            if (col + 1 >= UI_COLS)
+                break;
+            code = sjis_to_vram(c, (u8)s[1]);
+            put_wide(row, col, code, attr);
+            col = (u8)(col + 2);
+            s += 2;
+        } else {
+            put_cell(row, col, c, attr);
+            col++;
+            s++;
+        }
+    }
+    return (u8)(col - start);
+}
+
+void ui_box(u8 row, u8 col, u8 w, u8 h, u8 attr)
+{
+    u8 r, c;
+
+    put_wide(row, col, BOX_TL, attr);
+    put_wide(row, (u8)(col + w - 2), BOX_TR, attr);
+    put_wide((u8)(row + h - 1), col, BOX_BL, attr);
+    put_wide((u8)(row + h - 1), (u8)(col + w - 2), BOX_BR, attr);
+    for (c = 2; c + 2 < w; c = (u8)(c + 2)) {
+        put_wide(row, (u8)(col + c), BOX_H, attr);
+        put_wide((u8)(row + h - 1), (u8)(col + c), BOX_H, attr);
+    }
+    for (r = 1; r + 1 < h; r++) {
+        put_wide((u8)(row + r), col, BOX_V, attr);
+        put_wide((u8)(row + r), (u8)(col + w - 2), BOX_V, attr);
+    }
+}
+
+/* INT 18h AH=00h: キーを 1 つ読む (AH = スキャンコード、AL = 文字)。AH=01h: 読まずに有無を見る (BH が 0 なら無し) */
+u16 ui_getkey(void)
+{
+    union REGS r;
+
+    if (dev_keys) {
+        if (dev_keyi < dev_nkeys)
+            return (u16)(dev_keys[dev_keyi++] << 8);
+        return (u16)(UI_SC_ESC << 8);
+    }
+    memset(&r, 0, sizeof r);
+    r.h.ah = 0x00;
+    int86(0x18, &r, &r);
+    return (u16)((r.h.ah << 8) | r.h.al);
+}
+
+void ui_flush_keys(void)
+{
+    union REGS r;
+
+    if (dev_keys)
+        return;
+    for (;;) {
+        memset(&r, 0, sizeof r);
+        r.h.ah = 0x01;
+        int86(0x18, &r, &r);
+        if (!r.h.bh)
+            break;
+        memset(&r, 0, sizeof r);
+        r.h.ah = 0x00;
+        int86(0x18, &r, &r);
+    }
+}
+
+void ui_set_keys(const u8 *scancodes, int n)
+{
+    dev_keys = scancodes;
+    dev_nkeys = n;
+    dev_keyi = 0;
+}
+
+void ui_debug_dump(u8 row, u8 cols)
+{
+    static u8 buf[UI_COLS * 2];
+    u8 c;
+
+    _fmemcpy(buf, MK_FP(TVRAM_SEG, row * UI_COLS * 2), UI_COLS * 2);
+    printf("VBM98: tvram row %u:", row);
+    for (c = 0; c < cols; c++)
+        printf(" %02X%02X", buf[c * 2 + 1], buf[c * 2]);
+    printf("\n");
+}

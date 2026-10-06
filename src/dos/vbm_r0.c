@@ -77,11 +77,11 @@ static void pop_iret(struct mon_vframe *f)
 #define SC_COPY   0x61
 
 static u8 kbd_ctrl, kbd_grph;   /* 押されている修飾キー */
-static u8 kbd_pending;          /* ゲストがまだ読んでいないスキャンコードがある */
-static u8 kbd_code;
+u8 kbd_pending;                 /* ゲストがまだ読んでいないスキャンコードがある (ホストの注入でも使う。vbm.h) */
+u8 kbd_code;
 u8 kbd_stop_alt, kbd_shot_alt;
 u8 dev_tick, guest_imr0;
-u32 dev_shot_at[2];
+u32 dev_shot_at[2], dev_menu_at;
 static u8 dev_shot_i;           /* 次に使う dev_shot_at の添字 */
 u8 vid_pal[4];
 u8 vid_color16, vid_anapal[16 * 3];
@@ -143,12 +143,24 @@ u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
                 dev_shot_i++;
                 return X_HOTKEY_SHOT;
             }
+            if (dev_menu_at && irq_count >= dev_menu_at) {
+                dev_menu_at = 0;
+                return X_HOTKEY_MENU;
+            }
             return 0;
         }
     } else {
         log_ev(vec, EV_SOFT, f, (u16)r->eax);
     }
     mon_reflect(vec, f);
+    if (dev_menu_at && vec >= IRQ_FIRST + 2 && vec <= IRQ_LAST && irq_count >= dev_menu_at) {
+        /*
+         * 開発用: ゲストのハンドラに入る形 (反射済み) にしてからメニューへ抜ける。戻ればハンドラが動くので
+         * 割り込みは失われない。IRQ0・1 のときは ISR がホストのキーボード割り込み (IRQ1) を塞ぐので IRQ2 以降だけ
+         */
+        dev_menu_at = 0;
+        return X_HOTKEY_MENU;
+    }
     return 0;
 }
 
@@ -234,6 +246,9 @@ u16 mon_on_hook(u8 id, struct mon_vframe *f, struct mon_gregs *r)
         log_io(2, 0x02, 1, mon_in8(0x02));   /* 開発用: ホストへ戻る直前の割り込みマスク */
         pop_iret(f);
         return X_INT1B;
+    case HOOK_KBD:
+        /* ホストが注入したキー割り込みのハンドラが IRET で戻ってきた。フレームは IRET が片付けている */
+        return X_KBD_DONE;
     case HOOK_VEC:
         /*
          * ホストの RAM を指していたので差し替えたベクタ。ゲストに相当する処理はないので、

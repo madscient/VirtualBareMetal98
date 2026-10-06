@@ -1,0 +1,24 @@
+# VM メニューなどの文言。tools/mktext.py が Shift-JIS に変換して build/dos/ui_text.h を作る。
+# 1 行 1 項目: 名前<TAB>文言。名前は T_ で始める (C の他の名前とぶつけない)。%s / %d は sprintf の書式。
+# 画面は 80 桁なので 1 行は 76 桁まで (全角は 2 桁)
+T_MENU_TITLE	VBM98 メニュー
+T_MENU_FDD0	1. ドライブ 0 のディスク交換
+T_MENU_FDD1	2. ドライブ 1 のディスク交換
+T_MENU_SHOT	3. スクリーンショットの保存
+T_MENU_EXIT	4. 終了
+T_MENU_HELP	番号を押す  ESC: ゲストに戻る
+T_SEL_TITLE	ドライブ %d に入れるイメージを選ぶ  (いま: %s)
+T_SEL_NONE	なし
+T_SEL_EJECT	(取り出す)
+T_SEL_UPDIR	.. (上のディレクトリ)
+T_SEL_DIR	<DIR>
+T_SEL_HELP_IMG	↑↓ ROLL: 選ぶ  RETURN: 決定  TAB: 全ファイル表示  ESC: 戻る
+T_SEL_HELP_ALL	↑↓ ROLL: 選ぶ  RETURN: 決定  TAB: イメージだけ表示  ESC: 戻る
+T_SEL_EMPTY	(ファイルがありません)
+T_MSG_MOUNTED	ドライブ %d: %s を入れました
+T_MSG_EJECTED	ドライブ %d: 取り出しました
+T_MSG_MOUNT_FAIL	開けません、またはイメージの形式が分かりません: %s
+T_MSG_SHOT_OK	保存しました: %s
+T_MSG_SHOT_FAIL	スクリーンショットを保存できませんでした
+T_CONFIRM_EXIT	仮想マシンを終了しますか？  Y: 終了  N: 戻る
+T_MSG_ANYKEY	何かキーを押してください

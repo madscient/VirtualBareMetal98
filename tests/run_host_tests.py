@@ -40,7 +40,21 @@ def build(core=None):
     imgdump = compile_(core, [os.path.join(harness, 'imgdump.c'), os.path.join(harness, 'plat_stdio.c')], 'imgdump')
     fdbtest = compile_(core, [os.path.join(core, 'fdbios.c'), os.path.join(ROOT, 'tests', 'fdbios', 'fdbtest.c')], 'fdbtest')
     pngtest = compile_(core, [os.path.join(core, 'png.c'), os.path.join(ROOT, 'tests', 'png', 'pngtest.c')], 'pngtest')
-    return imgdump, fdbtest, pngtest
+    jistest = compile_(core, [os.path.join(core, 'jis.c'), os.path.join(ROOT, 'tests', 'jis', 'jistest.c')], 'jistest')
+    return imgdump, fdbtest, pngtest, jistest
+
+
+def run_simple(exe, label):
+    """ok / FAIL の行と END <失敗数> <件数> を出す試験プログラムを走らせる。失敗なら 1"""
+    p = subprocess.run([exe], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+    lines = p.stdout.splitlines()
+    end = lines[-1].split() if lines else []
+    ok = p.returncode == 0 and len(end) == 3 and end[0] == 'END' and end[1] == '0'
+    for line in lines:
+        if line.startswith('FAIL'):
+            print(line)
+    print('%s: %s' % (label, '通過' if ok else '失敗'))
+    return 0 if ok else 1
 
 
 def check_png(path, width, height, pixels, alpha):
@@ -100,7 +114,7 @@ def run_png(pngtest):
 
 def run(exes, verbose=True):
     """失敗数を返す。ディスクイメージ層の試験のあと、同じイメージで INT 1Bh の意味論を試験し、PNG の書き出しを試験する"""
-    imgdump, fdbtest, pngtest = exes
+    imgdump, fdbtest, pngtest, jistest = exes
     work = os.path.join(BUILD, 'fixtures')
     steps = imgtests.prepare(work)
     imgtests.exec_host(imgdump, work, steps)
@@ -119,6 +133,7 @@ def run(exes, verbose=True):
         failed += 1
     print('INT 1Bh: %s' % ('通過' if ok else '失敗'))
     failed += run_png(pngtest)
+    failed += run_simple(jistest, 'Shift-JIS')
     return failed
 
 
