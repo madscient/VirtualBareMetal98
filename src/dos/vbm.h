@@ -30,8 +30,13 @@
 #define X_HOTKEY_FDD1 8   /* テンキー 1: ドライブ 1 のイメージ交換 */
 #define X_HOTKEY_SHOT 9   /* COPY: スクリーンショット */
 
-/* ゲストが書いたデジタルパレットのレジスタ (A8h, AAh, ACh, AEh の順)。ring 0 側が写しを持つ */
+/*
+ * ゲストが書いた表示系の写し (ring 0 側が持つ。スクリーンショットの色のため):
+ * デジタルパレットのレジスタ (A8h, AAh, ACh, AEh の順)、16 色モード (6Ah の bit 0)、
+ * アナログパレット 16 色 × (R, G, B) 各 4 ビット
+ */
 extern u8 vid_pal[4];
+extern u8 vid_color16, vid_anapal[16 * 3];
 /* 開発用: COPY の代わりにスクリーンショットにするスキャンコード (0 なら無し)。-stopkey と同じ事情 */
 extern u8 kbd_shot_alt;
 
@@ -46,8 +51,8 @@ extern u8 kbd_stop_alt;
  * ゲストには割り込みマスクの bit 0 を見せかけで返す (guest_imr0)。時間の物差しと -stopafter の刻みになる
  */
 extern u8 dev_tick, guest_imr0;
-/* 開発用 (-shotat): -tick の刻みがこの数に達したらスクリーンショットを撮る (0 なら無し)。試験で使う */
-extern u32 dev_shot_at;
+/* 開発用 (-shotat): -tick の刻みがこの数に達したらスクリーンショットを撮る (0 なら無し。2 回まで)。試験で使う */
+extern u32 dev_shot_at[2];
 
 /* 開発用: モニタに届いたものの記録 (ring 0 側が書き、ホストが止めたときに表示する) */
 #define EVLOG_SIZE 32

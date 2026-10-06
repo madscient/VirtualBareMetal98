@@ -157,7 +157,11 @@ static int parse_args(int argc, char **argv, struct opts *o)
         } else if (eq(a, "-shotkey") && v && !hexbytes(v, &kbd_shot_alt, 1)) {
             i++;
         } else if (eq(a, "-shotat") && v) {
-            dev_shot_at = (u32)atol(v);
+            /* 刻みの数。コンマ区切りで 2 つまで (試験で 8 色と 16 色を 1 回の起動で撮る) */
+            char *end;
+
+            dev_shot_at[0] = (u32)strtol(v, &end, 10);
+            dev_shot_at[1] = *end == ',' ? (u32)strtol(end + 1, 0, 10) : 0;
             i++;
         } else if (eq(a, "-stopafter") && v) {
             stop_after_irqs = (u32)atol(v);
@@ -402,6 +406,31 @@ static void video_guest(void)
     pio_out8(0xAA, vid_pal[1]);
     pio_out8(0xAC, vid_pal[2]);
     pio_out8(0xAE, vid_pal[3]);
+    /*
+     * アナログパレット (16 色モード用) も電源投入時の値にする。値は NP2 の ITF が書くもの (G, R, B の
+     * 順のニブル。design.md §12)。16 色モードに切り替えて書き、8 色モードに戻す。VM にはない機能なので、
+     * ハードウェアになければ書いても何も起きない
+     */
+    {
+        static const u16 defanapal[16] = {
+            0x000, 0x007, 0x070, 0x077, 0x700, 0x707, 0x770, 0x777,
+            0x444, 0x00F, 0x0F0, 0x0FF, 0xF00, 0xF0F, 0xFF0, 0xFFF,
+        };
+        u8 n;
+
+        pio_out8(0x6A, 0x01);
+        for (n = 0; n < 16; n++) {
+            vid_anapal[n * 3 + 0] = (u8)((defanapal[n] >> 4) & 0x0F);
+            vid_anapal[n * 3 + 1] = (u8)((defanapal[n] >> 8) & 0x0F);
+            vid_anapal[n * 3 + 2] = (u8)(defanapal[n] & 0x0F);
+            pio_out8(0xA8, n);
+            pio_out8(0xAA, vid_anapal[n * 3 + 1]);
+            pio_out8(0xAC, vid_anapal[n * 3 + 0]);
+            pio_out8(0xAE, vid_anapal[n * 3 + 2]);
+        }
+        pio_out8(0x6A, 0x00);
+        vid_color16 = 0;
+    }
 }
 
 /* スクリーンショットのファイル名の先頭。-ss の値か、ドライブ 0 のイメージのファイル名の先頭 4 文字 (spec.md) */
@@ -715,11 +744,12 @@ int main(int argc, char **argv)
     /* キーボードはホットキーを見るためにモニタが先に読むので、ゲストにはトラップ経由で見せる (vbm_r0.c) */
     mon_trap_port(0x41, 1);
     mon_trap_port(0x43, 1);
-    /* デジタルパレットの写し (スクリーンショットの色) のため。書き込みは実機へも通る (vbm_r0.c) */
+    /* パレットと 16 色モードの写し (スクリーンショットの色) のため。書き込みは実機へも通る (vbm_r0.c) */
     mon_trap_port(0xA8, 1);
     mon_trap_port(0xAA, 1);
     mon_trap_port(0xAC, 1);
     mon_trap_port(0xAE, 1);
+    mon_trap_port(0x6A, 1);
 
     /* ゲストの割り込みマスクの初期値は、電源投入後の BIOS が残す値に近いホストの現在値 */
     host_imr_m = pio_in8(PIC_M_IMR);
@@ -789,6 +819,8 @@ int main(int argc, char **argv)
             si.base = shot_base;
             si.lines400 = (word_buf[WA_PRXDUPD & 1] & 0x04) != 0;
             si.pal = vid_pal;
+            si.color16 = vid_color16;
+            si.anapal = vid_anapal;
             if (shot_save(&si))
                 printf("VBM98: screenshot failed\n");
             break;

@@ -92,8 +92,8 @@ def test_boot(work):
 
 
 def read_png4(path):
-    """4 ビットのインデックスカラー PNG を読み解き、画素のパレット番号の 2 次元リストを返す。
-    ない・壊れている・形式が違うときは None。チャンクの CRC も確かめる"""
+    """4 ビットのインデックスカラー PNG を読み解き、{'rows': 画素のパレット番号の 2 次元リスト,
+    'plte': [(R, G, B), ...]} を返す。ない・壊れている・形式が違うときは None。チャンクの CRC も確かめる"""
     import struct
     import zlib
     if not os.path.exists(path):
@@ -124,7 +124,8 @@ def read_png4(path):
         for b in row[1:]:
             px += [b >> 4, b & 15]
         rows.append(px[:width])
-    return rows
+    plte = chunks[b'PLTE']
+    return {'rows': rows, 'plte': [tuple(plte[i:i + 3]) for i in range(0, len(plte), 3)]}
 
 
 def test_shot(work):
@@ -142,14 +143,20 @@ def test_shot(work):
     img[0:1024] = ipl
     with open(os.path.join(work, 'S.IMG'), 'wb') as f:
         f.write(img)
-    for name in ('SHOT.OUT', 'S001G.PNG', 'S001T.PNG'):
+    for name in ('SHOT.OUT', 'S001G.PNG', 'S001T.PNG', 'S002G.PNG', 'S002T.PNG'):
         if os.path.exists(os.path.join(work, name)):
             os.remove(os.path.join(work, name))
-    finished = dosenv.run_batch(['VBM98.EXE -fdd0 S.IMG -tick -shotat 50 -stopafter 150 > SHOT.OUT'], 180, core='normal')
+    # 1 枚目は 8 色モード。IPL が約 1 秒後に 16 色モードへ移るので、2 枚目は 16 色モード
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 S.IMG -tick -shotat 50,150 -stopafter 200 > SHOT.OUT'], 180, core='normal')
     for line in imgtests.read_lines(work, 'SHOT.OUT') or []:
         print('  ' + line)
-    g = read_png4(os.path.join(work, 'S001G.PNG'))
-    t = read_png4(os.path.join(work, 'S001T.PNG'))
+    g1 = read_png4(os.path.join(work, 'S001G.PNG'))
+    t1 = read_png4(os.path.join(work, 'S001T.PNG'))
+    g2 = read_png4(os.path.join(work, 'S002G.PNG'))
+    t2 = read_png4(os.path.join(work, 'S002T.PNG'))
+    g = g1['rows'] if g1 else None
+    t = t1['rows'] if t1 else None
+    h = g2['rows'] if g2 else None
 
     def cell(rows, r, c):
         """テキストの桁 (8×16) にある、透明 (8) 以外のパレット番号の集まり"""
@@ -159,12 +166,21 @@ def test_shot(work):
         return sum(1 for y in range(r * 16, r * 16 + 16) for x in range(c * 8, c * 8 + 8) if rows[y][x] == idx)
 
     bars = ((0, 1), (8, 2), (16, 4), (24, 7))
+
+    def bars_ok(rows):
+        return all(rows[y][x] == c for x0, c in bars for x in range(x0, x0 + 8) for y in range(20, 40))
+
     checks = (
         ('batch finished', finished),
-        ('two PNG files, 640x400, 4-bit indexed, CRCs good', g is not None and t is not None and len(g) == 400 and len(g[0]) == 640 and len(t) == 400),
-        ('graphics: colour bars 1/2/4/7 at x 0-31, image rows 20-39 (VRAM lines 10-19 doubled)',
-         g is not None and all(g[y][x] == c for x0, c in bars for x in range(x0, x0 + 8) for y in range(20, 40))),
-        ('graphics: outside the bars is colour 0', g is not None and g[19][0] == 0 and g[40][0] == 0 and g[30][32] == 0 and g[100][100] == 0),
+        ('four PNG files, 640x400, 4-bit indexed, CRCs good',
+         all(p is not None and len(p['rows']) == 400 and len(p['rows'][0]) == 640 for p in (g1, t1, g2, t2))),
+        ('8-colour: palette has 8 entries and colour 1 is blue', g1 is not None and len(g1['plte']) == 8 and g1['plte'][1] == (0, 0, 255)),
+        ('8-colour: colour bars 1/2/4/7 at x 0-31, image rows 20-39 (VRAM lines 10-19 doubled)', g is not None and bars_ok(g)),
+        ('8-colour: outside the bars is colour 0', g is not None and g[19][0] == 0 and g[40][0] == 0 and g[30][32] == 0 and g[100][100] == 0),
+        ('16-colour: palette has 16 entries, entry 8 is the red the IPL set, entry 1 is the power-on half blue',
+         g2 is not None and len(g2['plte']) == 16 and g2['plte'][8] == (255, 0, 0) and g2['plte'][1] == (0, 0, 119)),
+        ('16-colour: the bars keep indices 1/2/4/7 and the E-plane bar at x 32-39 is index 8',
+         h is not None and bars_ok(h) and all(h[y][x] == 8 for x in range(32, 40) for y in range(20, 40))),
         ('text: "V" at row 0 col 0 has white pixels and nothing else', t is not None and cell(t, 0, 0) == {7}),
         ('text: kanji at row 1 cols 0-3 are red (16-dot wide glyphs span two cells)',
          t is not None and all(cell(t, 1, c) == {2} for c in range(4))),

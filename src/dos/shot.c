@@ -22,6 +22,7 @@
 #define PLANE_B     0xA800
 #define PLANE_R     0xB000
 #define PLANE_G     0xB800
+#define PLANE_E     0xE000      /* 16 色モードの第 4 プレーン (輝度) */
 #define TVRAM_SEG   0xA000
 #define TVRAM_ATTR  0x2000
 #define COLS        80
@@ -98,22 +99,25 @@ static int sink(void *ctx, const u8 *data, u16 len)
 
 /* ---------------------------------------------------------------- グラフィック */
 
-static u8 pl_b[PLANE_ROW], pl_r[PLANE_ROW], pl_g[PLANE_ROW];
+static u8 pl_b[PLANE_ROW], pl_r[PLANE_ROW], pl_g[PLANE_ROW], pl_e[PLANE_ROW];
 static u8 packed[WIDTH / 2];
 
-/* 3 プレーンの 1 ラインを、1 バイト 2 画素 (上位が左) の色番号 (G=4, R=2, B=1) に */
-static void pack_planes(void)
+/* プレーンの 1 ラインを、1 バイト 2 画素 (上位が左) の色番号 (E=8, G=4, R=2, B=1) に。8 色モードでは E = 0 */
+static void pack_planes(int color16)
 {
     u16 i;
-    u8 x, b, r, g, hi, lo;
+    u8 x, b, r, g, e, hi, lo;
 
     for (i = 0; i < PLANE_ROW; i++) {
         b = pl_b[i];
         r = pl_r[i];
         g = pl_g[i];
+        e = (u8)(color16 ? pl_e[i] : 0);
         for (x = 0; x < 8; x = (u8)(x + 2)) {
-            hi = (u8)(((b >> (7 - x)) & 1) | (((r >> (7 - x)) & 1) << 1) | (((g >> (7 - x)) & 1) << 2));
-            lo = (u8)(((b >> (6 - x)) & 1) | (((r >> (6 - x)) & 1) << 1) | (((g >> (6 - x)) & 1) << 2));
+            hi = (u8)(((b >> (7 - x)) & 1) | (((r >> (7 - x)) & 1) << 1) | (((g >> (7 - x)) & 1) << 2) |
+                      (((e >> (7 - x)) & 1) << 3));
+            lo = (u8)(((b >> (6 - x)) & 1) | (((r >> (6 - x)) & 1) << 1) | (((g >> (6 - x)) & 1) << 2) |
+                      (((e >> (6 - x)) & 1) << 3));
             packed[i * 4 + x / 2] = (u8)((hi << 4) | lo);
         }
     }
@@ -134,21 +138,35 @@ static void graphics_palette(const u8 *pal, u8 *rgb)
     }
 }
 
+/* アナログパレット: 16 色 × (R, G, B) 各 4 ビットを 8 ビットに (0Fh → FFh) */
+static void analog_palette(const u8 *ana, u8 *rgb)
+{
+    u8 i;
+
+    for (i = 0; i < 16 * 3; i++)
+        rgb[i] = (u8)(ana[i] * 17);
+}
+
 static int save_graphics(struct sink_ctx *s, const struct shot_info *si)
 {
     struct png_writer w;
-    u8 rgb[8 * 3];
+    u8 rgb[16 * 3];
     u16 y, off, rows = (u16)(si->lines400 ? HEIGHT : HEIGHT / 2);
 
-    graphics_palette(si->pal, rgb);
-    if (png_begin(&w, sink, s, WIDTH, HEIGHT, rgb, 8, 0))
+    if (si->color16)
+        analog_palette(si->anapal, rgb);
+    else
+        graphics_palette(si->pal, rgb);
+    if (png_begin(&w, sink, s, WIDTH, HEIGHT, rgb, (u8)(si->color16 ? 16 : 8), 0))
         return 1;
     for (y = 0; y < rows; y++) {
         off = (u16)(y * PLANE_ROW);
         _fmemcpy(pl_b, MK_FP(PLANE_B, off), PLANE_ROW);
         _fmemcpy(pl_r, MK_FP(PLANE_R, off), PLANE_ROW);
         _fmemcpy(pl_g, MK_FP(PLANE_G, off), PLANE_ROW);
-        pack_planes();
+        if (si->color16)
+            _fmemcpy(pl_e, MK_FP(PLANE_E, off), PLANE_ROW);
+        pack_planes(si->color16);
         if (png_row(&w, packed))
             return 1;
         if (!si->lines400 && png_row(&w, packed))

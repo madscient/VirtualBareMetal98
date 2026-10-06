@@ -18,12 +18,14 @@ start:
         push    cs
         pop     ds
 
-        /* 3 プレーンを消す。ホストの残り物が写らないように */
+        /* 4 プレーンを消す (E は 16 色モードで使う)。ホストの残り物が写らないように */
         mov     ax, 0xA800
         call    clear_plane
         mov     ax, 0xB000
         call    clear_plane
         mov     ax, 0xB800
+        call    clear_plane
+        mov     ax, 0xE000
         call    clear_plane
 
         /* VRAM の 10〜19 ライン目に、左から色 1 (B)・2 (R)・4 (G)・7 (全部) の 8 ドット幅の帯 */
@@ -87,6 +89,36 @@ start:
         mov     di, 640
         mov     word ptr es:[di], 0x0053
         mov     byte ptr es:[di + 0x2000], 0xE0
+
+        /*
+         * 1 枚目 (8 色) を撮る時間を置いてから 16 色モードへ移る。VSYNC (A0h の bit 5) の立ち上がりを
+         * 60 回数える (約 1 秒)。VBM98 側は -shotat 50,150 (約 0.5 秒と 1.5 秒) で撮る
+         */
+        mov     cx, 60
+6:      in      al, 0xA0
+        test    al, 0x20
+        jnz     6b
+7:      in      al, 0xA0
+        test    al, 0x20
+        jz      7b
+        loop    6b
+        mov     al, 0x01
+        out     0x6A, al                    /* 16 色モード */
+        mov     al, 8                       /* アナログパレット 8 番を赤 (R = Fh, G = B = 0) に */
+        out     0xA8, al
+        xor     al, al
+        out     0xAA, al
+        mov     al, 0x0F
+        out     0xAC, al
+        xor     al, al
+        out     0xAE, al
+        mov     ax, 0xE000                  /* E プレーン: x 32-39 の 10〜19 ライン目 (色 8) */
+        mov     es, ax
+        mov     cx, 10
+        mov     di, 10 * 80
+8:      mov     byte ptr es:[di + 4], 0xFF
+        add     di, 80
+        loop    8b
 
 5:      sti
         hlt

@@ -81,8 +81,11 @@ static u8 kbd_pending;          /* ゲストがまだ読んでいないスキャ
 static u8 kbd_code;
 u8 kbd_stop_alt, kbd_shot_alt;
 u8 dev_tick, guest_imr0;
-u32 dev_shot_at;
+u32 dev_shot_at[2];
+static u8 dev_shot_i;           /* 次に使う dev_shot_at の添字 */
 u8 vid_pal[4];
+u8 vid_color16, vid_anapal[16 * 3];
+static u8 vid_anaidx;           /* アナログパレットで次に書かれる番号 (A8h) */
 
 /*
  * キーボード割り込み。ホットキーを見るためにスキャンコードをここで読んでしまうので、ゲストには
@@ -136,8 +139,8 @@ u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
         if (vec == IRQ_FIRST && dev_tick && guest_imr0) {
             /* ゲストは IRQ0 を閉じているつもりなので渡さない。数えるだけ */
             eoi(vec);
-            if (dev_shot_at && irq_count >= dev_shot_at) {
-                dev_shot_at = 0;
+            if (dev_shot_i < 2 && dev_shot_at[dev_shot_i] && irq_count >= dev_shot_at[dev_shot_i]) {
+                dev_shot_i++;
                 return X_HOTKEY_SHOT;
             }
             return 0;
@@ -190,9 +193,21 @@ u16 mon_on_out(u16 port, u8 size, u32 val)
     u16 v = (u16)val;
 
     log_io(1, port, size, v);
-    /* デジタルパレットはスクリーンショットで色を当てるために写しを持つ (書き込みは実機へも通す) */
-    if (port >= 0xA8 && port <= 0xAE && !(port & 1) && size == 1)
-        vid_pal[(port - 0xA8) >> 1] = (u8)v;
+    /*
+     * 表示系の写し (スクリーンショットで色を当てるため。書き込みは実機へも通す)。6Ah は 00h/01h が 16 色
+     * モードの切替。A8h〜AEh は 8 色モードではデジタルパレットのレジスタ、16 色モードでは A8h が番号、
+     * AAh が G、ACh が R、AEh が B (design.md §12)
+     */
+    if (port == 0x6A && size == 1 && (v & 0xFE) == 0)
+        vid_color16 = (u8)(v & 1);
+    if (port >= 0xA8 && port <= 0xAE && !(port & 1) && size == 1) {
+        if (!vid_color16)
+            vid_pal[(port - 0xA8) >> 1] = (u8)v;
+        else if (port == 0xA8)
+            vid_anaidx = (u8)(v & 0x0F);
+        else
+            vid_anapal[vid_anaidx * 3 + (port == 0xAC ? 0 : port == 0xAA ? 1 : 2)] = (u8)(v & 0x0F);
+    }
     if (port == 0x02 && dev_tick) {
         guest_imr0 = (u8)(v & 1);
         v = (u16)(v & 0xFFFE);
