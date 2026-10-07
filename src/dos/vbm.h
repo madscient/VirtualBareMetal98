@@ -34,6 +34,7 @@
 #define X_HOTKEY_SHOT  9   /* COPY: スクリーンショット */
 #define X_KBD_DONE     10  /* ホストが注入したキー割り込みのハンドラが戻った (HOOK_KBD)。ホストが次を注入するか再開する */
 #define X_HOTKEY_RESET 11  /* DEL: リセット (実機の CTRL+GRPH+DEL と同じ組み合わせ) */
+#define X_LOGTICK      12  /* -log の心拍: 一定の刻みごとにホストへ戻り、ゲストの様子をログに書いてすぐ戻る */
 
 /*
  * ゲストが書いた表示系の写し (ring 0 側が持つ。スクリーンショットの色のため):
@@ -81,6 +82,8 @@ extern u8 dev_tick, guest_imr0;
 extern u32 dev_shot_at[2];
 /* 開発用 (-menuat): -tick の刻みがこの数に達したら VM メニューを開く (0 なら無し)。試験で使う */
 extern u32 dev_menu_at;
+/* -log の心拍 (design.md §19): -tick の刻みをこの数ごとに数えて X_LOGTICK で戻る (0 なら無し) */
+extern u32 dev_log_every;
 /*
  * キーボードの写し (ring 0 側)。モニタが IRQ1 で読んだスキャンコードを、ゲストが 41h を読むときに返す。
  * ホストがキー割り込みを注入するとき (design.md §9) もここに置いてからゲストのハンドラへ入る

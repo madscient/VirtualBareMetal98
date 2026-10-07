@@ -164,11 +164,15 @@ def test_boot(work):
     # -dipsw は NP21/W の既定 (3E 73 7B) と、見ているビット全部で違う値にする。SW2-3 を OFF (20 行) にし、
     # SW2-4 は ON のまま (80 桁。40 桁だとメニューの表示が崩れる)。SW1 の下位 4 桁は '*' (ホストの値: SW1-1 と SW1-3)
     # -memsw は SW4 だけ 08h、他は '*'。コマンド行は DOS の 126 文字の制限に収める
+    log = os.path.join(work, 'B.LOG')
+    if os.path.exists(log):
+        os.remove(log)
     finished = dosenv.run_batch(['VBM98.EXE -fdd0 B.IMG -trace -menukeys 05,15,04,15 -dipsw 0*F4FB -memsw ******08******** '
-                                 '-iotrap I.TXT -sbrom S.ROM > BOOT.OUT'], 180, core='normal')
+                                 '-iotrap I.TXT -sbrom S.ROM -log B.LOG > BOOT.OUT'], 180, core='normal')
     lines = imgtests.read_lines(work, 'BOOT.OUT') or []
     for line in lines:
         print('  ' + line)
+    loglines = imgtests.read_lines(work, 'B.LOG') or []
     with open(os.path.join(work, 'B.IMG'), 'rb') as f:
         rec = f.read()[2048:3072]
     want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 1024, 2)) & 0xFFFF
@@ -198,6 +202,9 @@ def test_boot(work):
         ('IPL ran again after the reset it caused, with its RAM marker intact', rec[0x31D] == 1),
         ('VBM98 reported the reset from the guest and the one from the menu',
          any('reset (guest)' in l for l in lines) and any('reset (menu)' in l for l in lines)),
+        ('-log: the log file holds the same lines as the console (boot, INT 1Bh trace, resets, exit)',
+         any('booting from drive' in l for l in loglines) and any(l.startswith('1B 5690') for l in loglines) and
+         any('reset (menu)' in l for l in loglines) and any('back to DOS' in l for l in loglines)),
     )
     ok = True
     for name, c in checks:
@@ -326,13 +333,15 @@ def test_menu(work):
     img[0:1024] = ipl
     with open(os.path.join(work, 'M.IMG'), 'wb') as f:
         f.write(img)
-    for name in ('MENU.OUT', 'M001G.PNG', 'M001T.PNG'):
+    for name in ('MENU.OUT', 'M001G.PNG', 'M001T.PNG', 'M.LOG'):
         if os.path.exists(os.path.join(work, name)):
             os.remove(os.path.join(work, name))
-    finished = dosenv.run_batch(['VBM98.EXE -fdd0 M.IMG -tick -menuat 50 -menukeys 03,00,00 -stopafter 150 > MENU.OUT'], 180, core='normal')
+    # -log の心拍 (1 秒 = 100 刻み) は、150 刻みで止める前に 1 回入る
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 M.IMG -tick -menuat 50 -menukeys 03,00,00 -stopafter 150 -log M.LOG,1 > MENU.OUT'], 180, core='normal')
     lines = imgtests.read_lines(work, 'MENU.OUT') or []
     for line in lines:
         print('  ' + line)
+    loglines = imgtests.read_lines(work, 'M.LOG') or []
     g = read_png4(os.path.join(work, 'M001G.PNG'))
     t = read_png4(os.path.join(work, 'M001T.PNG'))
 
@@ -347,6 +356,8 @@ def test_menu(work):
         ('text: the IPL text (white "V") is in the shot, not the menu', t is not None and cell(t['rows'], 0, 0) == {7}),
         ('text: where the menu frame was drawn is transparent (screen restored before shooting)',
          t is not None and cell(t['rows'], 6, 18) == set() and cell(t['rows'], 9, 22) == set()),
+        ('-log heartbeat: a tick line with the guest CS:IP and the stop dump reached the log',
+         any(l.startswith('VBM98: tick: CS:IP=') for l in loglines) and any('stopped after 150' in l for l in loglines)),
     )
     ok = True
     for name, c in checks:

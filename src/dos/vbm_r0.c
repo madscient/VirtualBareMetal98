@@ -82,7 +82,8 @@ u8 kbd_pending;                 /* ゲストがまだ読んでいないスキャ
 u8 kbd_code;
 u8 kbd_stop_alt, kbd_shot_alt;
 u8 dev_tick, guest_imr0;
-u32 dev_shot_at[2], dev_menu_at;
+u32 dev_shot_at[2], dev_menu_at, dev_log_every;
+static u32 log_count;           /* 心拍までの刻みの数え上げ */
 static u8 dev_shot_i;           /* 次に使う dev_shot_at の添字 */
 u8 vid_pal[4];
 u8 vid_color16, vid_anapal[16 * 3];
@@ -181,6 +182,10 @@ u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
             if (dev_menu_at && irq_count >= dev_menu_at) {
                 dev_menu_at = 0;
                 return X_HOTKEY_MENU;
+            }
+            if (dev_log_every && ++log_count >= dev_log_every) {
+                log_count = 0;
+                return X_LOGTICK;
             }
             return 0;
         }

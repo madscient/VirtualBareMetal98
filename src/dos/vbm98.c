@@ -27,6 +27,7 @@
 #include "ui.h"
 #include "menu.h"
 #include "optval.h"
+#include "log.h"
 
 #define GUEST_KB        640
 #define DRIVES          2
@@ -58,10 +59,10 @@ static int check_v86(void)
     if (vec67)
         int86(0x67, &r, &r);
     if (!vec67 || r.h.ah != 0) {
-        printf("VBM98: running under a V86 monitor without VCPI. Boot without the EMM driver\n");
+        say("VBM98: running under a V86 monitor without VCPI. Boot without the EMM driver\n");
         return 1;
     }
-    printf("VBM98: running under a V86 monitor (VCPI %u.%u)\n", r.h.bh, r.h.bl);
+    say("VBM98: running under a V86 monitor (VCPI %u.%u)\n", r.h.bh, r.h.bl);
     v86 = 1;
     return 0;
 }
@@ -78,6 +79,8 @@ struct opts {
     const char *iotrap;             /* -iotrap の値: 一覧 ('=' を含む) か定義ファイル名。後のものが有効 */
     const char *sbrom;              /* -sbrom のファイル名 (0 なら無し) */
     u32 sbrom_lin;                  /* サウンド BIOS を置く線形番地 (C8000h か CC000h) */
+    const char *log;                /* -log のファイル名 (0 なら無し) */
+    u16 log_sec;                    /* -log の心拍の間隔 (秒)。0 なら心拍なし */
 };
 
 /*
@@ -246,8 +249,20 @@ static int parse_args(int argc, char **argv, struct opts *o)
                 p = *end == ',' ? end + 1 : end;
             }
             i++;
+        } else if (eq(a, "-log") && v) {
+            /* <ファイル名>[,<秒>]。秒があれば、その間隔でゲストの様子をログに書く心拍を入れる (-tick を使う) */
+            char *end;
+
+            o->log = v;
+            for (end = (char *)v; *end && *end != ','; end++)
+                ;
+            if (*end == ',') {
+                *end = 0;
+                o->log_sec = (u16)atol(end + 1);
+            }
+            i++;
         } else {
-            printf("VBM98: bad argument: %s\n", a);
+            say("VBM98: bad argument: %s\n", a);
             return 1;
         }
     }
@@ -268,17 +283,17 @@ static int iotrap_setup(const char *v)
 
     if (strchr(v, '=')) {
         if (optval_iotrap_list(v, iotrap_guest, iotrap_host, &iotrap_n, IOTRAP_MAX)) {
-            printf("VBM98: bad -iotrap list: %s\n", v);
+            say("VBM98: bad -iotrap list: %s\n", v);
             return 1;
         }
         return 0;
     }
     if (_dos_open(v, 0, &handle) != 0) {
-        printf("VBM98: cannot open the -iotrap file: %s\n", v);
+        say("VBM98: cannot open the -iotrap file: %s\n", v);
         return 1;
     }
     if (_dos_read(handle, (void __far *)iotrap_buf, sizeof iotrap_buf - 1, &got) != 0 || got >= sizeof iotrap_buf - 1) {
-        printf("VBM98: cannot read the -iotrap file (or it is larger than %u bytes): %s\n", (unsigned)(sizeof iotrap_buf - 2), v);
+        say("VBM98: cannot read the -iotrap file (or it is larger than %u bytes): %s\n", (unsigned)(sizeof iotrap_buf - 2), v);
         _dos_close(handle);
         return 1;
     }
@@ -291,7 +306,7 @@ static int iotrap_setup(const char *v)
             *p++ = 0;
         lineno++;
         if (optval_iotrap_line(line, iotrap_guest, iotrap_host, &iotrap_n, IOTRAP_MAX)) {
-            printf("VBM98: bad -iotrap line %d in %s: %s\n", lineno, v, line);
+            say("VBM98: bad -iotrap line %d in %s: %s\n", lineno, v, line);
             return 1;
         }
     }
@@ -367,7 +382,7 @@ int vm_mount(int unit, const char *path, int quiet)
 
     if (dosio_open(&f, path, 1, &size) && dosio_open(&f, path, 0, &size)) {
         if (!quiet)
-            printf("VBM98: cannot open %s\n", path);
+            say("VBM98: cannot open %s\n", path);
         return 1;
     }
     vm_eject(unit);
@@ -376,7 +391,7 @@ int vm_mount(int unit, const char *path, int quiet)
     rc = dimg_mount(&imgs[unit], &ios[unit], size);
     if (rc) {
         if (!quiet)
-            printf("VBM98: %s: not a supported disk image (%d)\n", path, rc);
+            say("VBM98: %s: not a supported disk image (%d)\n", path, rc);
         dosio_close(&files[unit]);
         return 1;
     }
@@ -384,7 +399,7 @@ int vm_mount(int unit, const char *path, int quiet)
     strncpy(drive_name[unit], path, sizeof drive_name[unit] - 1);
     drive_name[unit][sizeof drive_name[unit] - 1] = 0;
     if (!quiet)
-        printf("VBM98: drive %d: %s (%s, %u cylinders%s)\n", unit, path,
+        say("VBM98: drive %d: %s (%s, %u cylinders%s)\n", unit, path,
                imgs[unit].fmt == DIMG_FMT_RAW ? "RAW" : imgs[unit].fmt == DIMG_FMT_FDI ? "FDI" :
                imgs[unit].fmt == DIMG_FMT_NFD0 ? "NFD r0" : imgs[unit].fmt == DIMG_FMT_NFD1 ? "NFD r1" : "FDD",
                imgs[unit].cyls, imgs[unit].readonly ? ", write protected" : "");
@@ -456,7 +471,7 @@ static void service_int1b(struct mon_guest *g)
     else
         g->eflags &= ~1UL;
     if (trace)
-        printf("1B %02X%02X C%u H%u R%u N%u BX=%04X %04X:%04X -> %02X%s\n", in.ah, in.al, in.cl, in.dh, in.dl, in.ch,
+        say("1B %02X%02X C%u H%u R%u N%u BX=%04X %04X:%04X -> %02X%s\n", in.ah, in.al, in.cl, in.dh, in.dl, in.ch,
                in.bx, in.es, in.bp, out.ah, out.ah >= 0x20 ? " *" : "");
 }
 
@@ -530,10 +545,10 @@ static void print_memsw(const char *label, const u8 __far *base)
     u8 i;
 
     read_memsw(base, sw);
-    printf("VBM98: %s memsw 1-8:", label);
+    say("VBM98: %s memsw 1-8:", label);
     for (i = 0; i < 8; i++)
-        printf(" %02X", sw[i]);
-    printf("\n");
+        say(" %02X", sw[i]);
+    say("\n");
 }
 
 /* ---------------------------------------------------------------- 表示系 */
@@ -712,11 +727,11 @@ static int sbrom_setup(const char *path, u32 lin)
     u16 npages, i;
 
     if (dosio_open(&f, path, 0, &size)) {
-        printf("VBM98: cannot open the sound BIOS file: %s\n", path);
+        say("VBM98: cannot open the sound BIOS file: %s\n", path);
         return 1;
     }
     if (size == 0 || size > 0x8000UL) {
-        printf("VBM98: -sbrom: %s is %lu bytes; 1 to 32768 expected\n", path, (unsigned long)size);
+        say("VBM98: -sbrom: %s is %lu bytes; 1 to 32768 expected\n", path, (unsigned long)size);
         dosio_close(&f);
         return 1;
     }
@@ -725,7 +740,7 @@ static int sbrom_setup(const char *path, u32 lin)
     dosio_bind(&io, &f);
     io.xfill(io.ctx, 0, 0xFF, (u16)(npages << 12));
     if (io.xread(io.ctx, 0, 0, (u16)size)) {
-        printf("VBM98: cannot read the sound BIOS file: %s\n", path);
+        say("VBM98: cannot read the sound BIOS file: %s\n", path);
         dosio_close(&f);
         return 1;
     }
@@ -737,7 +752,7 @@ static int sbrom_setup(const char *path, u32 lin)
         _fmemcpy(page_ptr(phys + ((u32)i << 12)), MK_FP((u16)(xfer_seg() + (i << 8)), 0), 0x1000);
         monmem_map(lin + ((u32)i << 12), phys + ((u32)i << 12));
     }
-    printf("VBM98: sound BIOS %s at %05lX (%u KB)\n", path, (unsigned long)lin, (unsigned)(size >> 10));
+    say("VBM98: sound BIOS %s at %05lX (%u KB)\n", path, (unsigned long)lin, (unsigned)(size >> 10));
     return 0;
 }
 
@@ -771,7 +786,7 @@ static int guest_memory(int first)
     if (xms_move(0, xms_far(mon_data_seg(), (u16)(unsigned)ivtbuf), 0, xms_far(0, 0), HOOK_VEC_MAX * 4))
         return 1;
     if (first)
-        printf("VBM98: vectors into host RAM, redirected:");
+        say("VBM98: vectors into host RAM, redirected:");
     for (i = 0; i < HOOK_VEC_MAX; i++) {
         const u8 *e = ivtbuf + i * 4;
 
@@ -785,11 +800,11 @@ static int guest_memory(int first)
         g_write((u32)i * 4, mon_data_seg(), (u16)(unsigned)ent, 4);
         if (first) {
             mon_hook_add(HOOK_PAGE_LIN + off, HOOK_VEC);
-            printf(" %02X", i);
+            say(" %02X", i);
         }
     }
     if (first)
-        printf("\n");
+        say("\n");
     return 0;
 }
 
@@ -805,11 +820,11 @@ static int setup_guest(u32 tables)
     u16 i;
 
     if (xms_init()) {
-        printf("VBM98: no XMS driver\n");
+        say("VBM98: no XMS driver\n");
         return 1;
     }
     if (xms_alloc(GUEST_KB + 4, &xms_handle) || xms_lock(xms_handle, &lock)) {
-        printf("VBM98: cannot allocate %u KB of extended memory\n", GUEST_KB + 4);
+        say("VBM98: cannot allocate %u KB of extended memory\n", GUEST_KB + 4);
         return 1;
     }
     phys = (lock + 0xFFF) & ~0xFFFUL;
@@ -847,7 +862,7 @@ static int setup_guest(u32 tables)
     mon_init(&pg);
     /* EMM の下では、ホスト向けの 0 番ページ表の先頭 1MB をサーバに埋めさせ、切替を VCPI 経由にする (mon.h) */
     if (v86 && mon_vcpi_setup(pg.pde0_host & ~0xFFFUL)) {
-        printf("VBM98: VCPI setup (AX=DE01h) failed\n");
+        say("VBM98: VCPI setup (AX=DE01h) failed\n");
         return 1;
     }
     mon_hook_add(HOOK_PAGE_LIN, HOOK_INT1B);
@@ -870,7 +885,7 @@ static int load_ipl(struct mon_guest *g)
     u8 n;
 
     if (dimg_get_track(&imgs[0], 0, 0, &t) || !t->nsect) {
-        printf("VBM98: drive 0 has no track 0\n");
+        say("VBM98: drive 0 has no track 0\n");
         return 1;
     }
     n = t->sect[0].n;
@@ -890,7 +905,7 @@ static int load_ipl(struct mon_guest *g)
     in.es = seg;
     fdb_call(&fb, &in, &out);
     if (out.ah != 0 || out.xfer != bytes) {
-        printf("VBM98: cannot read the IPL (status %02X)\n", out.ah);
+        say("VBM98: cannot read the IPL (status %02X)\n", out.ah);
         return 1;
     }
     g_write(lin(seg, 0), xfer_seg(), 0, bytes);
@@ -908,11 +923,11 @@ static void print_hits(void)
 {
     u16 v;
 
-    printf("VBM98: redirected vector hits:");
+    say("VBM98: redirected vector hits:");
     for (v = 0; v < HOOK_VEC_MAX; v++)
         if (vec_hits[v])
-            printf(" %02X=%u", v, vec_hits[v]);
-    printf("\n");
+            say(" %02X=%u", v, vec_hits[v]);
+    say("\n");
 }
 
 /* ---------------------------------------------------------------- メニューからの再開 */
@@ -1006,7 +1021,7 @@ static void reset_vm(struct mon_guest *g, const char *why, int *running, int *co
 {
     int r;
 
-    printf("VBM98: reset (%s)\n", why);
+    say("VBM98: reset (%s)\n", why);
     r = vm_reset(g);
     if (r) {
         *running = 0;
@@ -1069,66 +1084,94 @@ static u8 pic_read(u8 cmd_port, u8 ocw3)
 }
 
 /* 開発用: 止めたときのゲストの様子 */
+static const char *const ev_kinds[] = { "irq", "int", "wake", "stub", "fault" };
+
+/*
+ * -log の心拍 (design.md §19): ゲストの位置と割り込みの回数、前回の心拍からのイベント (evlog。あふれたら最新の
+ * EVLOG_SIZE 件) をログだけに書く。ゲストの画面には出さない。ハングしたとき、最後の心拍までの様子が残る
+ */
+static u16 log_ev_seen;
+
+static void log_heartbeat(const struct mon_guest *g)
+{
+    u16 n, i;
+
+    log_line("VBM98: tick: CS:IP=%04X:%04X SS:SP=%04X:%04X AX=%04X FL=%04X IMR=%02X %02X irq 08=%u 09=%u 0A=%u 14=%u\n",
+             g->cs, g->ip, g->ss, (u16)g->esp, (u16)g->eax, (u16)g->eflags, guest_imr_m, guest_imr_s,
+             irq_hits[0], irq_hits[1], irq_hits[2], irq_hits[12]);
+    n = (u16)(evlog_n - log_ev_seen);
+    if (n > EVLOG_SIZE)
+        n = EVLOG_SIZE;
+    for (i = 0; i < n; i++) {
+        const struct evlog *e = &evlog[(evlog_n - n + i) % EVLOG_SIZE];
+
+        log_line("%s%02X %s %04X:%04X ax=%04X", (i % 4) ? " | " : "\n  ", e->vec, ev_kinds[e->kind], e->cs, e->ip, e->ax);
+    }
+    if (n)
+        log_line("\n");
+    log_ev_seen = evlog_n;
+}
+
 static void dump_guest(const struct mon_guest *g)
 {
-    static const char *const kinds[] = { "irq", "int", "wake", "stub", "fault" };
+    const char *const *kinds = ev_kinds;
     u8 code[16];
     u16 i, n;
 
-    printf("VBM98: guest CS:IP=%04X:%04X SS:SP=%04X:%04X DS=%04X ES=%04X FL=%04X IMR=%02X %02X\n",
+    say("VBM98: guest CS:IP=%04X:%04X SS:SP=%04X:%04X DS=%04X ES=%04X FL=%04X IMR=%02X %02X\n",
            g->cs, g->ip, g->ss, (u16)g->esp, g->ds, g->es, (u16)g->eflags, guest_imr_m, guest_imr_s);
-    printf("VBM98: AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X BP=%04X\n",
+    say("VBM98: AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X BP=%04X\n",
            (u16)g->eax, (u16)g->ebx, (u16)g->ecx, (u16)g->edx, (u16)g->esi, (u16)g->edi, (u16)g->ebp);
     g_read(lin(g->cs, g->ip), mon_data_seg(), (u16)(unsigned)code, 16);
-    printf("VBM98: code at CS:IP:");
+    say("VBM98: code at CS:IP:");
     for (i = 0; i < 16; i++)
-        printf(" %02X", code[i]);
-    printf("\nVBM98: guest IVT 08-0F:");
+        say(" %02X", code[i]);
+    say("\nVBM98: guest IVT 08-0F:");
     for (i = 0x08; i <= 0x0F; i++) {
         g_read((u32)i * 4, mon_data_seg(), (u16)(unsigned)code, 4);
-        printf(" %02X%02X:%02X%02X", code[3], code[2], code[1], code[0]);
+        say(" %02X%02X:%02X%02X", code[3], code[2], code[1], code[0]);
     }
-    printf("\nVBM98: guest IVT 10-17:");
+    say("\nVBM98: guest IVT 10-17:");
     for (i = 0x10; i <= 0x17; i++) {
         g_read((u32)i * 4, mon_data_seg(), (u16)(unsigned)code, 4);
-        printf(" %02X%02X:%02X%02X", code[3], code[2], code[1], code[0]);
+        say(" %02X%02X:%02X%02X", code[3], code[2], code[1], code[0]);
     }
     for (n = 0; n < npeek; n++) {
         g_read(peek_lin[n], mon_data_seg(), (u16)(unsigned)code, 16);
-        printf("\nVBM98: guest %05lX:", (unsigned long)peek_lin[n]);
+        say("\nVBM98: guest %05lX:", (unsigned long)peek_lin[n]);
         for (i = 0; i < 16; i++)
-            printf(" %02X", code[i]);
+            say(" %02X", code[i]);
     }
-    printf("\nVBM98: hardware interrupts seen (08-17):");
+    say("\nVBM98: hardware interrupts seen (08-17):");
     for (i = 0; i < 16; i++)
         if (irq_hits[i])
-            printf(" %02X=%u", i + 8, irq_hits[i]);
-    printf("\nVBM98: PIC master IRR=%02X ISR=%02X, slave IRR=%02X ISR=%02X; GDC status 60=%02X A0=%02X",
+            say(" %02X=%u", i + 8, irq_hits[i]);
+    say("\nVBM98: PIC master IRR=%02X ISR=%02X, slave IRR=%02X ISR=%02X; GDC status 60=%02X A0=%02X",
            pic_read(0x00, 0x0A), pic_read(0x00, 0x0B), pic_read(0x08, 0x0A), pic_read(0x08, 0x0B),
            pio_in8(0x60), pio_in8(0xA0));
-    printf("\nVBM98: guest IMR at each return to host (m s @seq), %u returns:", imrlog_n);
+    say("\nVBM98: guest IMR at each return to host (m s @seq), %u returns:", imrlog_n);
     n = imrlog_n < IMRLOG_SIZE ? imrlog_n : IMRLOG_SIZE;
     for (i = 0; i < n; i++)
-        printf(" %02X%02X@%u", imrlog[i].m, imrlog[i].s, imrlog[i].seq);
-    printf("\nVBM98: last events (vec kind cs:ip), oldest first:");
+        say(" %02X%02X@%u", imrlog[i].m, imrlog[i].s, imrlog[i].seq);
+    say("\nVBM98: last events (vec kind cs:ip), oldest first:");
     n = evlog_n < EVLOG_SIZE ? evlog_n : EVLOG_SIZE;
     for (i = 0; i < n; i++) {
         const struct evlog *e = &evlog[(evlog_n - n + i) % EVLOG_SIZE];
 
-        printf("%s %02X %s %04X:%04X ax=%04X", (i % 3) ? " |" : "\n ", e->vec, kinds[e->kind], e->cs, e->ip, e->ax);
+        say("%s %02X %s %04X:%04X ax=%04X", (i % 3) ? " |" : "\n ", e->vec, kinds[e->kind], e->cs, e->ip, e->ax);
     }
     if (ntrace_ports) {
-        printf("\nVBM98: trapped I/O: %u total, last %u (oldest first):", iolog_n,
+        say("\nVBM98: trapped I/O: %u total, last %u (oldest first):", iolog_n,
                iolog_n < IOLOG_SIZE ? iolog_n : IOLOG_SIZE);
         n = iolog_n < IOLOG_SIZE ? iolog_n : IOLOG_SIZE;
         for (i = 0; i < n; i++) {
             const struct iolog *e = &iolog[(iolog_n - n + i) % IOLOG_SIZE];
 
-            printf("%s %s %02X=%0*X @%u/%u", (i % 5) ? " |" : "\n ", e->dir == 0 ? "in " : e->dir == 1 ? "out" : "rb ",
+            say("%s %s %02X=%0*X @%u/%u", (i % 5) ? " |" : "\n ", e->dir == 0 ? "in " : e->dir == 1 ? "out" : "rb ",
                    e->port, e->size * 2, e->val, e->tick, e->seq);
         }
     }
-    printf("\n");
+    say("\n");
 }
 
 /* 世界の切替で入れ替えるハードウェアの状態。いまは割り込みマスクだけ */
@@ -1167,6 +1210,17 @@ int main(int argc, char **argv)
     setvbuf(stdout, 0, _IONBF, 0);
     if (parse_args(argc, argv, &o))
         return 2;
+    if (o.log) {
+        if (log_open(o.log)) {
+            say("VBM98: cannot open the log file: %s\n", o.log);
+            return 2;
+        }
+        say("VBM98: log: %s\n", o.log);
+        if (o.log_sec) {
+            dev_tick = 1;
+            dev_log_every = (u32)o.log_sec * 100;
+        }
+    }
     if (check_v86())
         return 1;
     v30_on = (u8)o.v30;
@@ -1190,7 +1244,7 @@ int main(int argc, char **argv)
         if (o.fdd[i] && vm_mount(i, o.fdd[i], 0))
             return 1;
     if (xfer_alloc()) {
-        printf("VBM98: cannot allocate the transfer buffer\n");
+        say("VBM98: cannot allocate the transfer buffer\n");
         return 1;
     }
     tables = alloc_pages(MONMEM_TABLE_PAGES);
@@ -1227,7 +1281,7 @@ int main(int argc, char **argv)
     for (i = 0; i < iotrap_n; i++)
         mon_trap_port(iotrap_guest[i], 1);
     if (iotrap_n)
-        printf("VBM98: -iotrap: %u port(s) remapped\n", iotrap_n);
+        say("VBM98: -iotrap: %u port(s) remapped\n", iotrap_n);
 
     /* ゲストの割り込みマスクの初期値は、電源投入後の BIOS が残す値に近いホストの現在値 */
     host_imr_m = pio_in8(PIC_M_IMR);
@@ -1236,14 +1290,14 @@ int main(int argc, char **argv)
     guest_imr_s = o.have_imr ? o.imr[1] : host_imr_s;
     init_imr_m = guest_imr_m;
     init_imr_s = guest_imr_s;
-    printf("VBM98: booting from drive 0 (host IMR %02X %02X, guest IMR %02X %02X; IRR %02X %02X ISR %02X %02X)\n",
+    say("VBM98: booting from drive 0 (host IMR %02X %02X, guest IMR %02X %02X; IRR %02X %02X ISR %02X %02X)\n",
            host_imr_m, host_imr_s, guest_imr_m, guest_imr_s,
            pic_read(0x00, 0x0A), pic_read(0x08, 0x0A), pic_read(0x00, 0x0B), pic_read(0x08, 0x0B));
     print_memsw("host", MK_FP(TVRAM_SEG, MEMSW_OFF - 2));
     /* 31h は SW2 そのもの。33h の bit 3 と 42h の bit 4・3・1 だけが SW1-1、SW1-3、SW1-8、SW3-8 (vbm_r0.c) */
-    printf("VBM98: host dipsw ports 31h 33h 42h: %02X %02X %02X\n", pio_in8(0x31), pio_in8(0x33), pio_in8(0x42));
+    say("VBM98: host dipsw ports 31h 33h 42h: %02X %02X %02X\n", pio_in8(0x31), pio_in8(0x33), pio_in8(0x42));
     if (dip_on)
-        printf("VBM98: guest dipsw SW1-3: %02X %02X %02X\n", dip_sw[0], dip_sw[1], dip_sw[2]);
+        say("VBM98: guest dipsw SW1-3: %02X %02X %02X\n", dip_sw[0], dip_sw[1], dip_sw[2]);
     if (dev_tick) {
         /* 8253 のカウンタ 0 を約 10ms (2.4576MHz / 6000h) の矩形波にし、IRQ0 をモニタの時計にする */
         mon_trap_port(PIC_M_IMR, 1);
@@ -1293,7 +1347,7 @@ int main(int argc, char **argv)
         case MON_HALT:
             /* アプリが自分で止まった (spec.md): メニューで終了かリセットを選ばせる。戻ってもまた同じ HLT で止まる */
             if (trace)
-                printf("VBM98: guest halted with interrupts disabled at %04X:%04X\n", g.cs, g.ip);
+                say("VBM98: guest halted with interrupts disabled at %04X:%04X\n", g.cs, g.ip);
             mrc = menu_main();
             if (mrc == MENU_EXIT)
                 running = 0;
@@ -1307,13 +1361,13 @@ int main(int argc, char **argv)
             reset_vm(&g, "hotkey", &running, &code);
             break;
         case X_FAULT:
-            printf("VBM98: guest raised an unexpected exception at %04X:%04X\n", g.cs, g.ip);
+            say("VBM98: guest raised an unexpected exception at %04X:%04X\n", g.cs, g.ip);
             dump_guest(&g);
             running = 0;
             code = 1;
             break;
         case X_STOP:
-            printf("VBM98: stopped after %lu hardware interrupts\n", (unsigned long)stop_after_irqs);
+            say("VBM98: stopped after %lu hardware interrupts\n", (unsigned long)stop_after_irqs);
             dump_guest(&g);
             running = 0;
             break;
@@ -1342,14 +1396,17 @@ int main(int argc, char **argv)
             break;
         case X_HOTKEY_SHOT:
             if (vm_shot(0))
-                printf("VBM98: screenshot failed\n");
+                say("VBM98: screenshot failed\n");
+            break;
+        case X_LOGTICK:
+            log_heartbeat(&g);
             break;
         case X_KBD_DONE:
             kbd_done(&g);
             break;
         default:
             mon_panic_get(&pn);
-            printf("VBM98: exception %02X inside the monitor at %04X:%08lX (code %04X)\n",
+            say("VBM98: exception %02X inside the monitor at %04X:%08lX (code %04X)\n",
                    pn.vec, pn.cs, (unsigned long)pn.eip, rc);
             running = 0;
             code = 1;
@@ -1367,6 +1424,7 @@ int main(int argc, char **argv)
             dosio_close(&files[i]);
     xfer_free();
     print_hits();
-    printf("VBM98: back to DOS\n");
+    say("VBM98: back to DOS\n");
+    log_close();
     return code;
 }

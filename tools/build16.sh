@@ -98,6 +98,7 @@ cc src/dos/shot.c "$strict"
 python3 "$root/tools/mktext.py" "$root/src/dos/ui_text.txt" "$out/ui_text.h"
 cc src/dos/ui.c "$strict"
 cc src/dos/menu.c "$strict"
+cc src/dos/log.c "$strict"
 cc src/dos/vbm98.c "$strict"
 link VBM98.EXE
 
