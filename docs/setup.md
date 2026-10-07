@@ -64,7 +64,7 @@ sh tools/build16.sh
 | --- | --- | --- |
 | `python tests/run_host_tests.py` | ディスクイメージ層（ホスト OS 上） | gcc、Python |
 | `sh tools/build16.sh` | DOS 向けのビルド | gcc-ia16 |
-| `python tests/run_dos_tests.py` | ディスクイメージ層（16 ビット）、モニタ核、本体の起動、スクリーンショット、VM メニュー、EMM386 の下での起動を DOS 上で | 上のビルド結果、DOSBox か NP21/W |
+| `python tests/run_dos_tests.py` | ディスクイメージ層と INT 1Bh の意味論（16 ビット）、モニタ核、本体の起動、スクリーンショット、VM メニュー、EMM386 の下での起動を DOS 上で | 上のビルド結果、DOSBox か NP21/W |
 
 `run_dos_tests.py` の実行環境は環境変数で選ぶ（`tests/dosenv.py`）。EMM386 の下での試験（`v86`）は、複製した
 起動イメージの中の FDCONFIG.SYS を同じ長さで書き換えて HIMEMX と EMM386 を読み込ませる（利用者の一式には書かない。

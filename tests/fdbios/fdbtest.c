@@ -1,5 +1,5 @@
 /*
- * fdbios (INT 1Bh の意味論) の試験。ホスト OS 上で動かす。
+ * fdbios (INT 1Bh の意味論) の試験。ホスト OS 上と DOS 上 (int が 16 ビット) の両方で動かす。
  *   fdbtest <raw_2hd> <raw_640> <nfd0_ro> <nfd1_prot> <vfdd_fill>
  * 引数は tools/mkimg.py が作る同名のイメージ。書き込みの試験で中身を変える。
  * 出力は 1 項目 1 行の "ok <名前>" / "FAIL <名前>" と、最終行の "END <失敗数> <項目数>"。
@@ -11,11 +11,37 @@
 
 #define XFER_SIZE 0x10000UL
 #define NIMG 5
+#define CHUNK 1024
 enum { RAW_2HD, RAW_640, NFD0_RO, NFD1_PROT, VFDD_FILL };
 
+/*
+ * 転送バッファ (xfer) と期待値 (want) は 64KB ずつ。DOS (gcc-ia16、small モデル) ではデータセグメントに入らないので
+ * 別のセグメントに置いて far ポインタで触る。far ポインタをループ内で添字付きで読み書きする形は gcc-ia16 6.3 が
+ * 内部エラーを起こすことがあるので、CHUNK ごとに近いバッファへ写してから見る (ホスト OS 上も同じ経路を通す)
+ */
+#ifdef __ia16__
+#include <dos.h>
+#include <i86.h>
+#include <libi86/string.h>
+#include "dosio.h"
+typedef u8 __far *bufp;
+#define BUF_COPY(d, s, n) _fmemcpy(d, s, n)
+#define BUF_SET(d, v, n)  _fmemset(d, v, n)
+#define XFER_AT(off)      ((bufp)MK_FP(xfer_seg(), (u16)(off)))
+#define WANT_AT(off)      ((bufp)MK_FP(want_seg, (u16)(off)))
+static unsigned want_seg;
+static dos_file dfiles[NIMG];
+#else
+typedef u8 *bufp;
+#define BUF_COPY(d, s, n) memcpy(d, s, n)
+#define BUF_SET(d, v, n)  memset(d, v, n)
+#define XFER_AT(off)      (xfer + (off))
+#define WANT_AT(off)      (want + (off))
 static u8 xfer[XFER_SIZE];
 static u8 want[XFER_SIZE];
 static FILE *files[NIMG];
+#endif
+static u8 tmp[CHUNK], tmp2[CHUNK];
 static dimg imgs[NIMG];
 static dimg_io ios[NIMG];
 static struct fdb fb;
@@ -23,6 +49,43 @@ static struct fdb_in in;
 static struct fdb_out out;
 static u16 test_es = 0x2000;
 static u16 checks, failures;
+
+#ifdef __ia16__
+
+/* DOS: 入出力は本体と同じ dosio (xread などは dosio の転送バッファ = XFER_AT を使う) */
+static int open_image(int i, const char *path)
+{
+    u32 size;
+
+    if (dosio_open(&dfiles[i], path, 1, &size))
+        return 1;
+    dosio_bind(&ios[i], &dfiles[i]);
+    return dimg_mount(&imgs[i], &ios[i], size) != 0;
+}
+
+static void close_image(int i)
+{
+    dosio_close(&dfiles[i]);
+}
+
+/* ファイルの off から len バイトを want の at へ読む */
+static int want_read(int i, u32 off, u32 at, u16 len)
+{
+    union REGS r;
+    unsigned got;
+
+    r.h.ah = 0x42;
+    r.h.al = 0;
+    r.x.bx = (unsigned)dfiles[i].handle;
+    r.x.cx = (unsigned)(off >> 16);
+    r.x.dx = (unsigned)off;
+    intdos(&r, &r);
+    if (r.x.cflag)
+        return 1;
+    return _dos_read(dfiles[i].handle, WANT_AT(at), len, &got) != 0 || got != len;
+}
+
+#else
 
 static int f_read(void *ctx, u32 off, void *buf, u16 len)
 {
@@ -75,6 +138,18 @@ static int open_image(int i, const char *path)
     return dimg_mount(&imgs[i], &ios[i], (u32)size) != 0;
 }
 
+static void close_image(int i)
+{
+    fclose(files[i]);
+}
+
+static int want_read(int i, u32 off, u32 at, u16 len)
+{
+    return f_read(files[i], off, want + at, len);
+}
+
+#endif
+
 static void check(const char *name, int ok)
 {
     printf("%s %s\n", ok ? "ok  " : "FAIL", name);
@@ -116,9 +191,9 @@ static u32 sector_want(int i, u8 cyl, u8 head, u8 r, u8 copy, u32 at)
         return 0;
     size = dimg_sect_size(s->n);
     if (s->flags & DIMG_SF_FILL)
-        memset(want + at, s->fill, size);
+        BUF_SET(WANT_AT(at), s->fill, (u16)size);
     else
-        f_read(files[i], s->off + size * copy, want + at, (u16)size);
+        want_read(i, s->off + size * copy, at, (u16)size);
     return size;
 }
 
@@ -131,25 +206,58 @@ static u32 diag_want(int i, u8 cyl, u8 head, u8 cmd, u8 copy, u32 at)
         return 0;
     for (k = 0; k < t->ndiag; k++)
         if (t->diag[k].cmd == cmd) {
-            f_read(files[i], t->diag[k].off + t->diag[k].len * copy, want + at, (u16)t->diag[k].len);
+            want_read(i, t->diag[k].off + t->diag[k].len * copy, at, (u16)t->diag[k].len);
             return t->diag[k].len;
         }
     return 0;
 }
 
-static int same(u32 len)
+static u16 chunk(u32 len, u32 done)
 {
-    return memcmp(xfer, want, len) == 0;
+    return (u16)(len - done > CHUNK ? CHUNK : len - done);
 }
 
+/* xfer と want の先頭 len バイトが同じか */
+static int same(u32 len)
+{
+    u32 done;
+    u16 n;
+
+    for (done = 0; done < len; done += n) {
+        n = chunk(len, done);
+        BUF_COPY(tmp, XFER_AT(done), n);
+        BUF_COPY(tmp2, WANT_AT(done), n);
+        if (memcmp(tmp, tmp2, n) != 0)
+            return 0;
+    }
+    return 1;
+}
+
+/* xfer の from から len バイトがすべて val か */
 static int all(u32 from, u32 len, u8 val)
 {
-    u32 k;
+    u32 done;
+    u16 n, k;
 
-    for (k = 0; k < len; k++)
-        if (xfer[from + k] != val)
-            return 0;
+    for (done = 0; done < len; done += n) {
+        n = chunk(len, done);
+        BUF_COPY(tmp, XFER_AT(from + done), n);
+        for (k = 0; k < n; k++)
+            if (tmp[k] != val)
+                return 0;
+    }
     return 1;
+}
+
+/* xfer と want の先頭 1024 バイトを同じパターンで埋める */
+static void fill_both(u8 mul, u8 add)
+{
+    u16 k;
+
+    for (k = 0; k < CHUNK; k++)
+        tmp[k] = (u8)((unsigned)k * mul + add);    /* unsigned で回す (int が 16 ビットでも定義どおりに巻く) */
+    BUF_COPY(XFER_AT(0), tmp, CHUNK);
+    BUF_COPY(WANT_AT(0), tmp, CHUNK);
 }
 
 static int wa_has(u16 addr, u8 val, u8 mask)
@@ -224,11 +332,10 @@ static void test_raw(void)
     check("verify ten sectors across heads: ok, nothing transferred", st == 0 && out.xfer == 0);
     check("verify a missing sector: C0h", call(0x51, 0x90, 3, 0, 30, 3, 1024) == FDB_ST_NODATA);
 
-    for (n = 0; n < 1024; n++)
-        xfer[n] = want[n] = (u8)(n * 7 + 3);
+    fill_both(7, 3);
     st = call(0x55, 0x90, 2, 0, 3, 3, 1024);
     check("write one sector", st == 0 && out.xfer == 1024);
-    memset(xfer, 0, 1024);
+    BUF_SET(XFER_AT(0), 0, 1024);
     st = call(0x56, 0x90, 2, 0, 3, 3, 1024);
     check("read back the written sector", st == 0 && same(1024));
 
@@ -335,11 +442,10 @@ static void test_vfdd(void)
     st = (u8)(st | call(0x46, 0x94, 0x30, 1, 1, 3, 1024));
     check("that ID is reachable with its own C/H and the head flipped by AL bit 2", st == 0 && same(n));
 
-    for (n = 0; n < 1024; n++)
-        xfer[n] = want[n] = (u8)(0xC3 - n);
+    fill_both((u8)-1, 0xC3);    /* 0C3h - k を k * 255 + 0C3h (mod 256) で作る */
     st = call(0x55, 0x90, 0, 0, 2, 3, 1024);
     check("write to a fill sector", st == 0);
-    memset(xfer, 0, 1024);
+    BUF_SET(XFER_AT(0), 0, 1024);
     st = call(0x56, 0x90, 0, 0, 2, 3, 1024);
     check("read back the sector that was a fill byte", st == 0 && same(1024));
 }
@@ -352,6 +458,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: fdbtest <raw_2hd> <raw_640> <nfd0_ro> <nfd1_prot> <vfdd_fill>\n");
         return 1;
     }
+#ifdef __ia16__
+    if (xfer_alloc() || _dos_allocmem(0x1000, &want_seg) != 0) {
+        printf("FAIL allocate the 64KB buffers\nEND 1 1\n");
+        return 1;
+    }
+#endif
     for (i = 0; i < NIMG; i++) {
         if (open_image(i, argv[i + 1])) {
             printf("FAIL open %s\nEND 1 1\n", argv[i + 1]);
@@ -367,7 +479,7 @@ int main(int argc, char **argv)
     test_nfd1();
     test_vfdd();
     for (i = 0; i < NIMG; i++)
-        fclose(files[i]);
+        close_image(i);
     printf("END %u %u\n", failures, checks);
     return failures != 0;
 }

@@ -4,6 +4,7 @@
     python tests/run_dos_tests.py [img] [mon] [boot]
 
     img   ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
+    fdb   INT 1Bh の意味論 (fdbios)。同上
     mon   モニタ核。保護モード・仮想86モード・ページングの動作
     boot  本体 (VBM98.EXE)。試験用の IPL を起動し、INT 1Bh の読み書きが届くか。PC-98 の環境でだけ走る
     shot  スクリーンショット。試験用の IPL が書いた文字と色の帯が、-shotat で撮った PNG に写るか。同上
@@ -30,6 +31,34 @@ def test_img(work):
     if not finished:
         print('バッチが最後まで走っていない')
     return imgtests.evaluate(work, steps) == 0 and finished
+
+
+# fdbtest が引数に取るイメージ (tools/mkimg.py のケース名) と、DOS 側での 8.3 形式の名前
+FDB_IMAGES = (('raw_2hd.hdm', 'FDB1.IMG'), ('raw_640.img', 'FDB2.IMG'), ('nfd0_ro.nfd', 'FDB3.IMG'),
+              ('nfd1_prot.nfd', 'FDB4.IMG'), ('vfdd_fill.fdd', 'FDB5.IMG'))
+
+
+def test_fdb(work):
+    """INT 1Bh の意味論 (fdbios) を int が 16 ビットの環境で。ホスト OS 上の tests/fdbios/fdbtest.c と同じ試験"""
+    import mkimg
+    cases = {c.name: c for c in mkimg.build_cases()}
+    for name, dosname in FDB_IMAGES:
+        with open(os.path.join(work, dosname), 'wb') as f:
+            f.write(cases[name].blob)
+    out = os.path.join(work, 'FDB.OUT')
+    if os.path.exists(out):
+        os.remove(out)
+    finished = dosenv.run_batch(['FDBTEST.EXE %s > FDB.OUT' % ' '.join(d for _, d in FDB_IMAGES)], 300)
+    lines = imgtests.read_lines(work, 'FDB.OUT') or []
+    for line in lines:
+        if line.startswith('FAIL') or line.startswith('END'):
+            print('  ' + line)
+    if not finished:
+        print('バッチが最後まで走っていない')
+    end = lines[-1].split() if lines else []
+    ok = finished and len(end) == 3 and end[0] == 'END' and end[1] == '0' and int(end[2]) > 0
+    print('INT 1Bh (DOS): %s' % ('通過' if ok else '失敗'))
+    return ok
 
 
 def test_mon(work):
@@ -323,7 +352,7 @@ def test_v86(work):
     return ok
 
 
-TESTS = (('img', 'IMGDUMP.EXE', test_img), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
+TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
          ('shot', 'VBM98.EXE', test_shot), ('menu', 'VBM98.EXE', test_menu), ('v86', 'VBM98.EXE', test_v86))
 
 

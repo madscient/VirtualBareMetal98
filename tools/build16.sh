@@ -57,6 +57,12 @@ cc tests/imgdump/imgdump.c "$loose"
 cc tests/imgdump/plat_dos.c "$loose"
 link IMGDUMP.EXE
 
+cc src/core/dimg.c "$strict"
+cc src/core/fdbios.c "$strict"
+cc src/dos/dosio.c "$strict"
+cc tests/fdbios/fdbtest.c "$loose"
+link FDBTEST.EXE
+
 cc src/mon/mon.c "$strict"
 cc src/mon/monmem.c "$strict"
 cc_r0 src/mon/mon_r0.c
