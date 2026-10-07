@@ -29,6 +29,7 @@
 #define UI_SC_2        0x02
 #define UI_SC_3        0x03
 #define UI_SC_4        0x04
+#define UI_SC_5        0x05
 #define UI_SC_TAB      0x0F
 #define UI_SC_RETURN   0x1C
 #define UI_SC_Y        0x15

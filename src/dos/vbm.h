@@ -27,12 +27,13 @@
 #define X_FAULT  3
 #define X_STOP   4   /* 開発用: 指定した数のハードウェア割り込みを数えたので止めた */
 /* ホットキー (spec.md)。CTRL+GRPH と同時に押されたキーで、ゲストには渡さない */
-#define X_HOTKEY_STOP 5   /* STOP: 終了 */
-#define X_HOTKEY_MENU 6   /* DEL: VM メニュー */
-#define X_HOTKEY_FDD0 7   /* テンキー 0: ドライブ 0 のイメージ交換 */
-#define X_HOTKEY_FDD1 8   /* テンキー 1: ドライブ 1 のイメージ交換 */
-#define X_HOTKEY_SHOT 9   /* COPY: スクリーンショット */
-#define X_KBD_DONE    10  /* ホストが注入したキー割り込みのハンドラが戻った (HOOK_KBD)。ホストが次を注入するか再開する */
+#define X_HOTKEY_STOP  5   /* STOP: 終了 */
+#define X_HOTKEY_MENU  6   /* HELP: VM メニュー */
+#define X_HOTKEY_FDD0  7   /* テンキー 0: ドライブ 0 のイメージ交換 */
+#define X_HOTKEY_FDD1  8   /* テンキー 1: ドライブ 1 のイメージ交換 */
+#define X_HOTKEY_SHOT  9   /* COPY: スクリーンショット */
+#define X_KBD_DONE     10  /* ホストが注入したキー割り込みのハンドラが戻った (HOOK_KBD)。ホストが次を注入するか再開する */
+#define X_HOTKEY_RESET 11  /* DEL: リセット (実機の CTRL+GRPH+DEL と同じ組み合わせ) */
 
 /*
  * ゲストが書いた表示系の写し (ring 0 側が持つ。スクリーンショットの色のため):
@@ -48,6 +49,13 @@ extern u8 kbd_shot_alt;
  * dip_sw (SW1・SW2・SW3。bit n-1 が SW n、1 = OFF) から作った値を返す。ホストのスイッチは読むだけ
  */
 extern u8 dip_on, dip_sw[3];
+/*
+ * -iotrap (design.md §15)。ゲストのポート iotrap_guest[i] への I/O を、ホストのポート iotrap_host[i] に
+ * 読み替える。表は ring 0 側が持ち、ホスト側が起動時に埋めてそのポートをトラップする
+ */
+#define IOTRAP_MAX 64
+extern u16 iotrap_guest[IOTRAP_MAX], iotrap_host[IOTRAP_MAX];
+extern u8 iotrap_n;
 
 /* 横取り印で受けたベクタの回数 (ring 0 側が数える) */
 extern u16 vec_hits[HOOK_VEC_MAX];

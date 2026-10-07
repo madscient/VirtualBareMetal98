@@ -41,7 +41,8 @@ def build(core=None):
     fdbtest = compile_(core, [os.path.join(core, 'fdbios.c'), os.path.join(ROOT, 'tests', 'fdbios', 'fdbtest.c')], 'fdbtest')
     pngtest = compile_(core, [os.path.join(core, 'png.c'), os.path.join(ROOT, 'tests', 'png', 'pngtest.c')], 'pngtest')
     jistest = compile_(core, [os.path.join(core, 'jis.c'), os.path.join(ROOT, 'tests', 'jis', 'jistest.c')], 'jistest')
-    return imgdump, fdbtest, pngtest, jistest
+    optvaltest = compile_(core, [os.path.join(core, 'optval.c'), os.path.join(ROOT, 'tests', 'optval', 'optvaltest.c')], 'optvaltest')
+    return imgdump, fdbtest, pngtest, jistest, optvaltest
 
 
 def run_simple(exe, label):
@@ -114,7 +115,7 @@ def run_png(pngtest):
 
 def run(exes, verbose=True):
     """失敗数を返す。ディスクイメージ層の試験のあと、同じイメージで INT 1Bh の意味論を試験し、PNG の書き出しを試験する"""
-    imgdump, fdbtest, pngtest, jistest = exes
+    imgdump, fdbtest, pngtest, jistest, optvaltest = exes
     work = os.path.join(BUILD, 'fixtures')
     steps = imgtests.prepare(work)
     imgtests.exec_host(imgdump, work, steps)
@@ -134,6 +135,7 @@ def run(exes, verbose=True):
     print('INT 1Bh: %s' % ('通過' if ok else '失敗'))
     failed += run_png(pngtest)
     failed += run_simple(jistest, 'Shift-JIS')
+    failed += run_simple(optvaltest, 'コマンドラインの値')
     return failed
 
 

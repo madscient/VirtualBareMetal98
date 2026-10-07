@@ -49,8 +49,18 @@ def test_mon(work):
     return ok
 
 
+def host_bytes(lines, label):
+    """VBM98 が出した 'VBM98: <label>: xx xx ..' の行の 16 進バイト列。なければ None"""
+    for line in lines:
+        if line.startswith('VBM98: ' + label + ':'):
+            return bytes(int(h, 16) for h in line.split(':', 2)[2].split())
+    return None
+
+
 def test_boot(work):
-    """IPL が起動し、INT 1Bh の読み書きがイメージに届き、HLT で DOS に戻ることを見る"""
+    """IPL が起動し、INT 1Bh の読み書きがイメージに届き、HLT で DOS に戻ることを見る。あわせて、-dipsw / -memsw
+    ('*' の桁はホストの値)、-iotrap (定義ファイル)、-sbrom がゲストから見えること、IPL が起こすリセットと
+    メニューからのリセットで IPL が読み直されて RAM が残ることを見る"""
     if dosenv.name() != 'np21w':
         print('起動: この環境は PC-98 ではないので走らせない (本体が INT 18h と PC-98 の I/O ポートを使う)')
         return True
@@ -65,19 +75,32 @@ def test_boot(work):
     img[1024:2048] = pattern
     with open(os.path.join(work, 'B.IMG'), 'wb') as f:
         f.write(img)
+    # -iotrap の定義ファイル (CRLF、空行あり): ゲストの 0F31h を 31h (DIP SW2) に読み替える
+    with open(os.path.join(work, 'I.TXT'), 'wb') as f:
+        f.write(b'F31 31\r\n\r\n')
+    # サウンド BIOS の代わりの 16KB (中身は番地から決まるパターン)
+    sb = bytes(((i * 7 + 3) ^ (i >> 8)) & 0xFF for i in range(16384))
+    with open(os.path.join(work, 'S.ROM'), 'wb') as f:
+        f.write(sb)
     out = os.path.join(work, 'BOOT.OUT')
     if os.path.exists(out):
         os.remove(out)
-    # 割り込み禁止の HLT で VM メニューが開くので、開発用のキー列で「4. 終了」→ Y を押したことにする。
+    # IPL は 1 回目にリセットを起こし、2 回目で割り込み禁止の HLT に至る。そこで開く VM メニューを開発用のキー列で
+    # 「5. リセット」→ Y (3 回目の実行) → HLT → 「4. 終了」→ Y と操作する。
     # -dipsw は NP21/W の既定 (3E 73 7B) と、見ているビット全部で違う値にする。SW2-3 を OFF (20 行) にし、
-    # SW2-4 は ON のまま (80 桁。40 桁だとメニューの表示が崩れる)
-    finished = dosenv.run_batch(['VBM98.EXE -fdd0 B.IMG -trace -menukeys 04,15 -dipsw C1F4FB > BOOT.OUT'], 180, core='normal')
+    # SW2-4 は ON のまま (80 桁。40 桁だとメニューの表示が崩れる)。SW1 の下位 4 桁は '*' (ホストの値: SW1-1 と SW1-3)
+    # -memsw は SW4 だけ 08h、他は '*'。コマンド行は DOS の 126 文字の制限に収める
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 B.IMG -trace -menukeys 05,15,04,15 -dipsw 0*F4FB -memsw ******08******** '
+                                 '-iotrap I.TXT -sbrom S.ROM > BOOT.OUT'], 180, core='normal')
     lines = imgtests.read_lines(work, 'BOOT.OUT') or []
     for line in lines:
         print('  ' + line)
     with open(os.path.join(work, 'B.IMG'), 'rb') as f:
         rec = f.read()[2048:3072]
     want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 1024, 2)) & 0xFFFF
+    hdip = host_bytes(lines, 'host dipsw ports 31h 33h 42h') or b'\0\0\0'
+    hmsw = host_bytes(lines, 'host memsw 1-8') or b'\0' * 8
+    h33, h42 = hdip[1], hdip[2]
     checks = (
         ('batch finished', finished),
         ('guest halted and VBM98 returned to DOS', any('halted' in l for l in lines) and any('back to DOS' in l for l in lines)),
@@ -87,13 +110,20 @@ def test_boot(work):
         ('sector 2 contents arrived in the guest', int.from_bytes(rec[0x30A:0x30C], 'little') == want_sum),
         ('result bytes in the work area: ST0=00, next R=3', rec[0x30C] == 0 and rec[0x311] == 3),
         ('port 31h returns the guest SW2 (F4h)', rec[0x315] == 0xF4),
-        ('port 33h bit 3 follows SW1-1 (OFF -> 0)', (rec[0x316] & 0x08) == 0),
-        ('port 42h bits 4/3/1 follow SW1-3 ON, SW1-8 OFF, SW3-8 OFF', (rec[0x317] & 0x1A) == 0x0A),
+        ('port 33h bit 3 follows SW1-1, which is "*" (the host value)', (rec[0x316] & 0x08) == (h33 & 0x08)),
+        ('port 42h bits 4/3/1: SW1-3 from the host ("*"), SW1-8 ON, SW3-8 OFF', (rec[0x317] & 0x1A) == ((h42 & 0x10) | 0x02)),
         ('work area 0480h: SW3-8 OFF -> V30 (00h)', rec[0x318] == 0x00),
         ('work area 0501h bit 6: SW3-8 OFF -> 1', (rec[0x319] & 0x40) == 0x40),
         ('work area 053Ch: 20 rows (SW2-3 OFF) and 80 columns (SW2-4 ON)', (rec[0x31A] & 0x03) == 0x02),
-        ('work area 054Ch bits 6/0: SW1-1 OFF, SW1-8 OFF -> 0', (rec[0x31B] & 0x41) == 0),
+        ('work area 054Ch bits 6/0: SW1-1 from the host ("*"), SW1-8 ON -> 1', (rec[0x31B] & 0x41) == ((0x40 if h33 & 0x08 else 0) | 0x01)),
         ('work area 054Dh bit 5: SW2-8 OFF -> 0', (rec[0x31C] & 0x20) == 0),
+        ('host DIP switch values were printed (needed for the "*" checks)', hdip != b'\0\0\0' and hmsw != b'\0' * 8),
+        ('memsw: SW4 = 08h, the "*" switches show the host values', rec[0x31E:0x326] == hmsw[:3] + b'\x08' + hmsw[4:]),
+        ('-iotrap: port 0F31h is read as 31h (guest SW2 F4h)', rec[0x326] == 0xF4),
+        ('-sbrom: the ROM file is visible at CC00:0000, 0001, 3FFF, 2000', rec[0x327:0x32B] == bytes((sb[0], sb[1], sb[0x3FFF], sb[0x2000]))),
+        ('IPL ran again after the reset it caused, with its RAM marker intact', rec[0x31D] == 1),
+        ('VBM98 reported the reset from the guest and the one from the menu',
+         any('reset (guest)' in l for l in lines) and any('reset (menu)' in l for l in lines)),
     )
     ok = True
     for name, c in checks:

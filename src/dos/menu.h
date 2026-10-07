@@ -8,8 +8,9 @@
 
 #define MENU_RESUME 0
 #define MENU_EXIT   1
+#define MENU_RESET  2
 
-/* CTRL+GRPH+DEL と、ゲストが割り込み禁止で HLT したとき。終了が選ばれたら MENU_EXIT */
+/* CTRL+GRPH+HELP と、ゲストが割り込み禁止で HLT したとき。終了が選ばれたら MENU_EXIT、リセットなら MENU_RESET */
 int menu_main(void);
 /* CTRL+GRPH+テンキー 0 / 1: ドライブ unit のイメージ選択だけ */
 void menu_disk(int unit);

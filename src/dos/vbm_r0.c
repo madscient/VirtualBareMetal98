@@ -72,6 +72,7 @@ static void pop_iret(struct mon_vframe *f)
 #define SC_GRPH   0x73
 #define SC_STOP   0x60
 #define SC_DEL    0x39
+#define SC_HELP   0x3F
 #define SC_PAD0   0x4E
 #define SC_PAD1   0x4A
 #define SC_COPY   0x61
@@ -87,6 +88,19 @@ u8 vid_pal[4];
 u8 vid_color16, vid_anapal[16 * 3];
 static u8 vid_anaidx;           /* アナログパレットで次に書かれる番号 (A8h) */
 u8 dip_on, dip_sw[3];
+u16 iotrap_guest[IOTRAP_MAX], iotrap_host[IOTRAP_MAX];
+u8 iotrap_n;
+
+/* -iotrap: ゲストのポート番号をホストのポート番号に読み替える。表にないものはそのまま */
+static u16 iotrap_map(u16 port)
+{
+    u8 i;
+
+    for (i = 0; i < iotrap_n; i++)
+        if (iotrap_guest[i] == port)
+            return iotrap_host[i];
+    return port;
+}
 
 /*
  * DIP スイッチの読み出しポートの代行 (design.md §15。ビットの割り当ては参考実装から)。
@@ -123,7 +137,8 @@ static u16 kbd_irq(void)
     else if (kbd_ctrl && kbd_grph && !(sc & SC_BREAK))
         x = (key == SC_STOP || (kbd_stop_alt && key == kbd_stop_alt)) ? X_HOTKEY_STOP :
             (key == SC_COPY || (kbd_shot_alt && key == kbd_shot_alt)) ? X_HOTKEY_SHOT :
-            key == SC_DEL ? X_HOTKEY_MENU : key == SC_PAD0 ? X_HOTKEY_FDD0 : key == SC_PAD1 ? X_HOTKEY_FDD1 : 0;
+            key == SC_DEL ? X_HOTKEY_RESET : key == SC_HELP ? X_HOTKEY_MENU :
+            key == SC_PAD0 ? X_HOTKEY_FDD0 : key == SC_PAD1 ? X_HOTKEY_FDD1 : 0;
     if (x) {
         eoi(IRQ_FIRST + 1);
         return x;
@@ -191,19 +206,23 @@ u16 mon_on_fault(u8 vec, u32 err, struct mon_vframe *f, struct mon_gregs *r)
 }
 
 /*
- * トラップしているポートはキーボード (41h/43h) とトレース用 (-traceio)。キーボード以外は記録して
- * 実機へそのまま通す。32 ビットの I/O は下位 16 ビットだけ通す (32 ビットのシフトは ring 0 の C で書けない)
+ * トラップしているポートはキーボード (41h/43h)、表示系の写し、DIP スイッチ、-iotrap の読み替え元、
+ * トレース用 (-traceio)。読み替え (iotrap_map) を先に通し、あとの処理は読み替えた先のポートで行う。
+ * 記録に残すのはゲストが指したポート。32 ビットの I/O は下位 16 ビットだけ通す (32 ビットのシフトは
+ * ring 0 の C で書けない)
  */
 u16 mon_on_in(u16 port, u8 size, u32 *val)
 {
     u16 v;
+    u16 gport = port;
 
+    port = iotrap_map(port);
     if (port == KBD_DATA && size == 1) {
         /* 割り込みで読み取り済みのスキャンコードを渡す。なければ実機の値 */
         v = kbd_pending ? kbd_code : mon_in8(KBD_DATA);
         kbd_pending = 0;
         *val = v;
-        log_io(0, port, size, v);
+        log_io(0, gport, size, v);
         return 0;
     }
     v = mon_in8(port);
@@ -216,7 +235,7 @@ u16 mon_on_in(u16 port, u8 size, u32 *val)
     if (size >= 2)
         v |= (u16)(mon_in8((u16)(port + 1)) << 8);
     *val = v;
-    log_io(0, port, size, v);
+    log_io(0, gport, size, v);
     return 0;
 }
 
@@ -225,6 +244,7 @@ u16 mon_on_out(u16 port, u8 size, u32 val)
     u16 v = (u16)val;
 
     log_io(1, port, size, v);
+    port = iotrap_map(port);
     /*
      * 表示系の写し (スクリーンショットで色を当てるため。書き込みは実機へも通す)。6Ah は 00h/01h が 16 色
      * モードの切替。A8h〜AEh は 8 色モードではデジタルパレットのレジスタ、16 色モードでは A8h が番号、

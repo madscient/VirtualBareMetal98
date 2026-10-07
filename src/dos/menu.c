@@ -184,13 +184,14 @@ int menu_debug;
 static void draw_main(void)
 {
     ui_fill(0, 0, UI_COLS, UI_ROWS, UI_WHITE);
-    ui_box(6, 18, 44, 11, UI_CYAN);
+    ui_box(6, 18, 44, 12, UI_CYAN);
     ui_puts(7, 21, UI_YELLOW, T_MENU_TITLE);
     ui_puts(9, 22, UI_WHITE, T_MENU_FDD0);
     ui_puts(10, 22, UI_WHITE, T_MENU_FDD1);
     ui_puts(11, 22, UI_WHITE, T_MENU_SHOT);
     ui_puts(12, 22, UI_WHITE, T_MENU_EXIT);
-    ui_puts(14, 21, UI_CYAN, T_MENU_HELP);
+    ui_puts(13, 22, UI_WHITE, T_MENU_RESET);
+    ui_puts(15, 21, UI_CYAN, T_MENU_HELP);
     if (menu_debug) {
         ui_debug_dump(6, 30);
         ui_debug_dump(7, 30);
@@ -198,13 +199,14 @@ static void draw_main(void)
     }
 }
 
-static int confirm_exit(void)
+/* Y / N の問い合わせ。Y なら 1 */
+static int confirm(const char *question)
 {
     u16 k;
     u8 sc, ch;
 
     ui_fill(18, 0, UI_COLS, 1, UI_WHITE);
-    ui_puts(18, 2, UI_YELLOW, T_CONFIRM_EXIT);
+    ui_puts(18, 2, UI_YELLOW, question);
     for (;;) {
         k = ui_getkey();
         sc = UI_KEY_SC(k);
@@ -255,8 +257,11 @@ int menu_main(void)
             disk_select(1);
         else if (sc == UI_SC_3 || ch == '3')
             do_shot();
-        else if ((sc == UI_SC_4 || ch == '4') && confirm_exit()) {
+        else if ((sc == UI_SC_4 || ch == '4') && confirm(T_CONFIRM_EXIT)) {
             rc = MENU_EXIT;
+            break;
+        } else if ((sc == UI_SC_5 || ch == '5') && confirm(T_CONFIRM_RESET)) {
+            rc = MENU_RESET;
             break;
         }
     }
@@ -278,7 +283,7 @@ int menu_confirm_exit(void)
 
     ui_open();
     ui_flush_keys();
-    r = confirm_exit();
+    r = confirm(T_CONFIRM_EXIT);
     ui_close();
     return r;
 }

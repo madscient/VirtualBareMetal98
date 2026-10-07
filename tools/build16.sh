@@ -81,6 +81,7 @@ cc src/mon/monasm.S ""
 cc_r0 src/dos/vbm_r0.c
 cc src/core/png.c "$strict"
 cc src/core/jis.c "$strict"
+cc src/core/optval.c "$strict"
 cc src/dos/shot.c "$strict"
 # UI の文言 (UTF-8) を Shift-JIS のヘッダにする。生成物は $out に置き、-I $out で見つける
 python3 "$root/tools/mktext.py" "$root/src/dos/ui_text.txt" "$out/ui_text.h"

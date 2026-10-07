@@ -2,12 +2,13 @@
  * VBM98: 仮想 PC-98 モニタの本体。
  *
  * いまできること: イメージをドライブに入れ、その IPL をゲスト専用メモリの上で起動し、ゲストの INT 1Bh に
- * fdbios で応える。ホットキーで VM メニュー・ディスク交換・スクリーンショット・終了。-memsw と -dipsw は
- * ゲストにだけ作用する (ホストのスイッチは読むだけ)。ゲストが割り込み禁止のまま HLT したら VM メニューを
- * 開き、リセットするか想定外の例外を起こしたら MS-DOS に戻る。
+ * fdbios で応える。ホットキーで VM メニュー・ディスク交換・スクリーンショット・リセット・終了。-memsw と
+ * -dipsw はゲストにだけ作用する (ホストのスイッチは読むだけ)。-iotrap でポート番号を読み替え、-sbrom で
+ * サウンド BIOS の ROM を見せる。ゲストが割り込み禁止のまま HLT したら VM メニューを開き、リセット (ゲスト、
+ * ホットキー、メニュー) はイメージから再起動し、想定外の例外を起こしたら MS-DOS に戻る。
  *
  * まだないもの: -v30 の反映、ホストの RAM を指すベクタの ROM エントリ探し (いまは「何もせずに戻る」印へ
- * 差し替える)、PC-9801VM 相当の機種判別フラグ、リセットからの再起動。コンソール (printf) の文言は ASCII。
+ * 差し替える)、PC-9801VM 相当の機種判別フラグ。コンソール (printf) の文言は ASCII。
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +24,7 @@
 #include "shot.h"
 #include "ui.h"
 #include "menu.h"
+#include "optval.h"
 
 #define GUEST_KB        640
 #define DRIVES          2
@@ -43,6 +45,10 @@ struct opts {
     int have_imr;               /* 開発用: ゲストの割り込みマスクの初期値を指定する */
     const char *ss;             /* スクリーンショットのファイル名の先頭 (spec.md)。0 なら fdd0 の名前から */
     u8 dipsw[3], memsw[8], imr[2];
+    u8 dipsw_hm[3], memsw_hm[8];    /* '*' の桁 (ホストの値を映す) のニブルの印 (optval.h) */
+    const char *iotrap;             /* -iotrap の値: 一覧 ('=' を含む) か定義ファイル名。後のものが有効 */
+    const char *sbrom;              /* -sbrom のファイル名 (0 なら無し) */
+    u32 sbrom_lin;                  /* サウンド BIOS を置く線形番地 (C8000h か CC000h) */
 };
 
 /*
@@ -123,6 +129,28 @@ static int hexbytes(const char *s, u8 *out, int n)
     return s[n * 2] != 0;
 }
 
+/* -sbrom <ファイル名>[,C8|CC]。アドレスは C8000h か CC000h (省略時)。ファイル名はコンマの前まで */
+static char sbrom_name[80];
+
+static int parse_sbrom(const char *v, struct opts *o)
+{
+    const char *c = strchr(v, ',');
+    size_t len = c ? (size_t)(c - v) : strlen(v);
+
+    if (len == 0 || len >= sizeof sbrom_name)
+        return 1;
+    memcpy(sbrom_name, v, len);
+    sbrom_name[len] = 0;
+    if (!c || eq(c + 1, "cc"))
+        o->sbrom_lin = 0xCC000UL;
+    else if (eq(c + 1, "c8"))
+        o->sbrom_lin = 0xC8000UL;
+    else
+        return 1;
+    o->sbrom = sbrom_name;
+    return 0;
+}
+
 static int parse_args(int argc, char **argv, struct opts *o)
 {
     int i;
@@ -139,11 +167,16 @@ static int parse_args(int argc, char **argv, struct opts *o)
         } else if (eq(a, "-v30") && v && (eq(v, "on") || eq(v, "off"))) {
             o->v30 = eq(v, "on");
             i++;
-        } else if (eq(a, "-dipsw") && v && !hexbytes(v, o->dipsw, 3)) {
+        } else if (eq(a, "-dipsw") && v && !optval_hexmask(v, o->dipsw, o->dipsw_hm, 3)) {
             o->have_dipsw = 1;
             i++;
-        } else if (eq(a, "-memsw") && v && !hexbytes(v, o->memsw, 8)) {
+        } else if (eq(a, "-memsw") && v && !optval_hexmask(v, o->memsw, o->memsw_hm, 8)) {
             o->have_memsw = 1;
+            i++;
+        } else if (eq(a, "-iotrap") && v) {
+            o->iotrap = v;
+            i++;
+        } else if (eq(a, "-sbrom") && v && !parse_sbrom(v, o)) {
             i++;
         } else if (eq(a, "-trace")) {
             o->trace = 1;
@@ -205,6 +238,40 @@ static int parse_args(int argc, char **argv, struct opts *o)
             return 1;
         }
     }
+    return 0;
+}
+
+/*
+ * -iotrap: "<guest>=<host>,..." の一覧か、1 行に "<guest> <host>" を並べた定義ファイル (spec.md)。
+ * '=' を含めば一覧、含まなければファイル名とみなす。表は ring 0 側 (vbm.h) に直接入れる
+ */
+static int iotrap_setup(const char *v)
+{
+    FILE *f;
+    char line[80];
+    int lineno = 0;
+
+    if (strchr(v, '=')) {
+        if (optval_iotrap_list(v, iotrap_guest, iotrap_host, &iotrap_n, IOTRAP_MAX)) {
+            printf("VBM98: bad -iotrap list: %s\n", v);
+            return 1;
+        }
+        return 0;
+    }
+    f = fopen(v, "r");
+    if (!f) {
+        printf("VBM98: cannot open the -iotrap file: %s\n", v);
+        return 1;
+    }
+    while (fgets(line, sizeof line, f)) {
+        lineno++;
+        if (optval_iotrap_line(line, iotrap_guest, iotrap_host, &iotrap_n, IOTRAP_MAX)) {
+            printf("VBM98: bad -iotrap line %d in %s: %s\n", lineno, v, line);
+            fclose(f);
+            return 1;
+        }
+    }
+    fclose(f);
     return 0;
 }
 
@@ -356,15 +423,20 @@ static void service_int1b(struct mon_guest *g)
                in.bx, in.es, in.bp, out.ah, out.ah >= 0x20 ? " *" : "");
 }
 
-/* 起動時の画面はテキストが消えた状態にする。ホストの画面は控えておき、戻るときに元に戻す */
-static void screen_guest(void)
+/* ホストのテキスト画面を控える。戻るときに screen_host で元に戻す */
+static void screen_save(void)
+{
+    _fmemcpy(tvram_save, MK_FP(TVRAM_SEG, 0), TVRAM_BYTES);
+    _fmemcpy(tvram_save + TVRAM_BYTES, MK_FP(TVRAM_SEG, TVRAM_ATTR), TVRAM_BYTES);
+}
+
+/* 起動時とリセット時の画面はテキストが消えた状態にする (見えている範囲だけ) */
+static void screen_clear(void)
 {
     u8 __far *code = MK_FP(TVRAM_SEG, 0);
     u8 __far *attr = MK_FP(TVRAM_SEG, TVRAM_ATTR);
     u16 i;
 
-    _fmemcpy(tvram_save, code, TVRAM_BYTES);
-    _fmemcpy(tvram_save + TVRAM_BYTES, attr, TVRAM_BYTES);
     for (i = 0; i < TVRAM_SHOWN; i += 2) {
         code[i] = 0x20;
         code[i + 1] = 0x00;
@@ -388,6 +460,8 @@ static void screen_host(void)
 #define MEMSW_PAGE_LIN 0xA3000UL
 #define MEMSW_PAGE_SEG 0xA300
 static u32 mswpage;         /* ゲストに見せるメモリスイッチのページ (物理番地) */
+static u8 eff_memsw[8];     /* -memsw の値に '*' の桁のホストの値を合わせたもの。リセット時にも書く */
+static int have_memsw;
 
 static void memsw_guest(const u8 *sw)
 {
@@ -401,16 +475,27 @@ static void memsw_guest(const u8 *sw)
     _fmemcpy(base, buf, 32);
 }
 
-/* base (A3FE0h にあたる 32 バイト) からメモリスイッチ 1〜8 を表示する。-memsw の値を組むときの元にする */
-static void print_memsw(const char *label, const u8 __far *base)
+/* base (A3FE0h にあたる 32 バイト) からメモリスイッチ 1〜8 を読む */
+static void read_memsw(const u8 __far *base, u8 *sw)
 {
     u8 buf[32];
     u8 i;
 
     _fmemcpy(buf, base, 32);
+    for (i = 0; i < 8; i++)
+        sw[i] = buf[2 + i * 4];
+}
+
+/* メモリスイッチ 1〜8 を表示する。-memsw の値を組むときの元にする */
+static void print_memsw(const char *label, const u8 __far *base)
+{
+    u8 sw[8];
+    u8 i;
+
+    read_memsw(base, sw);
     printf("VBM98: %s memsw 1-8:", label);
     for (i = 0; i < 8; i++)
-        printf(" %02X", buf[2 + i * 4]);
+        printf(" %02X", sw[i]);
     printf("\n");
 }
 
@@ -450,6 +535,20 @@ static void dipsw_workarea(void)
         g_rmw8(WA_SYS_TYPE, 0x00, 0xFF);
 }
 
+/*
+ * ホストの DIP スイッチのうちポートから読める範囲を、-dipsw と同じ並び (bit n-1 = SW n、1 = OFF) に組む。
+ * '*' の桁に映す元。SW2 は 31h から全部読めるが、SW1 は 1・3・8、SW3 は 8 しか読めず、他のビットは 0 にする
+ * (ゲストが読める値と、ここから導くワークエリアの値には、読めるビットしか関わらない。design.md §15)
+ */
+static void host_dipsw(u8 *sw)
+{
+    u8 p33 = pio_in8(0x33), p42 = pio_in8(0x42);
+
+    sw[0] = (u8)(((p33 & 0x08) ? 0 : 0x01) | ((p42 & 0x10) ? 0x04 : 0) | ((p42 & 0x08) ? 0x80 : 0));
+    sw[1] = pio_in8(0x31);
+    sw[2] = (u8)((p42 & 0x02) ? 0x80 : 0);
+}
+
 static void int18(u8 ah, u8 al, u8 ch)
 {
     union REGS r;
@@ -468,13 +567,18 @@ static void int18(u8 ah, u8 al, u8 ch)
  *   (bios_screeninit)。-dipsw がなければ、ホストの BIOS が起動時に同じ式で決めた現在値の下位 2 ビットを使う。
  *   グラフィックは 640×200 (上)・カラー・ページ 0・表示 OFF・8 色、デジタルパレットは恒等、GRCG は OFF
  */
+/* ホストの表示状態を控える (一度だけ。リセット時の video_guest では控え直さない)。終了時に video_host が戻す */
+static void video_save(void)
+{
+    host_crt_mode = wa_peek(WA_CRT_MODE);
+    host_prxcrt = wa_peek(WA_PRXCRT);
+    host_prxdupd = wa_peek(WA_PRXDUPD);
+}
+
 static void video_guest(void)
 {
     u8 crt_lo;
 
-    host_crt_mode = wa_peek(WA_CRT_MODE);
-    host_prxcrt = wa_peek(WA_PRXCRT);
-    host_prxdupd = wa_peek(WA_PRXDUPD);
     if (dip_on)
         crt_lo = (u8)(((dip_sw[1] & 0x04) >> 1) | ((dip_sw[1] & 0x08) >> 3));
     else
@@ -553,20 +657,112 @@ static void video_host(void)
 
 /* ---------------------------------------------------------------- 起動 */
 
+static const char *sbrom_path;
+static u32 sbrom_lin;
+
 /*
- * ゲストの初期状態を作る。割り込みベクタ表と BIOS ワークエリアはホストのものを写し、
- * INT 1Bh のベクタを横取り印の HLT へ向ける。装備情報は FDD 2 台だけ、HDD なし。
+ * -sbrom: サウンド BIOS の ROM イメージをゲストの C8000h か CC000h に見せる (spec.md)。ファイルを転送バッファに
+ * 読み、ページに写して、ゲスト向けの写像を差し替える。大きさは 16KB が普通で、32KB まで受け付ける
+ * (4KB 単位に切り上げ、余りは FFh)。実物の同じ番地は、差し替えたページのぶんだけ見えなくなる
  */
-static int setup_guest(u32 tables)
+static int sbrom_setup(const char *path, u32 lin)
 {
-    u32 size, lock, phys, hookpage, rompage;
-    const u8 __far *rom;
-    u8 __far *p;
+    dos_file f;
+    dimg_io io;
+    u32 size, phys;
+    u16 npages, i;
+
+    if (dosio_open(&f, path, 0, &size)) {
+        printf("VBM98: cannot open the sound BIOS file: %s\n", path);
+        return 1;
+    }
+    if (size == 0 || size > 0x8000UL) {
+        printf("VBM98: -sbrom: %s is %lu bytes; 1 to 32768 expected\n", path, (unsigned long)size);
+        dosio_close(&f);
+        return 1;
+    }
+    npages = (u16)((size + 0xFFF) >> 12);
+    /* dosio_open は大きさを測るために末尾へシークしたままなので、位置を指して読む経路 (xread) を使う */
+    dosio_bind(&io, &f);
+    io.xfill(io.ctx, 0, 0xFF, (u16)(npages << 12));
+    if (io.xread(io.ctx, 0, 0, (u16)size)) {
+        printf("VBM98: cannot read the sound BIOS file: %s\n", path);
+        dosio_close(&f);
+        return 1;
+    }
+    dosio_close(&f);
+    phys = alloc_pages(npages);
+    if (!phys)
+        return 1;
+    for (i = 0; i < npages; i++) {
+        _fmemcpy(page_ptr(phys + ((u32)i << 12)), MK_FP((u16)(xfer_seg() + (i << 8)), 0), 0x1000);
+        monmem_map(lin + ((u32)i << 12), phys + ((u32)i << 12));
+    }
+    printf("VBM98: sound BIOS %s at %05lX (%u KB)\n", path, (unsigned long)lin, (unsigned)(size >> 10));
+    return 0;
+}
+
+/*
+ * ゲストのメモリの初期内容 (起動時とリセット時)。割り込みベクタ表と BIOS ワークエリアはホストのものを写し、
+ * INT 1Bh のベクタを横取り印の HLT へ向け、装備情報 (FDD 2 台だけ、HDD なし)・起動装置・DIP スイッチ由来の
+ * 値を直す。ホストの RAM を指すベクタの横取り印は first のときだけ登録する (リセットでは番地が同じ)。
+ * 残りの RAM には触らない (実機のリセットでも RAM は残る)
+ */
+static int guest_memory(int first)
+{
     u16 i, off;
     u8 vec[4] = { 0x00, 0x00, 0x00, 0xF7 };
     u8 ent[4];
     u8 equip[2] = { 0x03, 0x00 };
-    u8 dua = boot_dua();
+
+    if (xms_move(xms_handle, guest_off, 0, xms_far(0, 0), 0x600))
+        return 1;
+    g_write(0x1B * 4, mon_data_seg(), (u16)(unsigned)vec, 4);
+    g_write(FDB_WA_EQUIP, mon_data_seg(), (u16)(unsigned)equip, 2);
+    g_rmw8(WA_BOOT, boot_dua(), 0xFF);
+    if (dip_on)
+        dipsw_workarea();
+
+    /*
+     * ホストの RAM (MS-DOS や常駐物) を指すベクタは、ゲストのメモリには中身がない。
+     * 横取り印へ向け、来たら (ハードウェア割り込みなら EOI を出して) 何もせずに戻す
+     */
+    /* far ポインタでベクタ表を読む書き方は gcc-ia16 6.3 の内部エラーを起こしたので、XMS の転送で手元に写す */
+    if (xms_move(0, xms_far(mon_data_seg(), (u16)(unsigned)ivtbuf), 0, xms_far(0, 0), HOOK_VEC_MAX * 4))
+        return 1;
+    if (first)
+        printf("VBM98: vectors into host RAM, redirected:");
+    for (i = 0; i < HOOK_VEC_MAX; i++) {
+        const u8 *e = ivtbuf + i * 4;
+
+        if (i == 0x1B || lin((u16)(e[2] | (e[3] << 8)), (u16)(e[0] | (e[1] << 8))) >= RAM_TOP)
+            continue;
+        off = (u16)(HOOK_VEC_OFF + i * 4);
+        ent[0] = (u8)off;
+        ent[1] = (u8)(off >> 8);
+        ent[2] = (u8)HOOK_PAGE_SEG;
+        ent[3] = (u8)(HOOK_PAGE_SEG >> 8);
+        g_write((u32)i * 4, mon_data_seg(), (u16)(unsigned)ent, 4);
+        if (first) {
+            mon_hook_add(HOOK_PAGE_LIN + off, HOOK_VEC);
+            printf(" %02X", i);
+        }
+    }
+    if (first)
+        printf("\n");
+    return 0;
+}
+
+/*
+ * ゲストの器を作る (一度だけ): ゲスト用メモリの確保、横取り印とリセットベクタのページ、メモリスイッチの
+ * ページの写し、サウンド BIOS、ページ表、モニタの初期化。中身は guest_memory が入れる
+ */
+static int setup_guest(u32 tables)
+{
+    u32 lock, phys, hookpage, rompage;
+    const u8 __far *rom;
+    u8 __far *p;
+    u16 i;
 
     if (xms_init()) {
         printf("VBM98: no XMS driver\n");
@@ -606,44 +802,13 @@ static int setup_guest(u32 tables)
         return 1;
     _fmemcpy(page_ptr(mswpage), MK_FP(MEMSW_PAGE_SEG, 0), 0x1000);
     monmem_map(MEMSW_PAGE_LIN, mswpage);
+    if (sbrom_path && sbrom_setup(sbrom_path, sbrom_lin))
+        return 1;
     mon_init(&pg);
     mon_hook_add(HOOK_PAGE_LIN, HOOK_INT1B);
     mon_hook_add(RESET_LIN, HOOK_RESET);
     mon_hook_add(HOOK_PAGE_LIN + HOOK_KBD_OFF, HOOK_KBD);
-
-    size = 0x600;
-    if (xms_move(xms_handle, guest_off, 0, xms_far(0, 0), size))
-        return 1;
-    g_write(0x1B * 4, mon_data_seg(), (u16)(unsigned)vec, 4);
-    g_write(FDB_WA_EQUIP, mon_data_seg(), (u16)(unsigned)equip, 2);
-    g_rmw8(WA_BOOT, dua, 0xFF);
-    if (dip_on)
-        dipsw_workarea();
-
-    /*
-     * ホストの RAM (MS-DOS や常駐物) を指すベクタは、ゲストのメモリには中身がない。
-     * 横取り印へ向け、来たら (ハードウェア割り込みなら EOI を出して) 何もせずに戻す
-     */
-    /* far ポインタでベクタ表を読む書き方は gcc-ia16 6.3 の内部エラーを起こしたので、XMS の転送で手元に写す */
-    if (xms_move(0, xms_far(mon_data_seg(), (u16)(unsigned)ivtbuf), 0, xms_far(0, 0), HOOK_VEC_MAX * 4))
-        return 1;
-    printf("VBM98: vectors into host RAM, redirected:");
-    for (i = 0; i < HOOK_VEC_MAX; i++) {
-        const u8 *e = ivtbuf + i * 4;
-
-        if (i == 0x1B || lin((u16)(e[2] | (e[3] << 8)), (u16)(e[0] | (e[1] << 8))) >= RAM_TOP)
-            continue;
-        off = (u16)(HOOK_VEC_OFF + i * 4);
-        ent[0] = (u8)off;
-        ent[1] = (u8)(off >> 8);
-        ent[2] = (u8)HOOK_PAGE_SEG;
-        ent[3] = (u8)(HOOK_PAGE_SEG >> 8);
-        g_write((u32)i * 4, mon_data_seg(), (u16)(unsigned)ent, 4);
-        mon_hook_add(HOOK_PAGE_LIN + off, HOOK_VEC);
-        printf(" %02X", i);
-    }
-    printf("\n");
-    return 0;
+    return guest_memory(1);
 }
 
 /*
@@ -759,6 +924,50 @@ static void kbd_done(struct mon_guest *g)
     g->ip = resume_ip;
     if (inject_i < inject_n)
         inject_next(g);
+}
+
+/* ---------------------------------------------------------------- リセット */
+
+static u8 init_imr_m, init_imr_s;   /* ゲストの割り込みマスクの起動時の値 (リセットで戻す) */
+
+/*
+ * 仮想マシンをイメージから再起動する (ゲストが FFFF0h へ飛んだ、CTRL+GRPH+DEL、メニュー。design.md §10)。
+ * 表示系、ベクタ表とワークエリア、メモリスイッチの写し、キーボードの状態、割り込みマスクを起動時の状態に
+ * 戻し、IPL を読み直す。ゲストの RAM の残りは消さない (実機のリセットでも残る)。ドライブ 0 が空なら選ばせる。
+ * 0 で再開、1 で失敗、2 で取り消し
+ */
+static int vm_reset(struct mon_guest *g)
+{
+    video_guest();
+    _fmemcpy(page_ptr(mswpage), MK_FP(MEMSW_PAGE_SEG, 0), 0x1000);
+    if (have_memsw)
+        memsw_guest(eff_memsw);
+    if (guest_memory(0))
+        return 1;
+    screen_clear();
+    kbd_pending = 0;
+    inject_n = inject_i = 0;
+    guest_imr_m = init_imr_m;
+    guest_imr_s = init_imr_s;
+    if (dev_tick)
+        guest_imr0 = (u8)(guest_imr_m & 1);
+    if (!fb.img[0] && !menu_pick_boot())
+        return 2;
+    return load_ipl(g) ? 1 : 0;
+}
+
+/* リセットの入口の共通処理。why は表示用 (guest / hotkey / menu) */
+static void reset_vm(struct mon_guest *g, const char *why, int *running, int *code)
+{
+    int r;
+
+    printf("VBM98: reset (%s)\n", why);
+    r = vm_reset(g);
+    if (r) {
+        *running = 0;
+        if (r == 1)
+            *code = 1;
+    }
 }
 
 int vm_shot(char *gname)
@@ -879,7 +1088,7 @@ int main(int argc, char **argv)
     struct mon_panic pn;
     u32 tables;
     u16 rc;
-    int i, running = 1, code = 0;
+    int i, mrc, running = 1, code = 0;
 
     /* ゲストが止まらずに外から終了させられたときも、そこまでの表示が残るようにする */
     setvbuf(stdout, 0, _IONBF, 0);
@@ -888,9 +1097,17 @@ int main(int argc, char **argv)
     if (!o.v30)
         printf("VBM98: note: -v30 is accepted but not applied yet\n");
     if (o.have_dipsw) {
+        u8 hsw[3];
+
+        host_dipsw(hsw);
+        for (i = 0; i < 3; i++)
+            dip_sw[i] = optval_merge(o.dipsw[i], hsw[i], o.dipsw_hm[i]);
         dip_on = 1;
-        memcpy(dip_sw, o.dipsw, sizeof dip_sw);
     }
+    if (o.iotrap && iotrap_setup(o.iotrap))
+        return 2;
+    sbrom_path = o.sbrom;
+    sbrom_lin = o.sbrom_lin;
     trace = o.trace;
     menu_debug = o.trace;
 
@@ -906,6 +1123,7 @@ int main(int argc, char **argv)
     if (!tables)
         return 1;
     /* setup_guest が BIOS ワークエリアを写すので、その前に表示系を電源投入時の状態にしておく */
+    video_save();
     video_guest();
     if (setup_guest(tables)) {
         video_host();
@@ -928,12 +1146,19 @@ int main(int argc, char **argv)
         mon_trap_port(0x33, 1);
         mon_trap_port(0x42, 1);
     }
+    /* -iotrap の読み替え元。読み替え先は vbm_r0.c が決める */
+    for (i = 0; i < iotrap_n; i++)
+        mon_trap_port(iotrap_guest[i], 1);
+    if (iotrap_n)
+        printf("VBM98: -iotrap: %u port(s) remapped\n", iotrap_n);
 
     /* ゲストの割り込みマスクの初期値は、電源投入後の BIOS が残す値に近いホストの現在値 */
     host_imr_m = pio_in8(PIC_M_IMR);
     host_imr_s = pio_in8(PIC_S_IMR);
     guest_imr_m = o.have_imr ? o.imr[0] : host_imr_m;
     guest_imr_s = o.have_imr ? o.imr[1] : host_imr_s;
+    init_imr_m = guest_imr_m;
+    init_imr_s = guest_imr_s;
     printf("VBM98: booting from drive 0 (host IMR %02X %02X, guest IMR %02X %02X; IRR %02X %02X ISR %02X %02X)\n",
            host_imr_m, host_imr_s, guest_imr_m, guest_imr_s,
            pic_read(0x00, 0x0A), pic_read(0x08, 0x0A), pic_read(0x00, 0x0B), pic_read(0x08, 0x0B));
@@ -950,9 +1175,16 @@ int main(int argc, char **argv)
         pio_out8(0x71, 0x00);
         pio_out8(0x71, 0x60);
     }
-    screen_guest();
+    screen_save();
+    screen_clear();
     if (o.have_memsw) {
-        memsw_guest(o.memsw);
+        u8 host[8];
+
+        read_memsw(MK_FP(TVRAM_SEG, MEMSW_OFF - 2), host);
+        for (i = 0; i < 8; i++)
+            eff_memsw[i] = optval_merge(o.memsw[i], host[i], o.memsw_hm[i]);
+        have_memsw = 1;
+        memsw_guest(eff_memsw);
         print_memsw("guest", MK_FP((u16)(mswpage >> 4), 0xFE0));
     }
     /* -fdd0 がなければここで選ばせる (spec.md)。取り消したら起動せずに戻る */
@@ -982,15 +1214,20 @@ int main(int argc, char **argv)
             service_int1b(&g);
             break;
         case MON_HALT:
-            /* アプリが自分で止まった (spec.md): メニューで終了を選ばせる。戻ってもまた同じ HLT で止まる */
+            /* アプリが自分で止まった (spec.md): メニューで終了かリセットを選ばせる。戻ってもまた同じ HLT で止まる */
             if (trace)
                 printf("VBM98: guest halted with interrupts disabled at %04X:%04X\n", g.cs, g.ip);
-            if (menu_main() == MENU_EXIT)
+            mrc = menu_main();
+            if (mrc == MENU_EXIT)
                 running = 0;
+            else if (mrc == MENU_RESET)
+                reset_vm(&g, "menu", &running, &code);
             break;
         case X_RESET:
-            printf("VBM98: guest reset (restart is not implemented yet)\n");
-            running = 0;
+            reset_vm(&g, "guest", &running, &code);
+            break;
+        case X_HOTKEY_RESET:
+            reset_vm(&g, "hotkey", &running, &code);
             break;
         case X_FAULT:
             printf("VBM98: guest raised an unexpected exception at %04X:%04X\n", g.cs, g.ip);
@@ -1010,8 +1247,11 @@ int main(int argc, char **argv)
                 resume_keys(&g);
             break;
         case X_HOTKEY_MENU:
-            if (menu_main() == MENU_EXIT)
+            mrc = menu_main();
+            if (mrc == MENU_EXIT)
                 running = 0;
+            else if (mrc == MENU_RESET)
+                reset_vm(&g, "menu", &running, &code);
             else
                 resume_keys(&g);
             break;

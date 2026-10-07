@@ -6,6 +6,7 @@ T_MENU_FDD0	1. ドライブ 0 のディスク交換
 T_MENU_FDD1	2. ドライブ 1 のディスク交換
 T_MENU_SHOT	3. スクリーンショットの保存
 T_MENU_EXIT	4. 終了
+T_MENU_RESET	5. リセット
 T_MENU_HELP	番号を押す  ESC: ゲストに戻る
 T_SEL_TITLE	ドライブ %d に入れるイメージを選ぶ  (いま: %s)
 T_SEL_NONE	なし
@@ -21,4 +22,5 @@ T_MSG_MOUNT_FAIL	開けません、またはイメージの形式が分かりま
 T_MSG_SHOT_OK	保存しました: %s
 T_MSG_SHOT_FAIL	スクリーンショットを保存できませんでした
 T_CONFIRM_EXIT	仮想マシンを終了しますか？  Y: 終了  N: 戻る
+T_CONFIRM_RESET	仮想マシンをリセットしますか？  Y: リセット  N: 戻る
 T_MSG_ANYKEY	何かキーを押してください
