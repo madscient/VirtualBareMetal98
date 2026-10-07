@@ -348,6 +348,8 @@ NP21/W の FreeDOS(98) + HIMEMX + EMM386（NOEMS）で `run_dos_tests.py v86` �
   複製した起動イメージの FDCONFIG.SYS を同じ長さで書き換えて HIMEMX + EMM386（NOEMS）を読み込ませる（元の行は
   コメントアウトされた形で入っていた）。NP21/W で 6 項目が通り、ゲスト用メモリは XMS のまま使えた。DE0Ch の構造体の
   大きさを最初 20 バイトと書いたが、CS:EIP は PWORD（6 バイト）で 22 バイトが正しい（Ralf Brown の表）
+- 2026-10-07: この段階を v0.1.0 として GitHub でリリースした（タグ `v0.1.0`、添付は `VBM98.EXE` と、EXE・README・LICENSE
+  を入れた zip）。リリースノートは README の要約（実機では未確認、と明記）
 
 ## 見送った提案
 
