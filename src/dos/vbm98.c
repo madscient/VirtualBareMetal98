@@ -773,6 +773,40 @@ static int sbrom_setup(const char *path, u32 lin)
  * 値を直す。ホストの RAM を指すベクタの横取り印は first のときだけ登録する (リセットでは番地が同じ)。
  * 残りの RAM には触らない (実機のリセットでも RAM は残る)
  */
+u32 rom_trace(u16 vec, u16 ax, u16 *rej);   /* romtrace.S */
+
+/*
+ * ROM の入口を突き止める割り込み: タイマ・キーボード・VSYNC (ROM の BIOS が自分でハンドラを持つハードウェア割り込み) と、
+ * BIOS のサービス (18h キーボード / CRT、19h RS-232C、1Ah プリンタ、1Ch カレンダ / タイマ)。
+ * 1Bh は自前で処理する。1Fh は入れない (拡張メモリを使う機能があり、ゲストには拡張メモリを見せないため)。
+ * ほかのハードウェア割り込みは、使うゲストが自分でハンドラを置く
+ */
+static const u8 rom_traced[] = { 0x08, 0x09, 0x0A, 0x18, 0x19, 0x1A, 0x1C };
+static u32 rom_ent[HOOK_VEC_MAX];   /* 突き止めた入口 (上位がセグメント)。0 なら無し */
+
+/*
+ * seg:off がゲストからも同じ中身で見える ROM か。A0000h 未満と 100000h 以上 (HMA) はホストの RAM。E8000h 以上は ROM。
+ * その間 (VRAM、UMB、拡張 ROM) は 1 バイト書いてみて、書ければ RAM とみなす (値は戻す。romtrace.S と同じ基準)
+ */
+static int in_rom(u16 seg, u16 off)
+{
+    u32 l = lin(seg, off);
+    u8 __far *p = MK_FP(seg, off);
+    u8 b, got;
+
+    if (l < RAM_TOP || l >= 0x100000UL)
+        return 0;
+    if (l >= 0xE8000UL)
+        return 1;
+    _disable();
+    b = *p;
+    *p = (u8)~b;
+    got = *p;
+    *p = b;
+    _enable();
+    return got == b;
+}
+
 static int guest_memory(int first)
 {
     static const u8 zero2[2] = { 0, 0 };
@@ -800,19 +834,42 @@ static int guest_memory(int first)
         dipsw_workarea();
 
     /*
-     * ホストの RAM (MS-DOS や常駐物) を指すベクタは、ゲストのメモリには中身がない。
-     * 横取り印へ向け、来たら (ハードウェア割り込みなら EOI を出して) 何もせずに戻す
+     * ホストの RAM (MS-DOS や常駐物) を指すベクタは、ゲストのメモリには中身がない (design.md §6)。
+     * ROM の BIOS が自分で面倒を見る割り込み (rom_traced) は、ROM 側の入口を突き止めてそれをゲストに渡す
+     * (規則 2。入口は最初の 1 回だけ調べて覚えておく)。突き止められないものと、それ以外のベクタは横取り印へ向け、
+     * 来たら (ハードウェア割り込みなら EOI を出して) 何もせずに戻す (規則 3)
      */
     /* far ポインタでベクタ表を読む書き方は gcc-ia16 6.3 の内部エラーを起こしたので、XMS の転送で手元に写す */
     if (xms_move(0, xms_far(mon_data_seg(), (u16)(unsigned)ivtbuf), 0, xms_far(0, 0), HOOK_VEC_MAX * 4))
         return 1;
-    if (first)
+    if (first) {
+        for (i = 0; i < sizeof rom_traced; i++) {
+            const u8 *e = ivtbuf + rom_traced[i] * 4;
+            u16 rej[3];
+
+            if (in_rom((u16)(e[2] | (e[3] << 8)), (u16)(e[0] | (e[1] << 8))))
+                continue;
+            rom_ent[rom_traced[i]] = rom_trace(rom_traced[i], 0xFF00, rej);
+            /* 入口として使えない入り方で ROM に入った所。実機の報告から、未知の横取りの形を知るための材料 */
+            if (rej[1])
+                say("VBM98: INT %02Xh enters the ROM at %04X:%04X with %u bytes pushed, not usable as its entry\n",
+                    rom_traced[i], rej[1], rej[0], rej[2]);
+        }
         say("VBM98: vectors into host RAM, redirected:");
+    }
     for (i = 0; i < HOOK_VEC_MAX; i++) {
         const u8 *e = ivtbuf + i * 4;
 
-        if (i == 0x1B || lin((u16)(e[2] | (e[3] << 8)), (u16)(e[0] | (e[1] << 8))) >= RAM_TOP)
+        if (i == 0x1B || in_rom((u16)(e[2] | (e[3] << 8)), (u16)(e[0] | (e[1] << 8))))
             continue;
+        if (rom_ent[i]) {
+            ent[0] = (u8)rom_ent[i];
+            ent[1] = (u8)(rom_ent[i] >> 8);
+            ent[2] = (u8)(rom_ent[i] >> 16);
+            ent[3] = (u8)(rom_ent[i] >> 24);
+            g_write((u32)i * 4, mon_data_seg(), (u16)(unsigned)ent, 4);
+            continue;
+        }
         off = (u16)(HOOK_VEC_OFF + i * 4);
         ent[0] = (u8)off;
         ent[1] = (u8)(off >> 8);
@@ -824,8 +881,13 @@ static int guest_memory(int first)
             say(" %02X", i);
         }
     }
-    if (first)
+    if (first) {
+        say("\nVBM98: vectors into host RAM, traced to their ROM entries:");
+        for (i = 0; i < HOOK_VEC_MAX; i++)
+            if (rom_ent[i])
+                say(" %02X=%04X:%04X", i, (u16)(rom_ent[i] >> 16), (u16)rom_ent[i]);
         say("\n");
+    }
     return 0;
 }
 
@@ -1283,8 +1345,6 @@ int main(int argc, char **argv)
     u16 rc;
     int i, mrc, running = 1, code = 0;
 
-    /* ゲストが止まらずに外から終了させられたときも、そこまでの表示が残るようにする */
-    setvbuf(stdout, 0, _IONBF, 0);
     if (parse_args(argc, argv, &o))
         return 2;
     if (o.log) {

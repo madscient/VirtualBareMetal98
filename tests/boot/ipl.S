@@ -6,8 +6,8 @@
  * 和、BIOS ワークエリアの結果 8 バイト、DIP スイッチの読み出しポート (31h・33h・42h) の値、
  * DIP スイッチから導かれるワークエリアの 5 バイト (0480h・0501h・053Ch・054Ch・054Dh)、リセットを経たかの印、
  * メモリスイッチ 1〜8 (A3FE2h から 4 バイトおき)、-iotrap で 31h に読み替えるポート 0F31h の値、
- * サウンド BIOS (CC000h) の 4 バイト (先頭 2 つ、末尾、+2000h)、拡張メモリ量、INT 1Bh・09h・1Ah のベクタと
- * BASIC ROM の末尾のページの先頭 4 バイトを自分の中 (300h から) に書き込んでから、
+ * サウンド BIOS (CC000h) の 4 バイト (先頭 2 つ、末尾、+2000h)、拡張メモリ量、INT 1Bh・09h・1Ah・19h のベクタと
+ * BASIC ROM の末尾のページの先頭 4 バイトを自分の中 (300h から) に書き込み、INT 1Ah を 1 回呼んでから、
  * 自分自身の 1024 バイトをセクタ 3 に書き、割り込み禁止で HLT する。
  */
 /*
@@ -144,6 +144,10 @@ after_reset:
         mov     [rec_v1a], ax
         mov     ax, es:[0x1A * 4 + 2]
         mov     [rec_v1a + 2], ax
+        mov     ax, es:[0x19 * 4]
+        mov     [rec_v19], ax
+        mov     ax, es:[0x19 * 4 + 2]
+        mov     [rec_v19 + 2], ax
         les     bx, [rec_v1b]
         mov     al, es:[bx]
         mov     [rec_hook], al
@@ -153,6 +157,13 @@ after_reset:
         mov     [rec_f7], ax
         mov     ax, es:[0x0002]
         mov     [rec_f7 + 2], ax
+
+        /* INT 1Ah (プリンタの状態の取得) を呼ぶ。ゲストに渡されたベクタが割り込みの入口として使えなければ、ここから
+           戻ってこない */
+        mov     ah, 0x12
+        int     0x1A
+        push    cs
+        pop     ds
 
         /* 割り込みを許可したまましばらく回る。ハードウェア割り込みがゲストに届いても壊れないことを見る */
         sti
@@ -197,4 +208,5 @@ rec_f7:         .skip   4
 rec_v09:        .skip   4
 rec_v1a:        .skip   4
 rec_hook:       .byte   0
+rec_v19:        .skip   4
         .org    1024

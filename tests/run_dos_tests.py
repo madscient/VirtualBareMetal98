@@ -422,12 +422,15 @@ def boot_rec(path):
         return '%04X:%04X' % (int.from_bytes(rec[off + 2:off + 4], 'little'), int.from_bytes(rec[off:off + 2], 'little'))
 
     return {'ran': rec[0x300:0x308] == b'VBM98IPL', 'ext': rec[0x32B:0x32E], 'v1b': far(0x32E), 'f7': rec[0x332:0x336],
-            'v09': far(0x336), 'v1a': far(0x33A), 'hook': rec[0x33E]}
+            'v09': far(0x336), 'v1a': far(0x33A), 'hook': rec[0x33E], 'v19': far(0x33F)}
 
 
 def test_hook(work):
     """ホストの DOS や常駐物が割り込みを横取りしている状態 (試験用の常駐プログラム HOSTTSR.COM で作る) で起動する。
-    見るもの: 拡張メモリ量をゲストに見せない (ホストの値が 0 でなくても)。同じバッチの中で、常駐の前と後に 1 回ずつ走らせる"""
+    見るもの: 拡張メモリ量をゲストに見せない (ホストの値が 0 でなくても)。横取りされた INT 09h・1Ah・19h について、
+    ゲストのベクタが ROM 側の入口 (横取りされる前にホストが持っていた番地) になる。INT 19h の横取りは、先に ROM の
+    中の別の番地 (割り込みの入口ではない) を呼ぶので、最初に ROM へ入った番地を入口と取り違えないことも見る。
+    同じバッチの中で、常駐の前と後に 1 回ずつ走らせて比べる"""
     with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
         ipl = f.read()
     img = bytearray(77 * 2 * 8 * 1024)
@@ -441,18 +444,27 @@ def test_hook(work):
             os.remove(os.path.join(work, name))
     finished = dosenv.run_batch(['VBM98.EXE -fdd0 H1.IMG -menukeys 04,15 > HOOK1.OUT', 'HOSTTSR.COM',
                                  'VBM98.EXE -fdd0 H2.IMG -menukeys 04,15 > HOOK2.OUT'], 180, core='normal')
+    after = []
     for name in ('HOOK1.OUT', 'HOOK2.OUT'):
         for line in imgtests.read_lines(work, name) or []:
             if 'tvram row' not in line:
                 print('  %s: %s' % (name[:5], line))
+            if name == 'HOOK2.OUT':
+                after.append(line)
     a = boot_rec(os.path.join(work, 'H1.IMG'))
     b = boot_rec(os.path.join(work, 'H2.IMG'))
-    print('  before the TSR: INT 09h %s, INT 1Ah %s, ext %s' % (a['v09'], a['v1a'], a['ext'].hex()))
-    print('  after the TSR:  INT 09h %s, INT 1Ah %s, ext %s' % (b['v09'], b['v1a'], b['ext'].hex()))
+    for when, r in (('before the TSR:', a), ('after the TSR: ', b)):
+        print('  %s INT 09h %s, INT 1Ah %s, INT 19h %s, ext %s' % (when, r['v09'], r['v1a'], r['v19'], r['ext'].hex()))
     checks = (
         ('batch finished', finished),
         ('the IPL ran both before and after the TSR was loaded', a['ran'] and b['ran']),
         ('no extended memory is shown to the guest although the host work area has some', b['ext'] == b'\0\0\0'),
+        ('INT 09h hooked by the TSR (pushf + call far): the guest still gets the ROM entry it had before', b['v09'] == a['v09']),
+        ('INT 1Ah hooked by the TSR (jmp far): the guest still gets the ROM entry it had before', b['v1a'] == a['v1a']),
+        ('INT 19h hooked by the TSR: the ROM address it calls first is reported as not an entry',
+         any('INT 19h enters the ROM at' in l and 'not usable' in l for l in after)),
+        ('INT 19h hooked by the TSR (far call into the ROM, then jmp far): the guest still gets the ROM entry it had before',
+         b['v19'] == a['v19']),
     )
     ok = True
     for name, c in checks:
@@ -504,12 +516,21 @@ def test_msdos(work):
                 ('VBM98 did not start the guest', not any('booting from drive' in l for l in lines) and rec[0x300:0x308] != b'VBM98IPL'),
             )
         else:
+            # MS-DOS の IO.SYS は INT 1Ah を横取りし、ROM の入口の 3 命令を自分で実行してから入口 + 19h へ飛び込む。
+            # ゲストに渡すベクタが (その飛び込み先でも、横取り印のページでもなく) ROM の入口になっていること。
+            # 起動試験の IPL は INT 1Ah を 1 回呼ぶので、入口として使えない番地が渡されていれば IPL は最後まで走らない
+            hook = hook_page(lines)
+            v1a_seg = int.from_bytes(rec[0x33C:0x33E], 'little')
+            traced = [l for l in lines if 'traced to their ROM entries' in l]
             checks = (
                 ('batch finished', finished),
                 ('VBM98 saw real mode (no V86 monitor)', not any('V86 monitor' in l for l in lines)),
                 ('guest halted and VBM98 returned to DOS', any('halted' in l for l in lines) and any('back to DOS' in l for l in lines)),
                 ('IPL ran (after its own reset) and wrote itself to sector 3', rec[0x300:0x308] == b'VBM98IPL' and rec[0x31D] == 1),
                 ('sector 2 contents arrived in the guest', int.from_bytes(rec[0x30A:0x30C], 'little') == want_sum),
+                ('INT 1Ah hooked by IO.SYS: VBM98 traced it to a ROM entry', any(' 1A=' in l for l in traced)),
+                ('INT 1Ah hooked by IO.SYS: the guest vector is in the ROM, not in the hook page',
+                 hook is not None and v1a_seg >= 0xE800 and v1a_seg != hook),
             )
         for name, c in checks:
             print('%s MS-DOS + %s: %s' % ('ok  ' if c else 'FAIL', tag, name))

@@ -3,7 +3,6 @@
  * 文字は Shift-JIS で受け取り、jis.c でテキスト VRAM のコードにして書く。
  * 1 桁ずつ far ポインタで書く (far ポインタに添字で触る形は gcc-ia16 6.3 の内部エラーを起こすので使わない)
  */
-#include <stdio.h>
 #include <string.h>
 #include <dos.h>
 #include <i86.h>
@@ -11,6 +10,7 @@
 #include "ui.h"
 #include "jis.h"
 #include "vbm.h"
+#include "log.h"
 
 #define TVRAM_SEG  0xA000
 #define TVRAM_ATTR 0x2000
@@ -163,11 +163,25 @@ void ui_set_keys(const u8 *scancodes, int n)
 void ui_debug_dump(u8 row, u8 cols)
 {
     static u8 buf[UI_COLS * 2];
-    u8 c;
+    static const char hex[] = "0123456789ABCDEF";
+    static char part[16 * 5 + 1];
+    u8 c, n = 0;
 
+    /* 表示は say() だけを通す (FILE を使う printf を 1 箇所でも呼ぶと、その実装がコードセグメントに丸ごと入る)。
+       1 行が say() の整形バッファより長いので、16 桁ぶんずつ自分で 16 進にして渡す */
     _fmemcpy(buf, MK_FP(TVRAM_SEG, row * UI_COLS * 2), UI_COLS * 2);
-    printf("VBM98: tvram row %u:", row);
-    for (c = 0; c < cols; c++)
-        printf(" %02X%02X", buf[c * 2 + 1], buf[c * 2]);
-    printf("\n");
+    say("VBM98: tvram row %u:", row);
+    for (c = 0; c < cols; c++) {
+        part[n++] = ' ';
+        part[n++] = hex[buf[c * 2 + 1] >> 4];
+        part[n++] = hex[buf[c * 2 + 1] & 15];
+        part[n++] = hex[buf[c * 2] >> 4];
+        part[n++] = hex[buf[c * 2] & 15];
+        if (n == sizeof part - 1 || c + 1 == cols) {
+            part[n] = 0;
+            say("%s", part);
+            n = 0;
+        }
+    }
+    say("\n");
 }

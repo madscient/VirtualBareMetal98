@@ -46,11 +46,20 @@ cc_r0() {
 }
 
 link() {
+    map="$out/${1%.*}.map"
     # shellcheck disable=SC2086
-    ia16-elf-gcc $model $ldflags -o "$out/$1" $objs $libs
+    ia16-elf-gcc $model $ldflags -Wl,-Map="$map" -o "$out/$1" $objs $libs
     # shellcheck disable=SC2086
     ia16-elf-size $objs
-    ls -l "$out/$1" | awk -v n="$1" '{print $5, "bytes ", n}'
+    # リンカ自身の検査は .text の大きさが 64KB 以下かしか見ない。実行時の CS は EXE ヘッダ (20h バイト) の先頭を指すので、
+    # コードの番地はマップの値そのままで、使えるのは 10000h まで。そこを越えたぶんは 64KB で折り返して、いちばん後ろの
+    # 関数 (main) が壊れる。リンクは通ってしまうので、マップの __etext で確かめて止める
+    etext=$(awk '$2 == "__etext" {print $1; exit}' "$map")
+    if [ -z "$etext" ] || [ $((etext)) -gt $((0x10000)) ]; then
+        echo "$1: コードセグメントが 64KB を越えた (__etext = ${etext:-不明})" >&2
+        exit 1
+    fi
+    ls -l "$out/$1" | awk -v n="$1" -v free=$((0x10000 - etext)) '{print $5, "bytes ", n, " (code segment:", free, "bytes free)"}'
     objs=""
 }
 
@@ -84,6 +93,7 @@ cc src/dos/dosio.c "$strict"
 cc src/dos/xms.c "$strict"
 cc src/dos/xmsasm.S ""
 cc src/dos/pio.S ""
+cc src/dos/romtrace.S ""
 cc src/mon/mon.c "$strict"
 cc src/mon/monmem.c "$strict"
 cc_r0 src/mon/mon_r0.c
