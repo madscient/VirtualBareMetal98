@@ -291,7 +291,8 @@ DEL は実機のリセットと同じ組み合わせなのでリセットに充�
 START / SYNC の表示 ON で 1、STOP / SYNC の表示 OFF で 0。起動時の初期化 §16 で 0）。ゲストがコマンドの引数を
 書いている途中でメニューが開くと、挟んだコマンドで引数の列が切れる（ホットキーはキーボード割り込みで来るので
 時機は選べない）。やっていないこと: ゲストが消していたテキスト表示を戻すこと（開くときに ON にしたまま）、
-20 行・40 桁モード、テキストの表示開始番地、処理中の割り込み（ISR）が残っている時機の回避。開発用に `-stopkey` / `-shotkey <スキャンコード>`（STOP / COPY の代わりのキー）、
+20 行・40 桁モード、テキストの表示開始番地、処理中の割り込み（ISR）が残っている時機の回避、音源の消音
+（ゲストが止まるので、鳴っていた音はメニューのあいだ鳴り続ける。spec.md）。開発用に `-stopkey` / `-shotkey <スキャンコード>`（STOP / COPY の代わりのキー）、
 `-menuat`（刻みで開く）、`-menukeys`（キー入力の代わりの列）がある。
 
 ## 10. リセットと終了
@@ -390,6 +391,7 @@ START / SYNC の表示 ON で 1、STOP / SYNC の表示 OFF で 0。起動時の
 | スキャンコードの HELP 3Fh | 推測 | 記憶（HOME CLR 3Eh の次）。試験環境のキー配列では送れず、未確認。VM メニューのホットキーに使っている（§9） |
 | サウンド BIOS の ROM は 16KB で、C8000h・CC000h・D0000h・D4000h のいずれかに置かれる（ボードの設定）。ROM が無いとき NP2 系は CC000h + 2E00h に 9 バイト `01 00 00 00 D2 00 08 00 CB` を置く。資料には「CEE00h のバイトにサウンド BIOS の割り込み番号を設定して割り込みを確立する。N88-BASIC は D2h にする」「呼ぶ前に ES = CEE0h、DI = CEE06h のワード」とある | 未検証（NP2 の実装と資料を読んだ） | NP2kai `sound/soundrom.c`（`loadsoundrom`、`soundrom_loadex`、`defsoundrom`）、Wikibooks の NEC PC Programmers Reference「Sound BIOS」。ヘッダの構造と、IPL が INT D2h を登録する手順は読み取れていない。`-sbrom` は ROM を見せるだけ（§15） |
 | 実機のリセット（CTRL + GRPH + DEL）で RAM の内容は残る | 推測 | 記憶（ソフトリセットで ITF のメモリチェックは走らない）。`vm_reset` は RAM を消さない（§10） |
+| EPSON の互換機でも動く | 推測 | 利用者の見立て。設計はホストの ROM・ワークエリア・スイッチの値をそのまま使い、NEC 固有の振る舞いに依っていない。実物では未確認。ハイレゾモードは VRAM と GDC の番地が違うので対象外（spec.md） |
 | グラフィック GDC（コマンド A2h、状態 A0h）: BCTRL の 0Ch が表示 OFF、0Dh が表示 ON。SYNC の 0Eh は表示 OFF、0Fh は表示 ON を伴う。START 6Bh は表示 ON。状態ポートの bit 1 が FIFO full、bit 2 が FIFO empty | 未検証（NP2 の実装を読んだ） | NP2kai `io/gdc.c`（`gdc_work` の CMD_START / CMD_START_ / CMD_SYNC_ON と CMD_STOP / CMD_STOP_ / CMD_SYNC_OFF、`gdc_ia0`）と `io/gdc_cmd.tbl` の対応表（0Ch STOP、0Dh START、0Eh / 0Fh SYNC、6Bh START）。μPD7220 の資料と実機では未確認。メニューのあいだの表示 OFF に使う（§9） |
 | 電源投入直後の表示系: CRT モード 04h（簡易グラフィック属性）+ SW2-3 が OFF なら 20 行（bit 1）+ SW2-4 が OFF なら 40 桁（bit 0）、グラフィックは 640×200・表示 OFF・ページ 0・8 色、GDC クロック 2.5MHz、デジタルパレットは恒等 | 未検証（NP2 の実装を読んだ） | NP2kai `bios/bios.c`（`bios_screeninit`: `4 + ((sw2 & 04h) >> 1) + ((sw2 & 08h) >> 3)`、`bios_reinitbyswitch`: PRXDUPD = 18h + SW2-8、bit 2 = 400 ライン）、`io/gdc.c`（`gdc_biosreset`、`defdegpal`）。実機の ITF は未確認 |
 | ホストの BIOS に INT 18h AH=41h（グラフィック表示 OFF）、AH=42h CH=80h（640×200 カラー ページ 0）、AH=0Ah、AH=0Ch、AH=12h を呼ばせ、6Ah ← 00h（8 色）、7Ch ← 00h（GRCG OFF）、パレットを恒等にすると、MS-DOS が残した 400 ライン・16 色の状態から、イース1・2 が直接起動と同じ 200 ライン・同じ色で表示される | 確認済み（NP21/W） | スクリーンショットの比較（`VBM98` 経由と NP21/W 直接起動）。初期化を入れる前は 400 ラインのまま表示されていた |
