@@ -47,6 +47,8 @@ extern u8 vid_color16, vid_anapal[16 * 3];
  * メニューのあいだ表示を消して、閉じるときにこの状態へ戻す (design.md §9)。起動時の初期化で 0
  */
 extern u8 vid_gdisp;
+/* 同じく、テキスト表示の ON/OFF (テキスト GDC のコマンドポート 62h を追う)。メニューが ON にした表示を閉じるときに戻す */
+extern u8 vid_tdisp;
 /* 開発用: COPY の代わりにスクリーンショットにするスキャンコード (0 なら無し)。-stopkey と同じ事情 */
 extern u8 kbd_shot_alt;
 /*
