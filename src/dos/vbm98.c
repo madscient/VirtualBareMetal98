@@ -29,6 +29,8 @@
 #include "optval.h"
 #include "log.h"
 
+/* 版。GitHub のリリースのタグに合わせ、リリース後の master では末尾に + を付ける (動作報告で版を見分けるため。README) */
+#define VBM98_VERSION   "0.1.0+"
 #define GUEST_KB        640
 #define DRIVES          2
 #define RESET_LIN       0xFFFF0UL
@@ -1215,12 +1217,14 @@ int main(int argc, char **argv)
             say("VBM98: cannot open the log file: %s\n", o.log);
             return 2;
         }
-        say("VBM98: log: %s\n", o.log);
         if (o.log_sec) {
             dev_tick = 1;
             dev_log_every = (u32)o.log_sec * 100;
         }
     }
+    say("VBM98 " VBM98_VERSION "\n");
+    if (o.log)
+        say("VBM98: log: %s (heartbeat %u s)\n", o.log, o.log_sec);
     if (check_v86())
         return 1;
     v30_on = (u8)o.v30;
