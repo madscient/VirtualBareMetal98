@@ -644,4 +644,7 @@ IRQ0 = ベクタ 08h のままで、使う必要がなかった）、VCPI のペ
 試験: `tests/run_dos_tests.py v86`。起動イメージの複製の FDCONFIG.SYS を同じ長さで書き換えて HIMEMX + EMM386
 （NOEMS）を読み込ませ（`tests/dosenv.py`）、起動試験の IPL が INT 1Bh の往復とリセットを経て HLT まで動くことを見る。
 確認済み（NP21/W、FreeDOS(98) の EMM386 2.26 NOEMS + HIMEMX）: 6 項目が通る（判定、VCPI 1.0 の検出、INT 1Bh の
-往復、IPL が起こすリセット、HLT から DOS へ）。MS-DOS の EMM386 は未確認。
+往復、IPL が起こすリセット、HLT から DOS へ）。実イメージでも、リアルモードと EMM の下で `-tick -stopafter` の
+同じ刻み数まで走らせて割り込みの内訳が一致した: イース2 は 6000 刻みで INT 1Bh 33 回・VSYNC 約 1800 回、
+ソーサリアン（FM 音源）は 9000 刻みで INT 1Bh 16 回・VSYNC 約 700 回・IRQ12 約 1000 回で、止まった番地も同じ
+領域。上の「割り込みの取りこぼし」はこの 2 本の範囲では症状として出ていない。MS-DOS の EMM386 は未確認。
