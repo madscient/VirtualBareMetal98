@@ -56,6 +56,8 @@ extern u8 kbd_shot_alt;
  * dip_sw (SW1・SW2・SW3。bit n-1 が SW n、1 = OFF) から作った値を返す。ホストのスイッチは読むだけ
  */
 extern u8 dip_on, dip_sw[3];
+/* -v30 (design.md §14): V30 固有の命令を代行し、ゼロ除算の戻り番地を命令の次にする */
+extern u8 v30_on;
 /*
  * -iotrap (design.md §15)。ゲストのポート iotrap_guest[i] への I/O を、ホストのポート iotrap_host[i] に
  * 読み替える。表は ring 0 側が持ち、ホスト側が起動時に埋めてそのポートをトラップする

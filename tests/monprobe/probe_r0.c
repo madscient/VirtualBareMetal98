@@ -10,6 +10,7 @@ u16 probe_in_byte, probe_in_word;
 u32 probe_out_val;
 u16 probe_out_count;
 u8 probe_peek500;
+u8 probe_v30;       /* 1 なら、例外で V30 の命令の代行を試す (mon_v30_emulate) */
 
 static void log_event(u8 vec, u8 kind, u16 err, const struct mon_vframe *f)
 {
@@ -40,8 +41,9 @@ u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
 
 u16 mon_on_fault(u8 vec, u32 err, struct mon_vframe *f, struct mon_gregs *r)
 {
-    (void)r;
     log_event(vec, (u8)((vec == VEC_UD || vec == VEC_DE) ? EV_EXC : EV_FAULT), (u16)err, f);
+    if (probe_v30 && (vec == VEC_UD || (vec == VEC_GP && err == 0)) && mon_v30_emulate(f, r))
+        return 0;
     if (probe_resume_ip) {
         f->eip = (f->eip & 0xFFFF0000UL) | probe_resume_ip;
         return 0;

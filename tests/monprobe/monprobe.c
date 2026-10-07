@@ -16,6 +16,10 @@ extern void g_exit(void), g_iopl(void), g_hlt(void), g_hlt_at(void), g_hlt_cli(v
 extern void g_reflect(void), g_int0d(void), g_int06(void), g_int00(void);
 extern void g_remap(void), g_reset(void), g_priv(void), g_priv_at(void);
 extern void g_io(void), g_io_native(void), g_ios(void), g_irq(void), g_irq98(void), g_sep(void), g_sep_end(void);
+extern void g_v30_bitc(void), g_v30_biti(void), g_v30_bcd(void), g_v30_cmp4s(void), g_v30_rot(void);
+static int no_tr;   /* 引数 notr: 0F 26 (386 の MOV TR) を実行すると止まるエミュレータでは CMP4S の試験を飛ばす */
+extern void g_v30_ins(void), g_v30_insi(void), g_v30_ext(void), g_v30_exti(void);
+extern u8 probe_v30;
 extern void g_bios(void), g_bios_end(void);
 extern u8 rm_inb(u16 port);
 extern void rm_isr08(void), rm_isr17(void);
@@ -207,8 +211,8 @@ static void test_opcode(const char *label, void (*entry)(void), u16 at, void (*r
     }
 }
 
-/* 期待を置かず、何が届いたかを書くだけ */
-static void report_opcode(const char *label, void (*entry)(void), u16 at, void (*resume)(void))
+/* 期待を置かず、何が届いたかを書くだけ。例外になったら 1 (V30 の試験がその並びを使えるかの判定に使う) */
+static int report_opcode(const char *label, void (*entry)(void), u16 at, void (*resume)(void))
 {
     const struct event *e;
     char name[72];
@@ -225,7 +229,12 @@ static void report_opcode(const char *label, void (*entry)(void), u16 at, void (
         printf("# %s: no exception, executed natively\n", label);
     sprintf(name, "%s: continues after it", label);
     check(name, rc == X_DONE && nrep == 2 && rep[0] == 0x1111 && rep[1] == 0x2222);
+    return e != 0;
 }
+
+/* 0F 10 (ビット操作) と 0F 28 (ROL4) がこのホストで例外になるか。ならない (SSE の NOP などとして実行される) なら、
+   後続の即値を別の命令として実行してしまうので、同じ系列の V30 の試験は走らせない */
+static int v30_bit_traps, v30_rot_traps;
 
 /*
  * モニタを使わず、リアルモードのままベクタ 08h と 17h の到着を数える。
@@ -356,6 +365,8 @@ int main(int argc, char **argv)
     u8 orig;
     int pc98 = argc > 1 && strcmp(argv[1], "pc98") == 0;
 
+    no_tr = argc > 2 && strcmp(argv[2], "notr") == 0;
+
     printf("# machine: %s\n", pc98 ? "PC-98" : "PC");
     tables = alloc_pages(MONMEM_TABLE_PAGES);
     pa = alloc_pages(3);
@@ -432,9 +443,9 @@ int main(int argc, char **argv)
      * V30 固有の命令が 386 でどう届くか。0F 10 / 0F 28 / 0F 31 は後の世代の CPU では別の命令
      * (SSE、RDTSC) として実行されるので、届き方を書くだけにする
      */
-    report_opcode("0F 10 (TEST1 / MOVUPS)", g_op_0f10, code_off(g_op_0f10_at), g_op_0f10_resume);
+    v30_bit_traps = report_opcode("0F 10 (TEST1 / MOVUPS)", g_op_0f10, code_off(g_op_0f10_at), g_op_0f10_resume);
     test_opcode("0F 20 (ADD4S)", g_op_0f20, code_off(g_op_0f20_at), g_op_0f20_resume, VEC_GP, EV_FAULT, 0);
-    report_opcode("0F 28 (ROL4 / MOVAPS)", g_op_0f28, code_off(g_op_0f28_at), g_op_0f28_resume);
+    v30_rot_traps = report_opcode("0F 28 (ROL4 / MOVAPS)", g_op_0f28, code_off(g_op_0f28_at), g_op_0f28_resume);
     report_opcode("0F 31 (INS / RDTSC)", g_op_0f31, code_off(g_op_0f31_at), g_op_0f31_resume);
     test_opcode("0F FF (BRKEM)", g_op_0fff, code_off(g_op_0fff_at), g_op_0fff_resume, VEC_UD, EV_EXC, 0);
     test_opcode("64 90 (REPC prefix)", g_op_64, code_off(g_op_64_at), g_op_64_resume, 0, EV_NONE, 0);
@@ -467,6 +478,61 @@ int main(int argc, char **argv)
     check("string io: REP OUTSB advances SI by the count", rep[3] == 3);
     check("string io: REP INSW stores the monitor's words at ES:DI", rep[0] == 0xBEEF && rep[1] == 0xBEEF);
     check("string io: REP INSW stops after CX words", rep[2] == 0x5A5A && faults() == 0);
+
+    /*
+     * V30 固有の命令の代行 (design.md §14)。例外になった命令だけ代行できるので、例外が 1 つも記録されずに最後まで
+     * 走った断片 (この CPU では SSE や RDTSC として実行された) は、結果を見ずに「見ない」と報告する
+     */
+    {
+        static const struct {
+            const char *name;
+            void (*entry)(void);
+            u8 n, gate;     /* gate: 1 = 0F 10 が例外になるホストだけ、2 = 0F 28 が例外になるホストだけ */
+            u16 want[5], mask[5];
+        } cases[] = {
+            {"TEST1 AL,CL / CLR1 BL,CL", g_v30_bitc, 2, 1, {0x0000, 0x00EF}, {0x0040, 0xFFFF}},
+            {"TEST1 AL,imm / SET1 mem16,imm / NOT1 BH,imm", g_v30_biti, 3, 1, {0x0040, 0x9234, 0x0001}, {0x0040, 0xFFFF, 0xFFFF}},
+            {"ADD4S / SUB4S", g_v30_bcd, 3, 0, {0x0000, 0x8023, 0x3333}, {0x0041, 0xFFFF, 0xFFFF}},
+            {"CMP4S", g_v30_cmp4s, 2, 3, {0x0001, 0x1111}, {0x0041, 0xFFFF}},
+            {"ROL4 / ROR4", g_v30_rot, 2, 2, {0x2501, 0x5102}, {0xFFFF, 0xFFFF}},
+            {"INS reg,reg", g_v30_ins, 2, 0, {0x00F0, 0x0008}, {0xFFFF, 0xFFFF}},
+            {"INS reg,imm across a word boundary", g_v30_insi, 4, 0, {0xF000, 0x003F, 0x0006, 0x0002}, {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}},
+            {"EXT reg,reg", g_v30_ext, 2, 0, {0x000F, 0x0008}, {0xFFFF, 0xFFFF}},
+            {"EXT reg,imm across a word boundary", g_v30_exti, 3, 0, {0x03FF, 0x0006, 0x0002}, {0xFFFF, 0xFFFF, 0xFFFF}},
+        };
+        char label[96];
+        unsigned ci, k;
+        int ok;
+
+        probe_v30 = 1;
+        for (ci = 0; ci < sizeof cases / sizeof cases[0]; ci++) {
+            if ((cases[ci].gate == 1 && !v30_bit_traps) || (cases[ci].gate == 2 && !v30_rot_traps)) {
+                printf("# v30 %s: this host executes the opcode natively (SSE), not run\n", cases[ci].name);
+                continue;
+            }
+            if (cases[ci].gate == 3 && no_tr) {
+                printf("# v30 %s: not run (notr: this emulator stops on MOV TR, which 0F 26 means on a 386/486)\n", cases[ci].name);
+                continue;
+            }
+            rc = run(cases[ci].entry, 0);
+            if (rc == X_DONE && count(VEC_UD, EV_EXC) + count(VEC_GP, EV_FAULT) == 0) {
+                printf("# v30 %s: executed natively on this host (no exception), not checked\n", cases[ci].name);
+                continue;
+            }
+            ok = rc == X_DONE && nrep == cases[ci].n;
+            for (k = 0; ok && k < cases[ci].n; k++)
+                ok = (rep[k] & cases[ci].mask[k]) == cases[ci].want[k];
+            sprintf(label, "v30: %s", cases[ci].name);
+            check(label, ok);
+            if (!ok) {
+                printf("#   rc=%04X nrep=%u reports:", rc, nrep);
+                for (k = 0; k < nrep && k < 5; k++)
+                    printf(" %04X", rep[k]);
+                printf("\n");
+            }
+        }
+        probe_v30 = 0;
+    }
 
     survey_irq(pc98);
     rc = run(pc98 ? g_irq98 : g_irq, 0);

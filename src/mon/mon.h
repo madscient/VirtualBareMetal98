@@ -143,6 +143,14 @@ void mon_on_halt_wake(void);
 
 /* ---- ring 0 専用 ---- */
 
+/*
+ * V30 固有の命令の代行 (v30_r0.c、design.md §14)。例外 (ベクタ 6、またはベクタ 13 のエラーコード 0) で呼ぶ。
+ * CS:IP に 0Fh から始まる V30 の命令があれば実行して IP を進め、1 を返す。扱えなければ 0 (何も変えない)
+ */
+int mon_v30_emulate(struct mon_vframe *f, struct mon_gregs *r);
+/* ゼロ除算 (ベクタ 0) の戻り番地を V30 と同じ「命令の次」にするための、CS:IP の除算命令の長さ。読み解けなければ 0 */
+u16 mon_v30_div_len(const struct mon_vframe *f);
+
 /* リアルモードの CPU が割り込みを受けたときと同じことを、ゲストのスタックとベクタ表に対して行う */
 void mon_reflect(u8 vec, struct mon_vframe *f);
 u8 mon_peek8(u32 lin);

@@ -65,8 +65,9 @@ def test_mon(work):
     out = os.path.join(work, 'MON.OUT')
     if os.path.exists(out):
         os.remove(out)
-    machine = 'pc98' if dosenv.name() == 'np21w' else 'pc'
-    finished = dosenv.run_batch(['MONPROBE.EXE %s > MON.OUT' % machine], 300, core='normal')
+    # NP21/W の CPU コアは 0F 26 (386 の MOV TR) で止まる (ia32_panic) ので、その並びを使う V30 の試験 (CMP4S) を飛ばす
+    args = 'pc98 notr' if dosenv.name() == 'np21w' else 'pc'
+    finished = dosenv.run_batch(['MONPROBE.EXE %s > MON.OUT' % args], 300, core='normal')
     lines = imgtests.read_lines(work, 'MON.OUT') or []
     for line in lines:
         print(line)

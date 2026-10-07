@@ -393,6 +393,8 @@ START / SYNC の表示 ON で 1、STOP / SYNC の表示 OFF で 0。起動時の
 | サウンド BIOS の ROM は 16KB で、C8000h・CC000h・D0000h・D4000h のいずれかに置かれる（ボードの設定）。ROM が無いとき NP2 系は CC000h + 2E00h に 9 バイト `01 00 00 00 D2 00 08 00 CB` を置く。資料には「CEE00h のバイトにサウンド BIOS の割り込み番号を設定して割り込みを確立する。N88-BASIC は D2h にする」「呼ぶ前に ES = CEE0h、DI = CEE06h のワード」とある | 未検証（NP2 の実装と資料を読んだ） | NP2kai `sound/soundrom.c`（`loadsoundrom`、`soundrom_loadex`、`defsoundrom`）、Wikibooks の NEC PC Programmers Reference「Sound BIOS」。ヘッダの構造と、IPL が INT D2h を登録する手順は読み取れていない。`-sbrom` は ROM を見せるだけ（§15） |
 | 実機のリセット（CTRL + GRPH + DEL）で RAM の内容は残る | 推測 | 記憶（ソフトリセットで ITF のメモリチェックは走らない）。`vm_reset` は RAM を消さない（§10） |
 | VCPI 1.0（INT 67h）: AX=DE00h で有無（AH = 0 なら在り、BH.BL が版）。DE01h は ES:DI の 4KB のページ表に先頭 1MB（とサーバの分）の項を埋め、DS:SI の GDT 3 項の最初をサーバのコードセグメントにし、EBX に入口のオフセットを返す。DE03h は空きページ数、DE04h は 4KB ページの確保（EDX = 物理番地）、DE0Ah / DE0Bh は 8259 のベクタ対応の取得 / 通知。DE0Ch は ESI の構造体（CR3、GDTR と IDTR の 6 バイトの線形番地、LDTR、TR、CS:EIP の PWORD。22 バイト）で保護モードへ。保護モード側からは、DS = 平坦なセレクタ、SS:ESP が 1MB 未満、スタックに GS・FS・DS・ES・SS・ESP・EFLAGS（サーバが入れる）・CS・EIP を積み、EAX=DE0Ch で入口を 32 ビットの far call すると仮想86 へ戻る。切替のあいだ割り込みは禁止 | 確認済み（資料）: Ralf Brown's Interrupt List（INT 67/AX=DE00h〜DE0Ch）と VCPI 1.0 の仕様書（Phar Lap / Quarterdeck）の本文。実物（EMM386）での動作は `run_dos_tests.py v86` | §18 で使う。SMSW が仮想86 でも実行できて実物の CR0 を返すことは 80386 の仕様（SMSW は特権命令でない） |
+| V30 固有の命令の届き方（モニタ核の試験の記録）: DOSBox 0.74-3（core=normal）では 0F 10・18・1D・1E・28・2A・39・3B が未定義命令例外、0F 20・22・26・33 が一般保護例外になり、0F 31（RDTSC）は例外なく実行される。NP21/W では 0F 10〜1F・28・2A・31 が例外なく実行され（SSE の命令と RDTSC）、0F 26（386 / 486 ではテストレジスタへの MOV）は CPU コアが未実装で止まる（`ia32_panic` の "MOV_TdRd: not implemented yet!"） | 確認済み（エミュレータ 2 種） | `run_dos_tests.py mon` の `# v30 ...` の行と、NP21/W のダイアログ（利用者が確認）。NP21/W では CMP4S の試験を引数 `notr` で飛ばす。実機の 386 / 486 では 0F 24 / 26 は一般保護例外、Pentium 以降は未定義命令例外になるはずで、どちらも代行に届く（未検証） |
+| V30 固有の命令の代行の正しさ | 確認済み（DOSBox）: TEST1 / CLR1 / SET1 / NOT1（CL 形と即値形、レジスタとメモリ）、ADD4S / SUB4S / CMP4S、ROL4 / ROR4、INS / EXT（即値形、語をまたぐ場合）、EXT reg,reg が表の期待値どおり。NP21/W では ADD4S / SUB4S と INS / EXT の即値形、EXT reg,reg だけ届く | `tests/monprobe` の `g_v30_*`。期待値は MAME の NEC コアの意味から手で計算した。INS reg,reg（0F 31）はどちらのエミュレータでも RDTSC として実行され、未検証 |
 | EPSON の互換機でも動く | 推測 | 利用者の見立て。設計はホストの ROM・ワークエリア・スイッチの値をそのまま使い、NEC 固有の振る舞いに依っていない。実物では未確認。ハイレゾモードは VRAM と GDC の番地が違うので対象外（spec.md） |
 | グラフィック GDC（コマンド A2h、状態 A0h）: BCTRL の 0Ch が表示 OFF、0Dh が表示 ON。SYNC の 0Eh は表示 OFF、0Fh は表示 ON を伴う。START 6Bh は表示 ON。状態ポートの bit 1 が FIFO full、bit 2 が FIFO empty | 未検証（NP2 の実装を読んだ） | NP2kai `io/gdc.c`（`gdc_work` の CMD_START / CMD_START_ / CMD_SYNC_ON と CMD_STOP / CMD_STOP_ / CMD_SYNC_OFF、`gdc_ia0`）と `io/gdc_cmd.tbl` の対応表（0Ch STOP、0Dh START、0Eh / 0Fh SYNC、6Bh START）。μPD7220 の資料と実機では未確認。メニューのあいだの表示 OFF に使う（§9） |
 | 電源投入直後の表示系: CRT モード 04h（簡易グラフィック属性）+ SW2-3 が OFF なら 20 行（bit 1）+ SW2-4 が OFF なら 40 桁（bit 0）、グラフィックは 640×200・表示 OFF・ページ 0・8 色、GDC クロック 2.5MHz、デジタルパレットは恒等 | 未検証（NP2 の実装を読んだ） | NP2kai `bios/bios.c`（`bios_screeninit`: `4 + ((sw2 & 04h) >> 1) + ((sw2 & 08h) >> 3)`、`bios_reinitbyswitch`: PRXDUPD = 18h + SW2-8、bit 2 = 400 ライン）、`io/gdc.c`（`gdc_biosreset`、`defdegpal`）。実機の ITF は未確認 |
@@ -434,7 +436,16 @@ START / SYNC の表示 ON で 1、STOP / SYNC の表示 OFF で 0。起動時の
 命令をモニタが代行し、386 にあって V30 にない振る舞いの一部を V30 に合わせる。CPU を解釈実行する
 のではなく、該当する命令が例外になったときだけ介入する（D10）。したがって、例外にならない差は直せない。
 
-以下のオペコードと 386 以降での扱いは記憶で書いている（§12）。実装前に資料で確かめる。
+オペコードと意味は MAME の NEC コア（BSD-3-Clause。`src/devices/cpu/nec/necinstr.hxx`・`necmacro.h`）を参考実装として
+読んで確かめた（§12。コードは写していない）。386 以降での届き方は、下の表と §12 の試験の記録による。
+
+いまの実装（`src/mon/v30_r0.c` の `mon_v30_emulate`、`vbm_r0.c` の `mon_on_fault`、試験は `tests/monprobe` の
+`g_v30_*`）: `-v30 on` のとき、未定義命令例外（ベクタ 6）とエラーコード 0 の一般保護例外で CS:IP を読み直し、
+0Fh から始まる V30 の命令（下の表のうち BRKEM 以外）を実行して IP を進める。セグメントの上書きのプリフィクスに
+従い、16 ビットのアドレスだけ扱う（66h / 67h が付いていれば代行しない）。代行できないゼロ除算と未定義命令は、
+ゲストがそのベクタに自前のハンドラを持っていれば INT 0 / INT 6 として反射し（ゼロ除算は `-v30 on` で IP を命令の
+後ろへ進める。長さは DIV / IDIV の ModRM と AAM から読む）、持っていなければ止めて報告する。CR4（RDTSC を
+例外にする TSD）はまだ触っていないので、Pentium 以降のホストでは 0F 31（INS reg,reg）が RDTSC として実行される。
 
 ### 代行する命令
 
@@ -454,8 +465,8 @@ IP を進めてゲストへ戻る。
 
 | 差 | 対応 |
 | --- | --- |
-| ゼロ除算例外の戻り番地: 8086/V30 は次の命令、286 以降は当該命令 | `-v30 on` ではベクタ 0 の反射時に IP を命令の後ろへ進める。命令長は CS:IP から読み解く |
-| 未定義命令: V30 は INT 6 を発生する | 代行できない命令はゲストの INT 6 へ反射する（386 の未定義命令例外も同じ経路） |
+| ゼロ除算例外の戻り番地: 8086/V30 は次の命令、286 以降は当該命令 | `-v30 on` ではベクタ 0 の反射時に IP を命令の後ろへ進める。命令長は CS:IP から読み解く（`mon_v30_div_len`）。ゲストがベクタ 0 に自前のハンドラを持たないときは止めて報告する（反射すると横取り印へ戻って同じ命令を繰り返すため） |
+| 未定義命令: V30 は INT 6 を発生する | 代行できない命令はゲストの INT 6 へ反射する（386 の未定義命令例外も同じ経路）。ハンドラがなければ止めて報告する |
 
 ### 直せない差
 
@@ -483,9 +494,10 @@ NP21/W では SSE の命令が CR4 に関係なく実行されるので、0F 10�
 
 ### 実装の置き場所と検証
 
-ring 0 で動く C（`_r0.c`）。命令の読み解きとオペランドの読み書きは `mon_peek` / `mon_poke` で行う。
-検証は、V30 固有の命令を含むゲストコードを DOSBox 上のモニタで走らせ、結果をホスト OS 上で計算した
-期待値と比べる。DOSBox と NP21/W が該当するバイト列で例外を起こすかは未確認（§12）。
+ring 0 で動く C（`src/mon/v30_r0.c`）。命令の読み解きとオペランドの読み書きは `mon_peek` / `mon_poke` で行う。
+検証は `tests/monprobe`: V30 固有の命令を既知の値で実行する断片（`guest.S` の `g_v30_*`）を走らせ、報告された
+レジスタとメモリの値を表の期待値と比べる。例外にならずに実行された断片（そのホストでは SSE や RDTSC に当たる）は
+「この CPU では見ない」と報告して飛ばす。届き方の記録は §12。
 
 ## 15. スイッチの反映
 

@@ -12,6 +12,7 @@
         .global g_exit, g_iopl, g_hlt, g_hlt_at, g_hlt_cli, g_hlt_cli_at
         .global g_remap, g_reset, g_priv, g_priv_at
         .global g_io, g_io_native, g_ios, g_irq, g_irq98, g_sep, g_sep_end, g_bios, g_bios_end
+        .global g_v30_bitc, g_v30_biti, g_v30_bcd, g_v30_rot, g_v30_ins, g_v30_insi, g_v30_ext, g_v30_exti
         .global rm_inb, rm_isr08, rm_isr17, rm_old08, rm_old17, rm_cnt08, rm_cnt17
 
 g_exit:
@@ -191,6 +192,198 @@ g_ios:
 
 ios_src:        .byte   0x11, 0x22, 0x33
 ios_dst:        .word   0, 0, 0x5A5A
+
+/*
+ * V30 固有の命令の代行 (design.md §14)。命令はバイト列で置く。期待値は monprobe.c の表。
+ * 386 以降で例外にならずに実行される並び (SSE や RDTSC に当たる) は、ホストによっては代行が効かないので、
+ * monprobe.c は例外が記録されなかった断片を「この CPU では見ない」として飛ばす
+ */
+/* TEST1 AL,CL (81h の bit 7 → ZF = 0)、CLR1 BL,CL (CL = 14h → bit 4) */
+g_v30_bitc:
+        mov     al, 0x81
+        mov     cl, 7
+        .byte   0x0F, 0x10, 0xC0
+        pushf
+        pop     ax
+        int     0x80
+        mov     bl, 0xFF
+        mov     cl, 0x14
+        .byte   0x0F, 0x12, 0xC3
+        mov     al, bl
+        xor     ah, ah
+        int     0x80
+        int     0xFE
+
+/* TEST1 AL,3 (81h の bit 3 → ZF = 1)、SET1 word ptr cs:[v30_w],15、NOT1 BH,0 */
+g_v30_biti:
+        mov     al, 0x81
+        .byte   0x0F, 0x18, 0xC0, 0x03
+        pushf
+        pop     ax
+        int     0x80
+        mov     word ptr cs:[v30_w], 0x1234
+        .byte   0x2E, 0x0F, 0x1D, 0x06
+        .word   v30_w
+        .byte   0x0F
+        mov     ax, cs:[v30_w]
+        int     0x80
+        mov     bh, 0x00
+        .byte   0x0F, 0x1E, 0xC7, 0x00
+        mov     al, bh
+        xor     ah, ah
+        int     0x80
+        int     0xFE
+v30_w:  .word   0
+
+/* ADD4S: 5678 + 2345 = 8023 (CF = 0)、SUB4S: 5678 - 2345 = 3333 */
+g_v30_bcd:
+        push    ds
+        push    es
+        mov     ax, cs
+        mov     ds, ax
+        mov     es, ax
+        mov     word ptr cs:[v30_dst], 0x5678
+        mov     si, offset v30_src
+        mov     di, offset v30_dst
+        mov     cl, 4
+        .byte   0x0F, 0x20
+        pushf
+        pop     ax
+        int     0x80
+        mov     ax, cs:[v30_dst]
+        int     0x80
+        mov     word ptr cs:[v30_dst], 0x5678
+        mov     cl, 4
+        .byte   0x0F, 0x22
+        mov     ax, cs:[v30_dst]
+        int     0x80
+        pop     es
+        pop     ds
+        int     0xFE
+
+/*
+ * CMP4S: 1111 - 2345 で借り (CF = 1)、先は変わらない。並び 0F 26 は 386 / 486 ではテストレジスタへの MOV で、
+ * NP21/W の CPU コアはこれを実装しておらず止まる (ia32_panic) ので、monprobe の引数 notr で飛ばす
+ */
+        .global g_v30_cmp4s
+g_v30_cmp4s:
+        push    ds
+        push    es
+        mov     ax, cs
+        mov     ds, ax
+        mov     es, ax
+        mov     word ptr cs:[v30_dst], 0x1111
+        mov     si, offset v30_src
+        mov     di, offset v30_dst
+        mov     cl, 4
+        .byte   0x0F, 0x26
+        pushf
+        pop     ax
+        int     0x80
+        mov     ax, cs:[v30_dst]
+        int     0x80
+        pop     es
+        pop     ds
+        int     0xFE
+v30_src:        .byte   0x45, 0x23
+v30_dst:        .word   0
+
+/* ROL4 BL (AL = 05h、BL = 12h → BL = 25h、AL = 01h)、ROR4 BL (→ BL = 51h、AL = 02h) */
+g_v30_rot:
+        mov     al, 0x05
+        mov     bl, 0x12
+        .byte   0x0F, 0x28, 0xC3
+        mov     ah, bl
+        int     0x80
+        mov     al, 0x05
+        mov     bl, 0x12
+        .byte   0x0F, 0x2A, 0xC3
+        mov     ah, bl
+        int     0x80
+        int     0xFE
+
+/* INS BL,BH: AX = 0Fh を ES:DI のビット 4 から 4 ビット → 00F0h、BL = 8 */
+g_v30_ins:
+        push    es
+        mov     ax, cs
+        mov     es, ax
+        mov     word ptr cs:[v30_fld], 0
+        mov     word ptr cs:[v30_fld + 2], 0
+        mov     di, offset v30_fld
+        mov     ax, 0x000F
+        mov     bl, 4
+        mov     bh, 3
+        .byte   0x0F, 0x31, 0xFB
+        mov     ax, cs:[v30_fld]
+        int     0x80
+        mov     al, bl
+        xor     ah, ah
+        int     0x80
+        pop     es
+        int     0xFE
+v30_fld:        .word   0, 0
+
+/* INS CL,9: AX = 3FFh (10 ビット) をビット 12 から → 語をまたぐ。F000h / 003Fh、CL = 6、DI は 2 進む */
+g_v30_insi:
+        push    es
+        mov     ax, cs
+        mov     es, ax
+        mov     word ptr cs:[v30_fld], 0
+        mov     word ptr cs:[v30_fld + 2], 0
+        mov     di, offset v30_fld
+        mov     ax, 0x03FF
+        mov     cl, 12
+        .byte   0x0F, 0x39, 0xC1, 0x09
+        mov     ax, cs:[v30_fld]
+        int     0x80
+        mov     ax, cs:[v30_fld + 2]
+        int     0x80
+        mov     al, cl
+        xor     ah, ah
+        int     0x80
+        mov     ax, di
+        sub     ax, offset v30_fld
+        int     0x80
+        pop     es
+        int     0xFE
+
+/* EXT BL,BH: F0F0h のビット 4 から 4 ビット → AX = 000Fh、BL = 8 */
+g_v30_ext:
+        push    ds
+        mov     ax, cs
+        mov     ds, ax
+        mov     word ptr cs:[v30_fld], 0xF0F0
+        mov     word ptr cs:[v30_fld + 2], 0x003F
+        mov     si, offset v30_fld
+        mov     bl, 4
+        mov     bh, 3
+        .byte   0x0F, 0x33, 0xFB
+        int     0x80
+        mov     al, bl
+        xor     ah, ah
+        int     0x80
+        pop     ds
+        int     0xFE
+
+/* EXT CL,9: F0F0h / 003Fh のビット 12 から 10 ビット → AX = 03FFh、CL = 6、SI は 2 進む */
+g_v30_exti:
+        push    ds
+        mov     ax, cs
+        mov     ds, ax
+        mov     word ptr cs:[v30_fld], 0xF0F0
+        mov     word ptr cs:[v30_fld + 2], 0x003F
+        mov     si, offset v30_fld
+        mov     cl, 12
+        .byte   0x0F, 0x3B, 0xC1, 0x09
+        int     0x80
+        mov     al, cl
+        xor     ah, ah
+        int     0x80
+        mov     ax, si
+        sub     ax, offset v30_fld
+        int     0x80
+        pop     ds
+        int     0xFE
 
 /*
  * ハードウェア割り込みの反射。ベクタ 8 (タイマ) に自前のハンドラを掛け、2 回数えるまで待つ。

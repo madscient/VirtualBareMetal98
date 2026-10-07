@@ -89,6 +89,7 @@ u8 vid_color16, vid_anapal[16 * 3];
 u8 vid_gdisp, vid_tdisp;
 static u8 vid_anaidx;           /* アナログパレットで次に書かれる番号 (A8h) */
 u8 dip_on, dip_sw[3];
+u8 v30_on;
 u16 iotrap_guest[IOTRAP_MAX], iotrap_host[IOTRAP_MAX];
 u8 iotrap_n;
 
@@ -198,10 +199,31 @@ u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
     return 0;
 }
 
+/* ゲストがベクタ vec に自前のハンドラを持つか (こちらが差し替えた横取り印や空のベクタでない) */
+static int guest_handles(u8 vec)
+{
+    u16 seg = mon_peek16((u16)(vec * 4 + 2)), off = mon_peek16((u16)(vec * 4));
+
+    return seg != HOOK_PAGE_SEG && (seg | off) != 0;
+}
+
+/*
+ * 例外。-v30 では V30 固有の命令 (未定義命令例外か、エラーコード 0 の一般保護例外として届く) を代行する (§14)。
+ * 代行できないゼロ除算と未定義命令は、ゲストが自前のハンドラを持っていれば INT 0 / INT 6 として反射する
+ * (V30 のゼロ除算は戻り番地が命令の次なので、-v30 では命令の長さぶん IP を進める)。持っていなければ止めて報告する
+ */
 u16 mon_on_fault(u8 vec, u32 err, struct mon_vframe *f, struct mon_gregs *r)
 {
-    (void)err;
-    (void)r;
+    u16 len;
+
+    if (v30_on && (vec == 6 || (vec == 13 && err == 0)) && mon_v30_emulate(f, r))
+        return 0;
+    if ((vec == 0 || vec == 6) && guest_handles(vec)) {
+        if (vec == 0 && v30_on && (len = mon_v30_div_len(f)) != 0)
+            f->eip = (f->eip & 0xFFFF0000UL) | (u16)((u16)f->eip + len);
+        mon_reflect(vec, f);
+        return 0;
+    }
     log_ev(vec, EV_FAULT_EV, f, (u16)r->eax);
     return X_FAULT;
 }

@@ -7,8 +7,10 @@
  * サウンド BIOS の ROM を見せる。ゲストが割り込み禁止のまま HLT したら VM メニューを開き、リセット (ゲスト、
  * ホットキー、メニュー) はイメージから再起動し、想定外の例外を起こしたら MS-DOS に戻る。
  *
- * まだないもの: -v30 の反映、ホストの RAM を指すベクタの ROM エントリ探し (いまは「何もせずに戻る」印へ
- * 差し替える)、PC-9801VM 相当の機種判別フラグ。コンソール (printf) の文言は ASCII。
+ * -v30 では V30 固有の命令を代行する (src/mon/v30_r0.c)。
+ *
+ * まだないもの: ホストの RAM を指すベクタの ROM エントリ探し (いまは「何もせずに戻る」印へ差し替える)、
+ * PC-9801VM 相当の機種判別フラグ。コンソール (printf) の文言は ASCII。
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -132,28 +134,12 @@ static int eq(const char *a, const char *b)
     return *a == *b;
 }
 
+/* 16 進 2 桁 × n バイト (開発用のオプション向け。'*' の印は捨てる)。成功で 0 */
 static int hexbytes(const char *s, u8 *out, int n)
 {
-    int i, k;
-    u8 v;
+    u8 mask[8];
 
-    for (i = 0; i < n; i++) {
-        v = 0;
-        for (k = 0; k < 2; k++) {
-            char c = s[i * 2 + k];
-
-            if (c >= '0' && c <= '9')
-                v = (u8)(v * 16 + (c - '0'));
-            else if (c >= 'a' && c <= 'f')
-                v = (u8)(v * 16 + (c - 'a' + 10));
-            else if (c >= 'A' && c <= 'F')
-                v = (u8)(v * 16 + (c - 'A' + 10));
-            else
-                return 1;
-        }
-        out[i] = v;
-    }
-    return s[n * 2] != 0;
+    return n > 8 || optval_hexmask(s, out, mask, n);
 }
 
 /* -sbrom <ファイル名>[,C8|CC]。アドレスは C8000h か CC000h (省略時)。ファイル名はコンマの前まで */
@@ -272,11 +258,13 @@ static int parse_args(int argc, char **argv, struct opts *o)
  * -iotrap: "<guest>=<host>,..." の一覧か、1 行に "<guest> <host>" を並べた定義ファイル (spec.md)。
  * '=' を含めば一覧、含まなければファイル名とみなす。表は ring 0 側 (vbm.h) に直接入れる
  */
+static char iotrap_buf[2048];   /* 定義ファイルの中身 (64 個の表なら十分。stdio の fopen を使わないのはコードの大きさのため) */
+
 static int iotrap_setup(const char *v)
 {
-    FILE *f;
-    char line[80];
-    int lineno = 0;
+    int handle, lineno = 0;
+    unsigned got;
+    char *line, *p;
 
     if (strchr(v, '=')) {
         if (optval_iotrap_list(v, iotrap_guest, iotrap_host, &iotrap_n, IOTRAP_MAX)) {
@@ -285,20 +273,28 @@ static int iotrap_setup(const char *v)
         }
         return 0;
     }
-    f = fopen(v, "r");
-    if (!f) {
+    if (_dos_open(v, 0, &handle) != 0) {
         printf("VBM98: cannot open the -iotrap file: %s\n", v);
         return 1;
     }
-    while (fgets(line, sizeof line, f)) {
+    if (_dos_read(handle, (void __far *)iotrap_buf, sizeof iotrap_buf - 1, &got) != 0 || got >= sizeof iotrap_buf - 1) {
+        printf("VBM98: cannot read the -iotrap file (or it is larger than %u bytes): %s\n", (unsigned)(sizeof iotrap_buf - 2), v);
+        _dos_close(handle);
+        return 1;
+    }
+    _dos_close(handle);
+    iotrap_buf[got] = 0;
+    for (line = iotrap_buf; *line; line = p) {
+        for (p = line; *p && *p != '\n'; p++)
+            ;
+        if (*p)
+            *p++ = 0;
         lineno++;
         if (optval_iotrap_line(line, iotrap_guest, iotrap_host, &iotrap_n, IOTRAP_MAX)) {
             printf("VBM98: bad -iotrap line %d in %s: %s\n", lineno, v, line);
-            fclose(f);
             return 1;
         }
     }
-    fclose(f);
     return 0;
 }
 
@@ -1158,8 +1154,7 @@ int main(int argc, char **argv)
         return 2;
     if (check_v86())
         return 1;
-    if (!o.v30)
-        printf("VBM98: note: -v30 is accepted but not applied yet\n");
+    v30_on = (u8)o.v30;
     if (o.have_dipsw) {
         u8 hsw[3];
 

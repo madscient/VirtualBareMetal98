@@ -10,7 +10,10 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 out="$root/build/dos"
 mkdir -p "$out"
 
-model="-mcmodel=small -march=i80286 -Os -std=gnu99"
+# 関数とデータを節に分け、リンク時に参照されないものを捨てる (--gc-sections)。small モデルのコードセグメントは
+# 64KB で、本体はその近くまで使っている
+model="-mcmodel=small -march=i80286 -Os -std=gnu99 -ffunction-sections -fdata-sections"
+ldflags="-Wl,--gc-sections"
 strict="-Wall -Wextra -Wconversion -Wshadow -Werror"
 loose="-Wall -Wextra -Werror"
 inc="-I $root/src/core -I $root/src/dos -I $root/src/mon -I $root/tests/imgdump -I $root/tests/monprobe -I $out"
@@ -44,7 +47,7 @@ cc_r0() {
 
 link() {
     # shellcheck disable=SC2086
-    ia16-elf-gcc $model -o "$out/$1" $objs $libs
+    ia16-elf-gcc $model $ldflags -o "$out/$1" $objs $libs
     # shellcheck disable=SC2086
     ia16-elf-size $objs
     ls -l "$out/$1" | awk -v n="$1" '{print $5, "bytes ", n}'
@@ -66,6 +69,7 @@ link FDBTEST.EXE
 cc src/mon/mon.c "$strict"
 cc src/mon/monmem.c "$strict"
 cc_r0 src/mon/mon_r0.c
+cc_r0 src/mon/v30_r0.c
 cc src/mon/monasm.S ""
 cc src/dos/xms.c "$strict"
 cc src/dos/xmsasm.S ""
@@ -83,6 +87,7 @@ cc src/dos/pio.S ""
 cc src/mon/mon.c "$strict"
 cc src/mon/monmem.c "$strict"
 cc_r0 src/mon/mon_r0.c
+cc_r0 src/mon/v30_r0.c
 cc src/mon/monasm.S ""
 cc_r0 src/dos/vbm_r0.c
 cc src/core/png.c "$strict"
