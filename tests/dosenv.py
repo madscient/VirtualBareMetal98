@@ -20,7 +20,8 @@ ENVS = (('dosbox', 'VBM_DOSBOX'), ('np21w', 'VBM_NP21W'), ('dosboxx', 'VBM_DOSBO
 PC98_ENVS = ('np21w', 'dosboxx')
 
 # DOSBox-X を PC-98 として。EMS を切るのは、内蔵の EMM が CPU を仮想86 にする設定があり、リアルモードの DOS として
-# 試験したいため (EMM の下の試験は NP21/W の v86 で行う)
+# 試験したいため (EMM の下の試験は NP21/W の v86 で行う)。cputype=486 は DOSBox と同じ理由 (ソースでは 486 だと
+# 0F 10〜1F・28・2A・31 が未定義命令になる。src/cpu/core_normal/prefix_0f.h、prefix_0f_mmx.h)
 DOSBOXX_CONF = """[sdl]
 output=surface
 [dosbox]
@@ -28,6 +29,7 @@ machine=pc98
 memsize=16
 [cpu]
 core=%s
+cputype=486
 cycles=max
 [dos]
 xms=true
@@ -40,12 +42,15 @@ call %s
 exit
 """
 
+# cputype を 486 に固定するのは、後の世代の命令 (RDTSC = 0F 31 など) を未定義命令例外にして、同じバイト列の
+# V30 の命令 (INS reg,reg) の代行を試験できるようにするため。auto だと RDTSC として実行されてしまう
 DOSBOX_CONF = """[sdl]
 output=surface
 [dosbox]
 memsize=16
 [cpu]
 core=%s
+cputype=486_slow
 cycles=max
 [autoexec]
 mount c "%s"

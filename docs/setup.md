@@ -87,9 +87,9 @@ NP21/W を利用者自身が起動している間は、起動イメージが使�
 
 | エミュレータ | 分かっていること |
 | --- | --- |
-| DOSBox 0.74-3 | `-conf <設定> -noconsole -exit` と環境変数 `SDL_VIDEODRIVER=dummy` で、窓なしの無人実行ができる（`tests/dosenv.py`）。保護モードを使う試験は CPU の再現方式を `core=normal` にして走らせている |
+| DOSBox 0.74-3 | `-conf <設定> -noconsole -exit` と環境変数 `SDL_VIDEODRIVER=dummy` で、窓なしの無人実行ができる（`tests/dosenv.py`）。保護モードを使う試験は CPU の再現方式を `core=normal` にして走らせている。CPU の種類は `cputype=486_slow` に固定している（`auto` だと RDTSC などの後の世代の命令が実行されてしまい、同じバイト列の V30 の命令の代行を試験できない） |
 | NP21/W スターターセット | FreeDOS(98) の起動イメージ、ホストのフォルダを Z: として見せる HOSTDRV、エミュレータを終了させる `PWOFF.COM` が入っている。設定ファイルは実行ファイルと同名の `.ini`（UTF-16）で、起動イメージ（`HDD1FILE`）と共有フォルダ（`hdrvroot`）を相対パスで指している。起動イメージの AUTOEXEC.BAT は `HOSTDRV Z` のあと `Z:\AUTOEXEC.BAT` を呼ぶので、そこを差し替えれば無人で任意のバッチを流せる。FDCONFIG.SYS が FDXMS286.SYS を読むので XMS が使える。起動中は起動イメージが排他ロックされ、他から読めない |
-| DOSBox-X（2026.10.01 の Windows 向けビルド） | 試験の実行環境として組み込んだ（`tests/dosenv.py` の `dosboxx`）が、開発機では起動直後にプロセスが止まり（窓が出ず、`-version` でも戻らない）、試験は走っていない。原因は未確認で、試験の側の問題か環境の問題かも切り分けられていない。別の機械で `VBM_DOSBOXX` を設定して `python tests/run_dos_tests.py mon` が通るかを見れば分かる。初回起動で作業フォルダを尋ねる版があるので `-nopromptfolder` を付けている |
+| DOSBox-X（2026.10.01 の Windows 向けビルド） | 試験の実行環境として組み込んだ（`tests/dosenv.py` の `dosboxx`）が、開発機では起動直後にプロセスが止まり（窓が出ず、`-version` でも戻らない）、試験は走っていない。`-version` でも止まるので試験の側の問題ではない。セキュリティソフトがこの実行ファイルを「評価が定まっていない」として検出した記録があるが、許可したあとも止まったままで、それだけで説明できるかは未確認。別の機械で `VBM_DOSBOXX` を設定して `python tests/run_dos_tests.py mon` が通るかを見る。初回起動で作業フォルダを尋ねる版があるので `-nopromptfolder` を付けている。ソースを読んだ限りでは、`cputype=486` で V30 と重なる並びが例外になり、`-silent` で窓なしに走り、machine の既定（PC）でも使えるので、DOSBox の代わりになる見込み（未検証。design.md §12） |
 | MS-DOS Player | DOS の実行ファイルをコンソールで直接走らせるもの。標準入出力をパイプにして起動すると戻ってこなかった。原因は調べていない。使っていない |
 
 エミュレータを新しい形で起動するときは、必ず時間切れを付ける。対話待ちになって戻らないことがある。
