@@ -387,6 +387,10 @@ NP21/W の FreeDOS(98) + HIMEMX + EMM386（NOEMS）で `run_dos_tests.py v86` �
   `-sbrom`、`-iotrap`、リセット、メニュー中のグラフィック非表示、文字列 I/O、2DD の装備情報、`-log`、版の表示）。
   リリース前の全試験で img が NP21/W で 18 件落ちたが、再実行では DOSBox・NP21/W とも全件通った（一過性。試験中に
   窓が操作された可能性があるが未確認）。master の版は `0.1.1+` に戻した
+- 2026-10-07: 利用者が DOSBox-X を用意したので、試験の実行環境 `dosboxx`（`VBM_DOSBOXX`、machine=pc98）を `tests/dosenv.py`
+  に足し、本体の試験の「PC-98 でだけ走る」判定を `dosenv.pc98()` にまとめた。**DOSBox-X での試験は未実行**: 開発機では
+  DOSBox-X のプロセスが起動直後に止まり（スレッド 1 本がカーネル内で待ったまま、窓なし。`-version` でも同じ）、
+  1 度も走らなかった。原因は未確認（setup.md）。既存の 2 環境は変更後も通る（DOSBox の mon、NP21/W の mon と boot2dd）
 
 ## 見送った提案
 

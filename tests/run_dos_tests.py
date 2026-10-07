@@ -66,7 +66,7 @@ def test_mon(work):
     if os.path.exists(out):
         os.remove(out)
     # NP21/W の CPU コアは 0F 26 (386 の MOV TR) で止まる (ia32_panic) ので、その並びを使う V30 の試験 (CMP4S) を飛ばす
-    args = 'pc98 notr' if dosenv.name() == 'np21w' else 'pc'
+    args = {'np21w': 'pc98 notr', 'dosboxx': 'pc98'}.get(dosenv.name(), 'pc')
     finished = dosenv.run_batch(['MONPROBE.EXE %s > MON.OUT' % args], 300, core='normal')
     lines = imgtests.read_lines(work, 'MON.OUT') or []
     for line in lines:
@@ -90,7 +90,7 @@ def host_bytes(lines, label):
 def test_boot2dd(work):
     """2DD (640KB、512 バイト/セクタ) の RAW イメージから起動する。IPL は受け取った DA/UA (70h) と N=2 で INT 1Bh を呼ぶ。
     R=3 のパターンを読み、自分を R=5〜6 に書く。装備情報が 640KB インタフェースのドライブになっていることも見る"""
-    if dosenv.name() != 'np21w':
+    if not dosenv.pc98():
         print('2DD の起動: この環境は PC-98 ではないので走らせない')
         return True
     with open(os.path.join(BUILT, 'IPL2DD.BIN'), 'rb') as f:
@@ -135,7 +135,7 @@ def test_boot(work):
     """IPL が起動し、INT 1Bh の読み書きがイメージに届き、HLT で DOS に戻ることを見る。あわせて、-dipsw / -memsw
     ('*' の桁はホストの値)、-iotrap (定義ファイル)、-sbrom がゲストから見えること、IPL が起こすリセットと
     メニューからのリセットで IPL が読み直されて RAM が残ることを見る"""
-    if dosenv.name() != 'np21w':
+    if not dosenv.pc98():
         print('起動: この環境は PC-98 ではないので走らせない (本体が INT 18h と PC-98 の I/O ポートを使う)')
         return True
     with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
@@ -254,7 +254,7 @@ def read_png4(path):
 def test_shot(work):
     """スクリーンショット: 試験用の IPL (tests/boot/shotipl.S) が書いたテキストと色の帯が、
     -shotat で撮った 2 つの PNG に写るか。文字の形はフォント ROM 次第なので、色と有無だけを見る"""
-    if dosenv.name() != 'np21w':
+    if not dosenv.pc98():
         print('スクリーンショット: この環境は PC-98 ではないので走らせない')
         return True
     with open(os.path.join(BUILT, 'SHOTIPL.BIN'), 'rb') as f:
@@ -324,7 +324,7 @@ def test_menu(work):
     """VM メニュー: -menuat で開き、開発用のキー列で「3 (スクリーンショット)、ESC (知らせを閉じる)、ESC (閉じる)」を
     押したことにする。撮れた PNG にはメニューではなく IPL の画面が写り (開く前の画面を戻してから撮る)、
     ゲストが再開して -stopafter で止まることを見る"""
-    if dosenv.name() != 'np21w':
+    if not dosenv.pc98():
         print('VM メニュー: この環境は PC-98 ではないので走らせない')
         return True
     with open(os.path.join(BUILT, 'SHOTIPL.BIN'), 'rb') as f:
@@ -371,7 +371,7 @@ def test_v86(work):
     """EMM386 (VCPI あり) を読み込んだ DOS で、仮想86モードにいることを検出し、VCPI 経由で切り替えて起動試験の IPL が
     動くか。見るのは起動試験の一部 (INT 1Bh の往復とリセット) と、VCPI を使った旨の表示"""
     if dosenv.name() != 'np21w':
-        print('EMM 環境: この環境は PC-98 ではないので走らせない')
+        print('EMM 環境: NP21/W のスターターセット (FreeDOS の EMM386) でだけ走らせる')
         return True
     with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
         ipl = f.read()

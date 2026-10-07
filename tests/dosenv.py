@@ -1,9 +1,10 @@
 """DOS の実行環境でバッチを 1 本流す。
 
 実行環境は環境変数で選ぶ。
-    VBM_DOSENV   dosbox | np21w。省略時は、設定のあるものを dosbox → np21w の順で使う
-    VBM_DOSBOX   DOSBox の実行ファイル
-    VBM_NP21W    NP21/W スターターセットのフォルダ (np21x64w.exe、fdosboot.hdi、share がある場所)
+    VBM_DOSENV   dosbox | np21w | dosboxx。省略時は、設定のあるものを dosbox → np21w → dosboxx の順で使う
+    VBM_DOSBOX   DOSBox の実行ファイル (PC)
+    VBM_NP21W    NP21/W スターターセットのフォルダ (np21x64w.exe、fdosboot.hdi、share がある場所。PC-98)
+    VBM_DOSBOXX  DOSBox-X の実行ファイル (machine=pc98 で走らせる。PC-98。BIOS と DOS は DOSBox-X の内蔵のもの)
 
 試験のファイルは workdir() の返すディレクトリに置く。DOS 側ではそれがカレントドライブになる。
 """
@@ -15,7 +16,29 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BATCH = 'RUN.BAT'
 DONE = 'DONE.TXT'
 
-ENVS = (('dosbox', 'VBM_DOSBOX'), ('np21w', 'VBM_NP21W'))
+ENVS = (('dosbox', 'VBM_DOSBOX'), ('np21w', 'VBM_NP21W'), ('dosboxx', 'VBM_DOSBOXX'))
+PC98_ENVS = ('np21w', 'dosboxx')
+
+# DOSBox-X を PC-98 として。EMS を切るのは、内蔵の EMM が CPU を仮想86 にする設定があり、リアルモードの DOS として
+# 試験したいため (EMM の下の試験は NP21/W の v86 で行う)
+DOSBOXX_CONF = """[sdl]
+output=surface
+[dosbox]
+machine=pc98
+memsize=16
+[cpu]
+core=%s
+cycles=max
+[dos]
+xms=true
+ems=false
+umb=false
+[autoexec]
+mount c "%s"
+c:
+call %s
+exit
+"""
 
 DOSBOX_CONF = """[sdl]
 output=surface
@@ -60,10 +83,28 @@ def variables():
     return ' / '.join(var for _, var in ENVS)
 
 
+def pc98():
+    """選ばれている実行環境が PC-98 か (本体 VBM98.EXE の試験はそこでだけ走る)"""
+    return _select()[0] in PC98_ENVS
+
+
 def workdir():
     if _select()[0] == 'np21w':
         return os.path.join(ROOT, 'build', 'np2', 'share')
+    if _select()[0] == 'dosboxx':
+        return os.path.join(ROOT, 'build', 'dbx')
     return os.path.join(ROOT, 'build', 'dos')
+
+
+def _dosboxx(target, wd, timeout, core):
+    conf = os.path.join(wd, 'dosboxx.conf')
+    with open(conf, 'w') as f:
+        f.write(DOSBOXX_CONF % (core if core != 'auto' else 'normal', wd, BATCH))
+    # -conf を渡すので利用者の設定ファイルには左右されない。窓は出るが操作は要らない (終わると閉じる)。
+    # -nopromptfolder は、初回起動で作業フォルダを尋ねるダイアログを出させないため。
+    # 未検証: この引数と設定で最後まで走ったことはまだない (docs/setup.md)
+    subprocess.run([target, '-conf', conf, '-nopromptfolder', '-nogui', '-nomenu', '-fastlaunch', '-exit'], cwd=wd,
+                   stdin=subprocess.DEVNULL, timeout=timeout)
 
 
 def _dosbox(target, wd, timeout, core):
@@ -142,6 +183,8 @@ def run_batch(commands, timeout, core='auto', emm=False):
     try:
         if env == 'dosbox':
             _dosbox(target, wd, timeout, core)
+        elif env == 'dosboxx':
+            _dosboxx(target, wd, timeout, core)
         else:
             _np21w(target, wd, timeout, core, emm)
     except subprocess.TimeoutExpired:
