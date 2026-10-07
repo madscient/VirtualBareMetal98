@@ -1,8 +1,9 @@
 /*
  * 起動の試験に使う IPL。1FC0:0000 に 1024 バイトで置かれる前提。
  * INT 1Bh でセクタ 2 を読んで 16 ビットの和を取り、進入時の AL と読み込みのステータス、
- * 和、BIOS ワークエリアの結果 8 バイトを自分の中 (300h から) に書き込んでから、自分自身の
- * 1024 バイトをセクタ 3 に書き、割り込み禁止で HLT する。
+ * 和、BIOS ワークエリアの結果 8 バイト、DIP スイッチの読み出しポート (31h・33h・42h) の値、
+ * DIP スイッチから導かれるワークエリアの 5 バイト (0480h・0501h・053Ch・054Ch・054Dh) を
+ * 自分の中 (300h から) に書き込んでから、自分自身の 1024 バイトをセクタ 3 に書き、割り込み禁止で HLT する。
  */
         .arch   i386
         .intel_syntax noprefix
@@ -49,6 +50,23 @@ start:
         inc     di
         loop    2b
 
+        in      al, 0x31
+        mov     [rec_p31], al
+        in      al, 0x33
+        mov     [rec_p33], al
+        in      al, 0x42
+        mov     [rec_p42], al
+        mov     al, es:[0x0480]
+        mov     [rec_wa + 0], al
+        mov     al, es:[0x0501]
+        mov     [rec_wa + 1], al
+        mov     al, es:[0x053C]
+        mov     [rec_wa + 2], al
+        mov     al, es:[0x054C]
+        mov     [rec_wa + 3], al
+        mov     al, es:[0x054D]
+        mov     [rec_wa + 4], al
+
         /* 割り込みを許可したまましばらく回る。ハードウェア割り込みがゲストに届いても壊れないことを見る */
         sti
         mov     dx, 20
@@ -77,4 +95,8 @@ rec_st:         .byte   0
 rec_sum:        .word   0
 rec_res:        .skip   8
 rec_wst:        .byte   0
+rec_p31:        .byte   0
+rec_p33:        .byte   0
+rec_p42:        .byte   0
+rec_wa:         .skip   5
         .org    1024

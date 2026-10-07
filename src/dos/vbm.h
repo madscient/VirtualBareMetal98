@@ -43,6 +43,11 @@ extern u8 vid_pal[4];
 extern u8 vid_color16, vid_anapal[16 * 3];
 /* 開発用: COPY の代わりにスクリーンショットにするスキャンコード (0 なら無し)。-stopkey と同じ事情 */
 extern u8 kbd_shot_alt;
+/*
+ * -dipsw (design.md §15)。dip_on が 0 でなければ、ゲストが DIP スイッチを読むポート (31h・33h・42h) で
+ * dip_sw (SW1・SW2・SW3。bit n-1 が SW n、1 = OFF) から作った値を返す。ホストのスイッチは読むだけ
+ */
+extern u8 dip_on, dip_sw[3];
 
 /* 横取り印で受けたベクタの回数 (ring 0 側が数える) */
 extern u16 vec_hits[HOOK_VEC_MAX];

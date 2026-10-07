@@ -86,6 +86,24 @@ static u8 dev_shot_i;           /* 次に使う dev_shot_at の添字 */
 u8 vid_pal[4];
 u8 vid_color16, vid_anapal[16 * 3];
 static u8 vid_anaidx;           /* アナログパレットで次に書かれる番号 (A8h) */
+u8 dip_on, dip_sw[3];
+
+/*
+ * DIP スイッチの読み出しポートの代行 (design.md §15。ビットの割り当ては参考実装から)。
+ * 31h は SW2 の 8 ビットそのもの。33h は bit 3 だけが SW1-1 (ON で 1)、他は RS-232C とカレンダ時計の実物。
+ * 42h は bit 4 が SW1-3、bit 3 が SW1-8 (どちらも OFF で 1)、bit 1 が SW3-8 (OFF = V30 で 1)、他は実物
+ */
+static u16 dip_port(u16 port, u16 real)
+{
+    if (port == 0x31)
+        return dip_sw[1];
+    if (port == 0x33)
+        return (u16)((real & 0xFFF7) | ((dip_sw[0] & 0x01) ? 0 : 0x08));
+    if (port == 0x42)
+        return (u16)((real & 0xFFE5) | ((dip_sw[0] & 0x04) ? 0x10 : 0) |
+                     ((dip_sw[0] & 0x80) ? 0x08 : 0) | ((dip_sw[2] & 0x80) ? 0x02 : 0));
+    return real;
+}
 
 /*
  * キーボード割り込み。ホットキーを見るためにスキャンコードをここで読んでしまうので、ゲストには
@@ -189,6 +207,8 @@ u16 mon_on_in(u16 port, u8 size, u32 *val)
         return 0;
     }
     v = mon_in8(port);
+    if (dip_on && size == 1)
+        v = dip_port(port, v);
     if (port == KBD_STAT && size == 1 && kbd_pending)
         v |= KBD_RXRDY;
     if (port == 0x02 && dev_tick)

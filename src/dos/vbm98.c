@@ -1,14 +1,13 @@
 /*
  * VBM98: 仮想 PC-98 モニタの本体。
  *
- * いまできること: イメージをドライブに入れ、その IPL をゲスト専用メモリの上で起動し、
- * ゲストの INT 1Bh に fdbios で応える。ゲストが割り込み禁止のまま HLT するか、リセットするか、
- * 想定外の例外を起こしたら MS-DOS に戻る。
+ * いまできること: イメージをドライブに入れ、その IPL をゲスト専用メモリの上で起動し、ゲストの INT 1Bh に
+ * fdbios で応える。ホットキーで VM メニュー・ディスク交換・スクリーンショット・終了。-memsw と -dipsw は
+ * ゲストにだけ作用する (ホストのスイッチは読むだけ)。ゲストが割り込み禁止のまま HLT したら VM メニューを
+ * 開き、リセットするか想定外の例外を起こしたら MS-DOS に戻る。
  *
- * まだないもの: ホットキーと VM メニュー、ファイル選択、-v30 / -dipsw / -memsw の反映、
- * スイッチの読み出しの差し替え、ホストの RAM を指すベクタの ROM エントリ探し (いまは「何もせずに
- * 戻る」印へ差し替える)、PC-9801VM 相当の機種判別フラグ。コンソールの文言は日本語表示の仕組みが
- * できるまで ASCII。
+ * まだないもの: -v30 の反映、ホストの RAM を指すベクタの ROM エントリ探し (いまは「何もせずに戻る」印へ
+ * 差し替える)、PC-9801VM 相当の機種判別フラグ、リセットからの再起動。コンソール (printf) の文言は ASCII。
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -426,12 +425,29 @@ static void print_memsw(const char *label, const u8 __far *base)
 #define WA_CRT_MODE 0x053C
 #define WA_PRXCRT   0x054C
 #define WA_PRXDUPD  0x054D
+/* DIP スイッチから ITF が導く値の置き場 (同じく biosmem.h と一致。design.md §15) */
+#define WA_SYS_TYPE   0x0480   /* CPU の種別: 00h = V30、01h = 80286、03h = 80386 以上 */
+#define WA_BIOS_FLAG1 0x0501   /* bit 6: V30 */
 
 static u8 host_crt_mode, host_prxcrt, host_prxdupd;
 
 static u8 wa_peek(u16 off)
 {
     return *(u8 __far *)MK_FP(0, off);
+}
+
+/*
+ * -dipsw のとき、ITF が DIP スイッチから導いて BIOS ワークエリアに書く値を、ホストから写したあとでゲストの
+ * 値に直す (式は参考実装 bios_reinitbyswitch から。design.md §15)。桁数・行数 (053Ch) は video_guest が
+ * INT 18h で設定するのでここでは触らない。SW3-8 が ON のときの CPU 種別はホストの値のまま (80386 以上)
+ */
+static void dipsw_workarea(void)
+{
+    g_rmw8(WA_PRXCRT, (u8)(((dip_sw[0] & 0x01) ? 0 : 0x40) | ((dip_sw[0] & 0x80) ? 0 : 0x01)), 0x41);
+    g_rmw8(WA_PRXDUPD, (u8)((dip_sw[1] & 0x80) ? 0 : 0x20), 0x20);
+    g_rmw8(WA_BIOS_FLAG1, (u8)((dip_sw[2] & 0x80) ? 0x40 : 0), 0x40);
+    if (dip_sw[2] & 0x80)
+        g_rmw8(WA_SYS_TYPE, 0x00, 0xFF);
 }
 
 static void int18(u8 ah, u8 al, u8 ch)
@@ -448,18 +464,24 @@ static void int18(u8 ah, u8 al, u8 ch)
 /*
  * 表示系を電源投入直後 (BIOS が IPL を呼ぶ時点) の状態にする。ホストの BIOS に設定させるので、
  * あとで写す BIOS ワークエリアもその状態になる。初期値は NP2 系の BIOS 実装のリセット処理から:
- *   CRT モード = 04h (簡易グラフィック属性) + SW2-3 (40 桁) + SW2-4 (20 行)。桁数と行数は DIP スイッチの
- *   読み出しがまだないので、ホストの現在値 (BIOS が起動時に同じ式で決めたもの) をそのまま使う。
+ *   CRT モード = 04h (簡易グラフィック属性) + SW2-3 が OFF なら 20 行 (bit 1) + SW2-4 が OFF なら 40 桁 (bit 0)
+ *   (bios_screeninit)。-dipsw がなければ、ホストの BIOS が起動時に同じ式で決めた現在値の下位 2 ビットを使う。
  *   グラフィックは 640×200 (上)・カラー・ページ 0・表示 OFF・8 色、デジタルパレットは恒等、GRCG は OFF
  */
 static void video_guest(void)
 {
+    u8 crt_lo;
+
     host_crt_mode = wa_peek(WA_CRT_MODE);
     host_prxcrt = wa_peek(WA_PRXCRT);
     host_prxdupd = wa_peek(WA_PRXDUPD);
+    if (dip_on)
+        crt_lo = (u8)(((dip_sw[1] & 0x04) >> 1) | ((dip_sw[1] & 0x08) >> 3));
+    else
+        crt_lo = (u8)(host_crt_mode & 0x03);
     int18(0x41, 0, 0);
     int18(0x42, 0, 0x80);
-    int18(0x0A, (u8)(0x04 | (host_crt_mode & 0x03)), 0);
+    int18(0x0A, (u8)(0x04 | crt_lo), 0);
     int18(0x0C, 0, 0);
     int18(0x12, 0, 0);
     pio_out8(0x6A, 0x00);
@@ -595,6 +617,8 @@ static int setup_guest(u32 tables)
     g_write(0x1B * 4, mon_data_seg(), (u16)(unsigned)vec, 4);
     g_write(FDB_WA_EQUIP, mon_data_seg(), (u16)(unsigned)equip, 2);
     g_rmw8(WA_BOOT, dua, 0xFF);
+    if (dip_on)
+        dipsw_workarea();
 
     /*
      * ホストの RAM (MS-DOS や常駐物) を指すベクタは、ゲストのメモリには中身がない。
@@ -861,8 +885,12 @@ int main(int argc, char **argv)
     setvbuf(stdout, 0, _IONBF, 0);
     if (parse_args(argc, argv, &o))
         return 2;
-    if (o.have_dipsw || !o.v30)
-        printf("VBM98: note: -v30 / -dipsw are accepted but not applied yet\n");
+    if (!o.v30)
+        printf("VBM98: note: -v30 is accepted but not applied yet\n");
+    if (o.have_dipsw) {
+        dip_on = 1;
+        memcpy(dip_sw, o.dipsw, sizeof dip_sw);
+    }
     trace = o.trace;
     menu_debug = o.trace;
 
@@ -894,6 +922,12 @@ int main(int argc, char **argv)
     mon_trap_port(0xAC, 1);
     mon_trap_port(0xAE, 1);
     mon_trap_port(0x6A, 1);
+    /* DIP スイッチの読み出しポート。-dipsw があればゲストの値に差し替える (vbm_r0.c)。なければ素通し */
+    if (dip_on) {
+        mon_trap_port(0x31, 1);
+        mon_trap_port(0x33, 1);
+        mon_trap_port(0x42, 1);
+    }
 
     /* ゲストの割り込みマスクの初期値は、電源投入後の BIOS が残す値に近いホストの現在値 */
     host_imr_m = pio_in8(PIC_M_IMR);
@@ -904,6 +938,10 @@ int main(int argc, char **argv)
            host_imr_m, host_imr_s, guest_imr_m, guest_imr_s,
            pic_read(0x00, 0x0A), pic_read(0x08, 0x0A), pic_read(0x00, 0x0B), pic_read(0x08, 0x0B));
     print_memsw("host", MK_FP(TVRAM_SEG, MEMSW_OFF - 2));
+    /* 31h は SW2 そのもの。33h の bit 3 と 42h の bit 4・3・1 だけが SW1-1、SW1-3、SW1-8、SW3-8 (vbm_r0.c) */
+    printf("VBM98: host dipsw ports 31h 33h 42h: %02X %02X %02X\n", pio_in8(0x31), pio_in8(0x33), pio_in8(0x42));
+    if (dip_on)
+        printf("VBM98: guest dipsw SW1-3: %02X %02X %02X\n", dip_sw[0], dip_sw[1], dip_sw[2]);
     if (dev_tick) {
         /* 8253 のカウンタ 0 を約 10ms (2.4576MHz / 6000h) の矩形波にし、IRQ0 をモニタの時計にする */
         mon_trap_port(PIC_M_IMR, 1);

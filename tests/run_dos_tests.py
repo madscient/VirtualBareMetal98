@@ -68,8 +68,10 @@ def test_boot(work):
     out = os.path.join(work, 'BOOT.OUT')
     if os.path.exists(out):
         os.remove(out)
-    # 割り込み禁止の HLT で VM メニューが開くので、開発用のキー列で「4. 終了」→ Y を押したことにする
-    finished = dosenv.run_batch(['VBM98.EXE -fdd0 B.IMG -trace -menukeys 04,15 > BOOT.OUT'], 180, core='normal')
+    # 割り込み禁止の HLT で VM メニューが開くので、開発用のキー列で「4. 終了」→ Y を押したことにする。
+    # -dipsw は NP21/W の既定 (3E 73 7B) と、見ているビット全部で違う値にする。SW2-3 を OFF (20 行) にし、
+    # SW2-4 は ON のまま (80 桁。40 桁だとメニューの表示が崩れる)
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 B.IMG -trace -menukeys 04,15 -dipsw C1F4FB > BOOT.OUT'], 180, core='normal')
     lines = imgtests.read_lines(work, 'BOOT.OUT') or []
     for line in lines:
         print('  ' + line)
@@ -84,6 +86,14 @@ def test_boot(work):
         ('INT 1Bh read returned 00h', rec[0x309] == 0),
         ('sector 2 contents arrived in the guest', int.from_bytes(rec[0x30A:0x30C], 'little') == want_sum),
         ('result bytes in the work area: ST0=00, next R=3', rec[0x30C] == 0 and rec[0x311] == 3),
+        ('port 31h returns the guest SW2 (F4h)', rec[0x315] == 0xF4),
+        ('port 33h bit 3 follows SW1-1 (OFF -> 0)', (rec[0x316] & 0x08) == 0),
+        ('port 42h bits 4/3/1 follow SW1-3 ON, SW1-8 OFF, SW3-8 OFF', (rec[0x317] & 0x1A) == 0x0A),
+        ('work area 0480h: SW3-8 OFF -> V30 (00h)', rec[0x318] == 0x00),
+        ('work area 0501h bit 6: SW3-8 OFF -> 1', (rec[0x319] & 0x40) == 0x40),
+        ('work area 053Ch: 20 rows (SW2-3 OFF) and 80 columns (SW2-4 ON)', (rec[0x31A] & 0x03) == 0x02),
+        ('work area 054Ch bits 6/0: SW1-1 OFF, SW1-8 OFF -> 0', (rec[0x31B] & 0x41) == 0),
+        ('work area 054Dh bit 5: SW2-8 OFF -> 0', (rec[0x31C] & 0x20) == 0),
     )
     ok = True
     for name, c in checks:
