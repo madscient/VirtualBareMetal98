@@ -25,3 +25,12 @@ pio_out8:
         out     dx, al
         pop     bp
         ret
+
+/*
+ * u16 cpu_msw(void): CR0 の下位 16 ビット。SMSW は特権命令ではなく、仮想86モードでも実行できて
+ * 実物の CR0 を返すので、bit 0 (PE) が立っていれば EMM などの仮想86モニタの下にいる (design.md §13)
+ */
+        .global cpu_msw
+cpu_msw:
+        smsw    ax
+        ret

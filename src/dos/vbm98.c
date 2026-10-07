@@ -36,6 +36,33 @@
 
 u8 pio_in8(u16 port);
 void pio_out8(u16 port, u8 val);
+u16 cpu_msw(void);
+
+static int v86;     /* EMM などの仮想86モニタの下で動いている (VCPI 経由で切替する) */
+
+/*
+ * EMM などの仮想86モニタの下で起動したかを見る (design.md §13、worklog の残作業 7)。CR0 の PE が立っていれば
+ * 仮想86モード。VCPI (INT 67h AX=DE00h。ベクタが空なら EMS 自体がない) があればそれを使い、なければ止める。
+ * 1 本のバイナリで起動時に判定する (spec.md 2026-10-07)。0 で続行、1 で止める
+ */
+static int check_v86(void)
+{
+    union REGS r;
+    u32 vec67 = *(u32 __far *)MK_FP(0, 0x67 * 4);
+
+    if (!(cpu_msw() & 1))
+        return 0;
+    r.x.ax = 0xDE00;
+    if (vec67)
+        int86(0x67, &r, &r);
+    if (!vec67 || r.h.ah != 0) {
+        printf("VBM98: running under a V86 monitor without VCPI. Boot without the EMM driver\n");
+        return 1;
+    }
+    printf("VBM98: running under a V86 monitor (VCPI %u.%u)\n", r.h.bh, r.h.bl);
+    v86 = 1;
+    return 0;
+}
 
 struct opts {
     const char *fdd[DRIVES];
@@ -806,6 +833,11 @@ static int setup_guest(u32 tables)
     if (sbrom_path && sbrom_setup(sbrom_path, sbrom_lin))
         return 1;
     mon_init(&pg);
+    /* EMM の下では、ホスト向けの 0 番ページ表の先頭 1MB をサーバに埋めさせ、切替を VCPI 経由にする (mon.h) */
+    if (v86 && mon_vcpi_setup(pg.pde0_host & ~0xFFFUL)) {
+        printf("VBM98: VCPI setup (AX=DE01h) failed\n");
+        return 1;
+    }
     mon_hook_add(HOOK_PAGE_LIN, HOOK_INT1B);
     mon_hook_add(RESET_LIN, HOOK_RESET);
     mon_hook_add(HOOK_PAGE_LIN + HOOK_KBD_OFF, HOOK_KBD);
@@ -1120,6 +1152,8 @@ int main(int argc, char **argv)
     setvbuf(stdout, 0, _IONBF, 0);
     if (parse_args(argc, argv, &o))
         return 2;
+    if (check_v86())
+        return 1;
     if (!o.v30)
         printf("VBM98: note: -v30 is accepted but not applied yet\n");
     if (o.have_dipsw) {

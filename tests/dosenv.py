@@ -77,11 +77,30 @@ def _dosbox(target, wd, timeout, core):
                    stdin=subprocess.DEVNULL, timeout=timeout)
 
 
-def _np21w(src, share, timeout, core):
+# 起動イメージの FDCONFIG.SYS のうち、XMS ドライバの行と、コメントアウトされた HIMEMX / EMM386 の行。
+# EMM 環境の試験では、複製した起動イメージの中でこの並びを同じ長さの文字列に書き換えて EMM386 を読み込ませる
+# (FAT を触らずに済むよう、長さは変えない。見つからなければ止める)
+CONFIG_PLAIN = b'DEVICE=FDXMS286.SYS\r\n\r\nrem DEVICE=386\\HIMEMX.EXE\r\nrem DEVICE=386\\EMM386.EXE'
+CONFIG_EMM = b'rem DEVICE=FDXMS286.SYS\r\nDEVICE=386\\HIMEMX.EXE\r\nDEVICE=386\\EMM386.EXE NOEMS'
+assert len(CONFIG_PLAIN) == len(CONFIG_EMM)
+
+
+def _patch_emm(hdi):
+    with open(hdi, 'rb') as f:
+        data = f.read()
+    n = data.count(CONFIG_PLAIN)
+    if n != 1:
+        raise RuntimeError('起動イメージの FDCONFIG.SYS に想定の行が %d 箇所ある (1 箇所のはず): %s' % (n, hdi))
+    with open(hdi, 'wb') as f:
+        f.write(data.replace(CONFIG_PLAIN, CONFIG_EMM))
+
+
+def _np21w(src, share, timeout, core, emm=False):
     """スターターセット一式を build/np2 に複製し、その share をバッチの置き場にして走らせる。
 
     利用者の一式には書き込まない。起動イメージと設定ファイルは実行のたびに複製し直す
     (エミュレータが終了時に設定を書き戻し、DOS が起動イメージに書くことがあるため)。
+    emm なら複製した起動イメージの FDCONFIG.SYS を HIMEMX + EMM386 (NOEMS) を読む形に書き換える。
     窓は出るが操作は要らない。core は使わない。
     """
     dst = os.path.dirname(share)
@@ -93,6 +112,8 @@ def _np21w(src, share, timeout, core):
         s = os.path.join(src, n)
         if os.path.exists(s):
             shutil.copy2(s, os.path.join(dst, n))
+    if emm:
+        _patch_emm(os.path.join(dst, 'fdosboot.hdi'))
     if not os.path.isdir(os.path.join(share, 'NP2TOOLS')):
         shutil.copytree(os.path.join(src, 'share'), share, dirs_exist_ok=True)
     with open(os.path.join(share, 'AUTOEXEC.BAT'), 'w', newline='') as f:
@@ -100,14 +121,17 @@ def _np21w(src, share, timeout, core):
     subprocess.run([os.path.join(dst, exe)], cwd=dst, stdin=subprocess.DEVNULL, timeout=timeout)
 
 
-def run_batch(commands, timeout, core='auto'):
+def run_batch(commands, timeout, core='auto', emm=False):
     """commands を順に実行する。最後まで走ったら True。
 
     core は DOSBox の CPU の再現方式。保護モードを使う試験は、命令を逐次解釈する 'normal' を指定する。
+    emm は NP21/W だけ: EMM386 (VCPI あり) を読み込んだ DOS で走らせる。
     """
     env, target = _select()
     if not env:
         raise RuntimeError('DOS の実行環境が未指定: ' + variables())
+    if emm and env != 'np21w':
+        raise RuntimeError('EMM 環境の試験は NP21/W だけ')
     wd = workdir()
     os.makedirs(wd, exist_ok=True)
     done = os.path.join(wd, DONE)
@@ -119,7 +143,7 @@ def run_batch(commands, timeout, core='auto'):
         if env == 'dosbox':
             _dosbox(target, wd, timeout, core)
         else:
-            _np21w(target, wd, timeout, core)
+            _np21w(target, wd, timeout, core, emm)
     except subprocess.TimeoutExpired:
         pass
     return os.path.exists(done)

@@ -21,6 +21,7 @@
         .global mon_stack_top, mon_vframe, mon_gregs_entry
         .global mon_pd_phys, mon_pd_lin, mon_pde0_host, mon_pde0_guest
         .global mon_rm_cs, mon_panic_vec, mon_panic_stack
+        .global mon_vcpi_on, mon_vcpi_entry, mon_vcpi_sw, mon_pm_start
 
 mon_stack:      .skip   MON_STACK_SIZE
 mon_stack_top:
@@ -44,6 +45,16 @@ exit_code:      .skip   2
 mon_panic_vec:  .skip   2
 mon_halt_bp:    .skip   2
 mon_halt_vec:   .skip   2
+/*
+ * VCPI (EMM の下)。mon_vcpi_on が 0 以外なら、モード切替を自分で CR0 を触らずにサーバに頼む。
+ * mon_vcpi_sw は AX=DE0Ch に渡す構造体 (CR3、GDTR と IDTR の線形番地、LDTR、TR、CS:EIP の PWORD。22 バイト)、
+ * mon_vcpi_entry はサーバの保護モード側の入口 (32 ビットのオフセットとセレクタ)。mon.c が埋める
+ */
+mon_vcpi_on:    .skip   2
+        .balign 4
+mon_vcpi_sw:    .skip   22
+        .balign 4
+mon_vcpi_entry: .skip   6
 
 /*
  * 仮想86モードからの進入では、CPU は必ず ring 0 スタックの頂上から積み始める。
@@ -94,6 +105,8 @@ mon_enter:
 
         /* TSS は一度 LTR すると busy になり、そのままでは次回の LTR が例外になる */
         mov     byte ptr [mon_gdt + MON_SEL_TSS + 5], 0x89
+        cmp     word ptr [mon_vcpi_on], 0
+        jne     enter_vcpi
         lgdtd   [mon_gdt_ptr]
         lidtd   [mon_idt_ptr]
         mov     eax, [mon_pd_phys]
@@ -105,7 +118,20 @@ mon_enter:
         /* ここまでは恒等写像で実行している。この jmp で別名の番地へ移る */
         jmp     MON_SEL_CODE:pm_start
 
+        /*
+         * EMM の下 (仮想86モード) では CR0 に触れない。VCPI のサーバに AX=DE0Ch で切替を頼む。ESI は構造体の
+         * 線形番地 (1MB 未満)。サーバが CR3・GDTR・IDTR・LDTR・TR を入れて、構造体の CS:EIP (pm_start) へ飛ばす。
+         * 割り込みは禁止のまま。ここへは戻らない
+         */
+enter_vcpi:
+        movzx   esi, word ptr [rm_ds]
+        shl     esi, 4
+        add     esi, offset mon_vcpi_sw
+        mov     ax, 0xDE0C
+        int     0x67
+
 pm_start:
+mon_pm_start:
         mov     ax, MON_SEL_DATA
         mov     ds, ax
         mov     es, ax
@@ -122,8 +148,12 @@ pm_start:
         xor     ax, ax
         lldt    ax
         mov     gs, ax
+        /* VCPI 経由ではサーバが構造体の TR を入れてくるので、ここで LTR すると busy で例外になる */
+        cmp     word ptr [mon_vcpi_on], 0
+        jne     1f
         mov     ax, MON_SEL_TSS
         ltr     ax
+1:
         /* NT が立ったままだと IRETD がタスク切替として解釈される */
         pushd   2
         popfd
@@ -228,7 +258,37 @@ leave_pm:
         mov     fs:[edx], eax
         mov     eax, [mon_pd_phys]
         mov     cr3, eax
+        cmp     word ptr [mon_vcpi_on], 0
+        jne     leave_vcpi
         jmp     MON_SEL_CODE_LOW:leave_low
+
+        /*
+         * VCPI で仮想86 (EMM の下) へ戻る。約束 (VCPI 1.0): DS は線形番地全体を指す平坦なセレクタ、SS:ESP は 1MB 未満の
+         * 線形番地、スタックに戻り先の GS・FS・DS・ES・SS・ESP・EFLAGS (サーバが入れる)・CS・EIP を 4 バイトずつ積み、
+         * EAX=DE0Ch でサーバの入口を 32 ビットの far call で呼ぶ。割り込みは禁止のまま。戻り先は rm_back。
+         * SS を低位のセレクタにしても SP はそのまま使える (同じデータセグメントの中)
+         */
+leave_vcpi:
+        mov     ax, MON_SEL_DATA_LOW
+        mov     ss, ax
+        movzx   esp, sp
+        movzx   eax, word ptr [rm_ds]
+        push    eax
+        push    eax
+        push    eax
+        push    eax
+        push    eax
+        movzx   eax, word ptr [rm_sp]
+        push    eax
+        pushd   0
+        movzx   eax, word ptr [mon_rm_cs]
+        push    eax
+        mov     eax, offset rm_back
+        push    eax
+        mov     ax, MON_SEL_FLAT
+        mov     ds, ax
+        mov     eax, 0xDE0C
+        call    fword ptr ss:[mon_vcpi_entry]
 
 leave_low:
         mov     ax, MON_SEL_DATA_LOW
@@ -258,8 +318,11 @@ rm_back:
         xor     ax, ax
         mov     fs, ax
         mov     gs, ax
+        /* EMM の下では IDT はサーバが戻していて、LIDT は特権命令で実行できない */
+        cmp     word ptr [mon_vcpi_on], 0
+        jne     1f
         data32  lidt [rm_idt_ptr]
-        mov     ax, [exit_code]
+1:      mov     ax, [exit_code]
         popf
         pop     es
         pop     di
@@ -302,6 +365,34 @@ mon_lin:
         add     eax, edx
         mov     edx, eax
         shr     edx, 16
+        pop     bp
+        ret
+
+/*
+ * u16 mon_vcpi_de01(u16 pt_seg, u16 gdt_off, u32 *entry)  リアルモード (EMM の下の仮想86) 専用
+ * VCPI の保護モードインタフェースの取得 (INT 67h AX=DE01h)。ES:DI = ページ表 (pt_seg:0)、DS:SI = GDT の 3 項。
+ * サーバがページ表の先頭 1MB ぶんとサーバ自身の分、GDT の 3 項を埋める。
+ * 出口: AX = 状態 (0 で成功)、*entry = サーバの入口のオフセット (EBX)。保存: SI, DI, ES。壊す: AX, EBX, DX
+ */
+        .global mon_vcpi_de01
+mon_vcpi_de01:
+        push    bp
+        mov     bp, sp
+        push    si
+        push    di
+        push    es
+        mov     es, [bp + 4]
+        xor     di, di
+        mov     si, [bp + 6]
+        mov     ax, 0xDE01
+        int     0x67
+        mov     si, [bp + 8]
+        mov     [si], ebx
+        mov     al, ah
+        xor     ah, ah
+        pop     es
+        pop     di
+        pop     si
         pop     bp
         ret
 

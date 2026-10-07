@@ -7,7 +7,9 @@
 #define MON_SEL_TSS       0x20
 #define MON_SEL_CODE_LOW  0x28
 #define MON_SEL_DATA_LOW  0x30
-#define MON_GDT_SIZE      0x38
+/* VCPI (EMM の下で動くとき): サーバのコードセグメントと、サーバ用の 2 項 (INT 67h AX=DE01h が埋める) */
+#define MON_SEL_VCPI      0x38
+#define MON_GDT_SIZE      0x50
 
 #define MON_STACK_SIZE  1024
 #define MON_TSS_BASE    104
@@ -98,6 +100,14 @@ void monmem_build(struct mon_paging *pg, u32 tables_phys, u32 guest_phys);
 void monmem_map(u32 lin, u32 phys);
 
 void mon_init(const struct mon_paging *pg);
+
+/*
+ * EMM などの仮想86モニタの下で起動したとき (CR0 の PE が立っている)、VCPI のクライアントとして動く準備。
+ * mon_init のあとに呼ぶ。pt0_phys はホスト向けの 0 番ページ表 (1MB 未満。monmem_build が作ったもの) で、
+ * サーバが先頭 1MB とサーバ自身の分の項を埋める。以後、モード切替は VCPI 経由 (INT 67h AX=DE0Ch と、サーバの
+ * 保護モード側の入口) になる。0 で成功
+ */
+int mon_vcpi_setup(u32 pt0_phys);
 
 /* ポートの I/O をトラップするかどうか。トラップしたものは mon_on_in / mon_on_out に届く */
 void mon_trap_port(u16 port, int on);

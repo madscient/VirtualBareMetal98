@@ -282,8 +282,49 @@ def test_menu(work):
     return ok
 
 
+def test_v86(work):
+    """EMM386 (VCPI あり) を読み込んだ DOS で、仮想86モードにいることを検出し、VCPI 経由で切り替えて起動試験の IPL が
+    動くか。見るのは起動試験の一部 (INT 1Bh の往復とリセット) と、VCPI を使った旨の表示"""
+    if dosenv.name() != 'np21w':
+        print('EMM 環境: この環境は PC-98 ではないので走らせない')
+        return True
+    with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
+        ipl = f.read()
+    pattern = bytes((i * 13 + 7) & 0xFF for i in range(1024))
+    img = bytearray(77 * 2 * 8 * 1024)
+    img[0:1024] = ipl
+    img[1024:2048] = pattern
+    with open(os.path.join(work, 'E.IMG'), 'wb') as f:
+        f.write(img)
+    out = os.path.join(work, 'V86.OUT')
+    if os.path.exists(out):
+        os.remove(out)
+    finished = dosenv.run_batch(['MEM /C > V86.OUT', 'VBM98.EXE -fdd0 E.IMG -trace -menukeys 04,15 >> V86.OUT'],
+                                180, core='normal', emm=True)
+    lines = imgtests.read_lines(work, 'V86.OUT') or []
+    for line in lines:
+        print('  ' + line)
+    with open(os.path.join(work, 'E.IMG'), 'rb') as f:
+        rec = f.read()[2048:3072]
+    want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 1024, 2)) & 0xFFFF
+    checks = (
+        ('batch finished', finished),
+        ('EMM386 is loaded in that DOS', any('EMM386' in l for l in lines)),
+        ('VBM98 detected the V86 monitor and found VCPI', any('V86 monitor (VCPI' in l for l in lines)),
+        ('guest halted and VBM98 returned to DOS', any('halted' in l for l in lines) and any('back to DOS' in l for l in lines)),
+        ('IPL ran (after its own reset) and wrote itself to sector 3', rec[0x300:0x308] == b'VBM98IPL' and rec[0x31D] == 1),
+        ('sector 2 contents arrived in the guest', int.from_bytes(rec[0x30A:0x30C], 'little') == want_sum),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('EMM 環境: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
-         ('shot', 'VBM98.EXE', test_shot), ('menu', 'VBM98.EXE', test_menu))
+         ('shot', 'VBM98.EXE', test_shot), ('menu', 'VBM98.EXE', test_menu), ('v86', 'VBM98.EXE', test_v86))
 
 
 def main(argv):

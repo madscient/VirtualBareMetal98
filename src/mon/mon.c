@@ -11,8 +11,11 @@ extern u32 mon_pd_phys, mon_pd_lin, mon_pde0_host, mon_pde0_guest;
 extern u16 mon_rm_cs;
 extern u16 mon_panic_vec;
 extern u32 mon_panic_stack[4];
+extern u16 mon_vcpi_on;
+extern u8 mon_vcpi_sw[22], mon_vcpi_entry[6], mon_pm_start[];
 
 u16 mon_enter(void);
+u16 mon_vcpi_de01(u16 pt_seg, u16 gdt_off, u32 *entry);
 
 static u16 off(const void *p)
 {
@@ -93,6 +96,42 @@ void mon_init(const struct mon_paging *pg)
     mon_pd_lin = MON_ALIAS_BASE + pg->pd_phys;
     mon_pde0_host = pg->pde0_host;
     mon_pde0_guest = pg->pde0_guest;
+}
+
+static void put32(u8 *p, u32 v)
+{
+    p[0] = (u8)v;
+    p[1] = (u8)(v >> 8);
+    p[2] = (u8)(v >> 16);
+    p[3] = (u8)(v >> 24);
+}
+
+/*
+ * VCPI の約束 (VCPI 1.0、INT 67h AX=DE01h / DE0Ch。design.md §12): ページ表はサーバが先頭 1MB ぶんを埋め、
+ * GDT の 3 項の最初がサーバのコードセグメントになる。DE0Ch の構造体は CR3、GDTR / IDTR の 6 バイトの線形番地、
+ * LDTR、TR、CS:EIP。構造体と GDTR / IDTR は 1MB 未満の線形番地 (= データセグメントの実番地) に置く
+ */
+int mon_vcpi_setup(u32 pt0_phys)
+{
+    u32 entry, ds_lo = (u32)mon_data_seg() << 4;
+
+    if (mon_vcpi_de01((u16)(pt0_phys >> 4), (u16)(off(mon_gdt) + MON_SEL_VCPI), &entry))
+        return 1;
+    put32(mon_vcpi_entry, entry);
+    mon_vcpi_entry[4] = MON_SEL_VCPI;
+    mon_vcpi_entry[5] = 0;
+    put32(mon_vcpi_sw + 0x00, mon_pd_phys);
+    put32(mon_vcpi_sw + 0x04, ds_lo + off(mon_gdt_ptr));
+    put32(mon_vcpi_sw + 0x08, ds_lo + off(mon_idt_ptr));
+    mon_vcpi_sw[0x0C] = 0;
+    mon_vcpi_sw[0x0D] = 0;
+    mon_vcpi_sw[0x0E] = MON_SEL_TSS;
+    mon_vcpi_sw[0x0F] = 0;
+    put32(mon_vcpi_sw + 0x10, off(mon_pm_start));   /* 10h からの PWORD (6 バイト): EIP の dword と CS の word */
+    mon_vcpi_sw[0x14] = MON_SEL_CODE;
+    mon_vcpi_sw[0x15] = 0;
+    mon_vcpi_on = 1;
+    return 0;
 }
 
 extern struct mon_hook mon_hooks[MON_HOOK_MAX];
