@@ -38,6 +38,8 @@
 #define PIC_M_IMR       0x02        /* マスタ PIC の割り込みマスク (PC-98) */
 #define PIC_S_IMR       0x0A        /* スレーブ PIC の割り込みマスク */
 #define WA_BOOT         0x0584      /* 起動装置の DA/UA */
+#define WA_EXTMEM       0x0401      /* 拡張メモリ量 (16MB 未満、128KB 単位) */
+#define WA_EXTMEM16     0x0594      /* 拡張メモリ量 (16MB 以上、1MB 単位の語) */
 
 u8 pio_in8(u16 port);
 void pio_out8(u16 port, u8 val);
@@ -768,6 +770,7 @@ static int sbrom_setup(const char *path, u32 lin)
  */
 static int guest_memory(int first)
 {
+    static const u8 zero2[2] = { 0, 0 };
     u16 i, off;
     u8 vec[4] = { 0x00, 0x00, 0x00, 0xF7 };
     u8 ent[4];
@@ -778,6 +781,12 @@ static int guest_memory(int first)
     g_write(0x1B * 4, mon_data_seg(), (u16)(unsigned)vec, 4);
     boot_equip(equip);
     g_write(FDB_WA_EQUIP, mon_data_seg(), (u16)(unsigned)equip, 2);
+    /*
+     * ゲストには拡張メモリがない (spec.md)。0401h が 16MB 未満の量 (128KB 単位)、0594h の語が 16MB 以上の量 (1MB 単位)。
+     * ホストの XMS ドライバが 0 にしていることが多いが、それに頼らない (番地は参考実装の bios.c から。design.md §12)
+     */
+    g_rmw8(WA_EXTMEM, 0, 0xFF);
+    g_write(WA_EXTMEM16, mon_data_seg(), (u16)(unsigned)zero2, 2);
     g_rmw8(WA_BOOT, boot_dua(), 0xFF);
     if (dip_on)
         dipsw_workarea();

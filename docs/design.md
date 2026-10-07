@@ -149,7 +149,8 @@ BIOS ワークエリア（0000:0400–05FF）はホストのものを写し、�
 いまの実装（`vbm98.c`）はこのうち、ベクタ表とワークエリアの写し、INT 1Bh のベクタの差し替え、
 装備情報（FDD 2 台、HDD なし）、起動装置、IPL の読み込み、ベクタの規則のうち 1 と 3 の簡略版
 （RAM を指す 00h〜1Fh のベクタは、横取り印へ向けて「IRQ なら EOI を出して戻る」）、表示系の初期化
-（§16）、メモリスイッチの書き込み（`-memsw`）、DIP スイッチの反映（`-dipsw`。§15）、テキスト画面の消去まで。
+（§16）、メモリスイッチの書き込み（`-memsw`）、DIP スイッチの反映（`-dipsw`。§15）、拡張メモリ量を 0 にすること
+（0401h と 0594h の語）、テキスト画面の消去まで。
 規則 2（ROM エントリ探し）、機種判別のフラグ、キーバッファの消去は未実装。ハードウェア割り込みは、ゲストの
 割り込みマスクのままゲストへ届く。マスクの初期値はホストの現在値で、NP2 系の ITF が電源投入時に書く
 7Dh/71h と同じ（確認済み: NP2kai `bios/bios.c` の `bios_itfprepare` を読んだ。実機の ITF も同じ値かは
@@ -406,6 +407,7 @@ START / SYNC の表示 ON で 1、STOP / SYNC の表示 OFF で 0。起動時の
 | 実物の MS-DOS 5.00A（NEC、HIMEM.SYS だけ）の上では、RAM を指すベクタが 00・05・06・0D・1A・1F になる（FreeDOS(98) は 00・01・03・05・06・1F）。INT 1Ah（プリンタ・CMT の BIOS）と 0Dh（IRQ5）を DOS が横取りしているので、ゲストには「何もせずに戻る」印が見える | 確認済み（NP21/W + MS-DOS 5.00A） | `run_dos_tests.py msdos`。起動試験の IPL（INT 1Bh の往復とリセット）は通る。INT 1Ah を呼ぶゲストは未確認（§6 の規則 2 が要る例） |
 | NEC 版の EMM386.EXE（MS-DOS 5.00A）は、引数なしだと EMS だけを提供し、VCPI は提供しない: 仮想86 モード（CR0 の PE = 1）で、INT 67h AX=DE00h が AH = 84h（未定義の機能）を返す | 確認済み（NP21/W + MS-DOS 5.00A） | `run_dos_tests.py msdos`。VBM98 は「VCPI なし」と表示して止まる。実行ファイルの引数解析には `VCPI` という語との比較があるが、`/VCPI` と `VCPI` はどちらも「ドライバが組み込まれていない」結果になり、有効にする書き方は分かっていない（資料で確かめる） |
 | 参考実装の起動手順（`bootstrapload` → `boot_fd`）: ドライブごとに 1.25MB（DA 90h）、1.44MB（30h）、2DD（70h）の順に試し、起動した媒体に合わせて装備情報を 1MB インタフェース（下位バイト）か 640KB インタフェース（上位バイトの上位ニブル）の片方だけにする。IPL は N が 0 か FM か 1.44MB なら 1FE0:0000 に 512 バイト、それ以外は 1FC0:0000 に 1024 バイト | 未検証（NP2 の実装を読んだ） | NP2kai `bios/bios1b.c`（`boot_fd1`・`boot_fd`・`fddbios_equip`）。VBM98 は起動する媒体から同じ DA/UA と装備情報を作る（§6）。確認済み（NP21/W）: 2DD の RAW イメージで、受け取った 70h と N=2 で INT 1Bh の読み書きが通る（`run_dos_tests.py boot2dd`）|
+| 拡張メモリ量は BIOS ワークエリアの 0401h（16MB 未満、128KB 単位）と 0594h の語（16MB 以上、1MB 単位）。XMS ドライバを組み込んだホストでは、どちらも 0 になっている | 番地: 未検証（NP2 の実装を読んだ）。XMS があると 0: 確認済み（NP21/W の FDXMS286、DOSBox-X の内蔵 XMS） | NP2kai `bios/bios.c` の `bios_reinitbyswitch`。ゲストに見せる写しでは VBM98 が自分で 0 にする（§6）。試験 `hook` は、ホストの値を 0 以外にしてからゲストに 0 が見えることを確かめる（直す前は落ちた） |
 | EPSON の互換機でも動く | 推測 | 利用者の見立て。設計はホストの ROM・ワークエリア・スイッチの値をそのまま使い、NEC 固有の振る舞いに依っていない。実物では未確認。ハイレゾモードは VRAM と GDC の番地が違うので対象外（spec.md） |
 | グラフィック GDC（コマンド A2h、状態 A0h）: BCTRL の 0Ch が表示 OFF、0Dh が表示 ON。SYNC の 0Eh は表示 OFF、0Fh は表示 ON を伴う。START 6Bh は表示 ON。状態ポートの bit 1 が FIFO full、bit 2 が FIFO empty | 未検証（NP2 の実装を読んだ） | NP2kai `io/gdc.c`（`gdc_work` の CMD_START / CMD_START_ / CMD_SYNC_ON と CMD_STOP / CMD_STOP_ / CMD_SYNC_OFF、`gdc_ia0`）と `io/gdc_cmd.tbl` の対応表（0Ch STOP、0Dh START、0Eh / 0Fh SYNC、6Bh START）。μPD7220 の資料と実機では未確認。メニューのあいだの表示 OFF に使う（§9） |
 | 電源投入直後の表示系: CRT モード 04h（簡易グラフィック属性）+ SW2-3 が OFF なら 20 行（bit 1）+ SW2-4 が OFF なら 40 桁（bit 0）、グラフィックは 640×200・表示 OFF・ページ 0・8 色、GDC クロック 2.5MHz、デジタルパレットは恒等 | 未検証（NP2 の実装を読んだ） | NP2kai `bios/bios.c`（`bios_screeninit`: `4 + ((sw2 & 04h) >> 1) + ((sw2 & 08h) >> 3)`、`bios_reinitbyswitch`: PRXDUPD = 18h + SW2-8、bit 2 = 400 ライン）、`io/gdc.c`（`gdc_biosreset`、`defdegpal`）。実機の ITF は未確認 |

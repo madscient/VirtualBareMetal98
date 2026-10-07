@@ -198,6 +198,7 @@ def test_boot(work):
         ('IPL ran again after the reset it caused, with its RAM marker intact', rec[0x31D] == 1),
         ('VBM98 reported the reset from the guest and the one from the menu',
          any('reset (guest)' in l for l in lines) and any('reset (menu)' in l for l in lines)),
+        ('no extended memory is shown to the guest (0401h and 0594h are 0)', rec[0x32B:0x32E] == b'\0\0\0'),
         ('-log: the log file holds the same lines as the console (boot, INT 1Bh trace, resets, exit)',
          any('booting from drive' in l for l in loglines) and any(l.startswith('1B 5690') for l in loglines) and
          any('reset (menu)' in l for l in loglines) and any('back to DOS' in l for l in loglines)),
@@ -398,6 +399,55 @@ def test_v86(work):
     return ok
 
 
+def boot_rec(path):
+    """起動試験の IPL が自分のイメージ (セクタ 3) に書いた記録のうち、ホストの状態に関わるもの"""
+    with open(path, 'rb') as f:
+        rec = f.read()[2048:3072]
+
+    def far(off):
+        return '%04X:%04X' % (int.from_bytes(rec[off + 2:off + 4], 'little'), int.from_bytes(rec[off:off + 2], 'little'))
+
+    return {'ran': rec[0x300:0x308] == b'VBM98IPL', 'ext': rec[0x32B:0x32E], 'v1b': far(0x32E), 'f7': rec[0x332:0x336],
+            'v09': far(0x336), 'v1a': far(0x33A), 'hook': rec[0x33E]}
+
+
+def test_hook(work):
+    """ホストの DOS や常駐物が割り込みを横取りしている状態 (試験用の常駐プログラム HOSTTSR.COM で作る) で起動する。
+    見るもの: 拡張メモリ量をゲストに見せない (ホストの値が 0 でなくても)。同じバッチの中で、常駐の前と後に 1 回ずつ走らせる"""
+    with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
+        ipl = f.read()
+    img = bytearray(77 * 2 * 8 * 1024)
+    img[0:1024] = ipl
+    for name in ('H1.IMG', 'H2.IMG'):
+        with open(os.path.join(work, name), 'wb') as f:
+            f.write(img)
+    shutil.copy2(os.path.join(BUILT, 'HOSTTSR.COM'), os.path.join(work, 'HOSTTSR.COM'))
+    for name in ('HOOK1.OUT', 'HOOK2.OUT'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 H1.IMG -menukeys 04,15 > HOOK1.OUT', 'HOSTTSR.COM',
+                                 'VBM98.EXE -fdd0 H2.IMG -menukeys 04,15 > HOOK2.OUT'], 180, core='normal')
+    for name in ('HOOK1.OUT', 'HOOK2.OUT'):
+        for line in imgtests.read_lines(work, name) or []:
+            if 'tvram row' not in line:
+                print('  %s: %s' % (name[:5], line))
+    a = boot_rec(os.path.join(work, 'H1.IMG'))
+    b = boot_rec(os.path.join(work, 'H2.IMG'))
+    print('  before the TSR: INT 09h %s, INT 1Ah %s, ext %s' % (a['v09'], a['v1a'], a['ext'].hex()))
+    print('  after the TSR:  INT 09h %s, INT 1Ah %s, ext %s' % (b['v09'], b['v1a'], b['ext'].hex()))
+    checks = (
+        ('batch finished', finished),
+        ('the IPL ran both before and after the TSR was loaded', a['ran'] and b['ran']),
+        ('no extended memory is shown to the guest although the host work area has some', b['ext'] == b'\0\0\0'),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('横取りされたホスト: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
 def test_msdos(work):
     """実物の MS-DOS (VBM_MSDOS の起動ディスクから起動) の上での動作。HIMEM.SYS だけの構成では起動試験の IPL が動くこと、
     MS-DOS の EMM386.EXE を読み込んだ構成 (NEC 版は既定で VCPI を提供しない) では、案内を出して止まることを見る。
@@ -455,7 +505,7 @@ def test_msdos(work):
 
 
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
-         ('msdos', 'VBM98.EXE', test_msdos),
+         ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos),
          ('boot2dd', 'VBM98.EXE', test_boot2dd),
          ('shot', 'VBM98.EXE', test_shot), ('menu', 'VBM98.EXE', test_menu), ('v86', 'VBM98.EXE', test_v86))
 

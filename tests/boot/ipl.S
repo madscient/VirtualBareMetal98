@@ -6,7 +6,8 @@
  * 和、BIOS ワークエリアの結果 8 バイト、DIP スイッチの読み出しポート (31h・33h・42h) の値、
  * DIP スイッチから導かれるワークエリアの 5 バイト (0480h・0501h・053Ch・054Ch・054Dh)、リセットを経たかの印、
  * メモリスイッチ 1〜8 (A3FE2h から 4 バイトおき)、-iotrap で 31h に読み替えるポート 0F31h の値、
- * サウンド BIOS (CC000h) の 4 バイト (先頭 2 つ、末尾、+2000h) を自分の中 (300h から) に書き込んでから、
+ * サウンド BIOS (CC000h) の 4 バイト (先頭 2 つ、末尾、+2000h)、拡張メモリ量、INT 1Bh・09h・1Ah のベクタと
+ * BASIC ROM の末尾のページの先頭 4 バイトを自分の中 (300h から) に書き込んでから、
  * 自分自身の 1024 バイトをセクタ 3 に書き、割り込み禁止で HLT する。
  */
 /*
@@ -123,6 +124,36 @@ after_reset:
         mov     al, es:[0x2000]
         mov     [rec_sb + 3], al
 
+        /* 拡張メモリ量 (0401h と 0594h の語)、INT 1Bh・09h・1Ah のベクタ、INT 1Bh の飛び先の 1 バイト、
+           BASIC ROM の末尾のページ (F700:0000 から 4 バイト) */
+        xor     ax, ax
+        mov     es, ax
+        mov     al, es:[0x0401]
+        mov     [rec_ext], al
+        mov     ax, es:[0x0594]
+        mov     [rec_ext + 1], ax
+        mov     ax, es:[0x1B * 4]
+        mov     [rec_v1b], ax
+        mov     ax, es:[0x1B * 4 + 2]
+        mov     [rec_v1b + 2], ax
+        mov     ax, es:[0x09 * 4]
+        mov     [rec_v09], ax
+        mov     ax, es:[0x09 * 4 + 2]
+        mov     [rec_v09 + 2], ax
+        mov     ax, es:[0x1A * 4]
+        mov     [rec_v1a], ax
+        mov     ax, es:[0x1A * 4 + 2]
+        mov     [rec_v1a + 2], ax
+        les     bx, [rec_v1b]
+        mov     al, es:[bx]
+        mov     [rec_hook], al
+        mov     ax, 0xF700
+        mov     es, ax
+        mov     ax, es:[0x0000]
+        mov     [rec_f7], ax
+        mov     ax, es:[0x0002]
+        mov     [rec_f7 + 2], ax
+
         /* 割り込みを許可したまましばらく回る。ハードウェア割り込みがゲストに届いても壊れないことを見る */
         sti
         mov     dx, 20
@@ -160,4 +191,10 @@ rec_reset:      .byte   0
 rec_msw:        .skip   8
 rec_pf31:       .byte   0
 rec_sb:         .skip   4
+rec_ext:        .skip   3
+rec_v1b:        .skip   4
+rec_f7:         .skip   4
+rec_v09:        .skip   4
+rec_v1a:        .skip   4
+rec_hook:       .byte   0
         .org    1024
