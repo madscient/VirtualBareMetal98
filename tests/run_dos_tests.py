@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """DOS 向けにビルドした試験プログラムを DOS 上で走らせる。
 
-    python tests/run_dos_tests.py [img] [fdb] [mon] [boot] [msdos] [boot2dd] [shot] [menu] [v86]
+    python tests/run_dos_tests.py [img] [fdb] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [shot] [menu] [v86]
 
     img      ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
     fdb      INT 1Bh の意味論 (fdbios)。同上
     mon      モニタ核。保護モード・仮想86モード・ページング・V30 の命令の代行
     boot     本体 (VBM98.EXE)。試験用の IPL を起動し、INT 1Bh の読み書き、スイッチ、リセットなどを見る
+    hook     ホストの割り込みが横取りされている状態での起動 (ROM の入口の追跡、拡張メモリ量)
     msdos    実物の MS-DOS の上での本体の動作 (NP21/W で、VBM_MSDOS を指定したときだけ)
+    nfdid    ID の C がシリンダ番号と違う NFD からの起動と、IPL が読めないときの表示
     boot2dd  2DD のイメージからの起動
     shot     スクリーンショット。試験用の IPL が書いた文字と色の帯が、-shotat で撮った PNG に写るか
     menu     VM メニュー。-menuat で開き -menukeys で操作して、画面の復元とゲストの再開を見る
@@ -539,8 +541,64 @@ def test_msdos(work):
     return ok
 
 
+def test_nfdid(work):
+    """NFD r1 のイメージから起動する。2 本: トラック 0 の R=1 の ID の C が 1 になっているもの (エミュレータ上で吸い出した
+    イメージに出る形。C を除いて照合して起動し、その旨を表示する) と、R=1 の収録ステータスが D0h のもの (IPL が読めず、
+    切り分けのためにトラック 0 の R=1 の ID を表示して終わる)"""
+    with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
+        ipl = f.read()
+    pattern = bytes((i * 13 + 7) & 0xFF for i in range(1024))
+    want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 1024, 2)) & 0xFFFF
+    data_at = 0
+    for name, c1, status1 in (('N1.NFD', 1, 0), ('N2.NFD', 0, 0xD0)):
+        disk = imgtests.mkimg.uniform('nb', 77, 2, 8, 3)
+        disk[0].sects[0].c = c1
+        disk[0].sects[0].status = status1
+        blob = bytearray(imgtests.mkimg.write_nfd1(disk, 0x90)[0])
+        # データ部の先頭がトラック 0 の R=1、続いて R=2、R=3
+        data_at = int.from_bytes(blob[0x110:0x114], 'little')
+        blob[data_at:data_at + 1024] = ipl
+        blob[data_at + 1024:data_at + 2048] = pattern
+        with open(os.path.join(work, name), 'wb') as f:
+            f.write(blob)
+    for name in ('NFD1.OUT', 'NFD2.OUT'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 N1.NFD -menukeys 04,15 > NFD1.OUT',
+                                 'VBM98.EXE -fdd0 N2.NFD -menukeys 04,15 > NFD2.OUT'], 180, core='normal')
+    out = {}
+    for name in ('NFD1.OUT', 'NFD2.OUT'):
+        out[name] = imgtests.read_lines(work, name) or []
+        for line in out[name]:
+            if 'tvram row' not in line:
+                print('  %s: %s' % (name[:4], line))
+    a, b = out['NFD1.OUT'], out['NFD2.OUT']
+    with open(os.path.join(work, 'N1.NFD'), 'rb') as f:
+        rec = f.read()[data_at + 2048:data_at + 3072]
+    checks = (
+        ('batch finished', finished),
+        ('R=1 with C=1: booted, and the note about the cylinder number is shown', any('matched without it' in l for l in a)),
+        ('R=1 with C=1: the IPL ran (after its own reset) and wrote itself to sector 3',
+         rec[0x300:0x308] == b'VBM98IPL' and rec[0x31D] == 1),
+        ('R=1 with C=1: sector 2 contents arrived in the guest', int.from_bytes(rec[0x30A:0x30C], 'little') == want_sum),
+        ('R=1 with C=1: the count of such sectors is reported at exit',
+         any('sectors matched without the cylinder number in their ID: 2' in l for l in a)),
+        ('R=1 recorded with status D0h: the IPL cannot be read', any('cannot read the IPL (status D0)' in l for l in b)),
+        ('R=1 recorded with status D0h: the IDs with R=1 on track 0 are listed',
+         any('track 0 has 8 sector IDs' in l and l.rstrip().endswith(': 00/00/03/D0') for l in b)),
+        ('R=1 recorded with status D0h: the guest did not run and VBM98 returned to DOS',
+         not any('halted' in l for l in b) and any('back to DOS' in l for l in b)),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('NFD の ID: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
-         ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos),
+         ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos), ('nfdid', 'VBM98.EXE', test_nfdid),
          ('boot2dd', 'VBM98.EXE', test_boot2dd),
          ('shot', 'VBM98.EXE', test_shot), ('menu', 'VBM98.EXE', test_menu), ('v86', 'VBM98.EXE', test_v86))
 

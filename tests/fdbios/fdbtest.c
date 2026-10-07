@@ -313,8 +313,11 @@ static void test_raw(void)
     check("wrong N: C0h", call(0x56, 0x90, 0, 0, 1, 2, 1024) == FDB_ST_NODATA);
     st = call(0x10, 0x90, 3, 0, 0, 0, 0);
     check("seek to cylinder 3", st == 0 && out.result_valid && out.result[7] == 3);
-    check("read without seek, ID cylinder differs from head position: D0h",
-          call(0x06, 0x90, 5, 0, 1, 3, 1024) == FDB_ST_BADCYL);
+    /* C が合う ID がなければ H・R・N が合う ID を採る (design.md §8)。ヘッドの位置のトラックのセクタが読まれる */
+    n = sector_want(RAW_2HD, 3, 0, 1, 0, 0);
+    st = call(0x06, 0x90, 5, 0, 1, 3, 1024);
+    check("read without seek, no ID has the requested cylinder: the sector under the head is read",
+          st == 0 && out.xfer == 1024 && same(n));
     check("read at the head position without seek bit", call(0x06, 0x90, 3, 0, 1, 3, 1024) == 0);
 
     st = call(0x5A, 0x90, 5, 0, 0, 0, 0);
@@ -404,6 +407,22 @@ static void test_nfd1(void)
     n = sector_want(NFD1_PROT, 1, 0, 2, 0, 0);
     st = call(0x56, 0x90, 1, 0, 2, 3, 1024);
     check("sector without a special entry reads normally", st == 0 && same(n));
+
+    /* シリンダ 4・ヘッド 0: ID の C がシリンダ番号と違うセクタ (tools/mkimg.py の nfd1_protect_disk) */
+    fb.cmiss = 0;
+    n = sector_want(NFD1_PROT, 4, 0, 1, 0, 0);
+    st = call(0x56, 0x90, 4, 0, 1, 3, 1024);
+    check("ID whose cylinder is one more than the track, no exact match: read by H, R and N, and counted",
+          st == 0 && out.xfer == 1024 && same(n) && fb.cmiss == 1);
+    n = sector_want(NFD1_PROT, 4, 0, 3, 0, 0);
+    st = call(0x56, 0x90, 4, 0, 3, 3, 1024);
+    check("two IDs with the same R: the one whose cylinder matches is used, not counted", st == 0 && same(n) && fb.cmiss == 1);
+    check("ID that differs in both cylinder and head: D0h", call(0x56, 0x90, 4, 0, 4, 3, 1024) == FDB_ST_BADCYL);
+    fill_both(5, 9);
+    st = call(0x55, 0x90, 4, 0, 1, 3, 1024);
+    BUF_SET(XFER_AT(0), 0, 1024);
+    st = (u8)(st | call(0x56, 0x90, 4, 0, 1, 3, 1024));
+    check("write and read back through an ID whose cylinder differs", st == 0 && same(1024));
 
     check("track with too many sectors to handle: E0h", call(0x56, 0x90, 2, 1, 1, 0, 128) == FDB_ST_NOAM);
     check("track recorded as empty: E0h", call(0x56, 0x90, 2, 0, 1, 3, 1024) == FDB_ST_NOAM);

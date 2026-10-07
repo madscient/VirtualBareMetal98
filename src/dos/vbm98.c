@@ -1030,9 +1030,21 @@ static int load_ipl(struct mon_guest *g)
     in.es = seg;
     fdb_call(&fb, &in, &out);
     if (out.ah != 0 || out.xfer != bytes) {
+        u8 i;
+
         say("VBM98: cannot read the IPL (status %02X)\n", out.ah);
+        /* 切り分けの材料。IPL のセクタの ID (H か N が合わない、収録時のステータスが異常) はイメージを見ないと分からない */
+        if (!dimg_get_track(&imgs[0], 0, 0, &t)) {
+            say("VBM98: track 0 has %u sector IDs; those with R=1 (C/H/N/recorded status):", t->nsect);
+            for (i = 0; i < t->nsect; i++)
+                if (t->sect[i].r == 1)
+                    say(" %02X/%02X/%02X/%02X", t->sect[i].c, t->sect[i].h, t->sect[i].n, t->sect[i].status);
+            say("\n");
+        }
         return 1;
     }
+    if (fb.cmiss)
+        say("VBM98: drive 0: the ID of the IPL sector has a cylinder number other than 0 (matched without it)\n");
     g_write(lin(seg, 0), xfer_seg(), 0, bytes);
 
     memset(g, 0, sizeof *g);
@@ -1053,6 +1065,8 @@ static void print_hits(void)
         if (vec_hits[v])
             say(" %02X=%u", v, vec_hits[v]);
     say("\n");
+    if (fb.cmiss)
+        say("VBM98: sectors matched without the cylinder number in their ID: %u\n", fb.cmiss);
 }
 
 /* ---------------------------------------------------------------- メニューからの再開 */

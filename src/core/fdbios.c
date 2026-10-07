@@ -49,23 +49,34 @@ static u8 eot(const dimg_track *t)
 }
 
 /*
- * トラック上で ID を探す。FDC と同じく、R が合って C が違えば「シリンダ違い」、
- * R が合って H か N が違えば「該当なし」、R が無ければ「該当なし」
+ * トラック上で ID を探す。C・H・R・N が全部合う ID を先に採る。無ければ、H・R・N が合って C だけ違う ID を採る
+ * (FDC はここで「シリンダ違い」を返すが、エミュレータ上で吸い出したイメージには ID の C が実物と違うものがあり、
+ * それを読めるようにするために照合を緩めている。docs/design.md §8)。
+ * R が合う ID が C も H か N も違うものだけなら「シリンダ違い」、R が合って H か N が違えば「該当なし」、
+ * R が無ければ「該当なし」
  */
 static u8 find(const dimg_track *t, u8 c, u8 h, u8 r, u8 n, const dimg_sect **s)
 {
+    const dimg_sect *alt = 0;
     u8 i, st = FDB_ST_NODATA;
 
     for (i = 0; i < t->nsect; i++) {
         if (t->sect[i].r != r)
             continue;
         if (t->sect[i].c != c) {
-            st = FDB_ST_BADCYL;
+            if (t->sect[i].h != h || t->sect[i].n != n)
+                st = FDB_ST_BADCYL;
+            else if (!alt)
+                alt = &t->sect[i];
             continue;
         }
         if (t->sect[i].h != h || t->sect[i].n != n)
             continue;
         *s = &t->sect[i];
+        return FDB_ST_OK;
+    }
+    if (alt) {
+        *s = alt;
         return FDB_ST_OK;
     }
     return st;
@@ -160,6 +171,8 @@ static u8 transfer(struct fdb *fb, dimg *img, const struct fdb_in *in, struct fd
         st = find(t, c, h, r, n, &s);
         if (st)
             break;
+        if (s->c != c && fb->cmiss != 0xFFFF)
+            fb->cmiss++;
         size = dimg_sect_size(s->n);
         len = (u16)(remain < size ? remain : size);
         if (op == OP_READ && dimg_read(img, s, pick_copy(fb, s->retry), xoff, len)) {

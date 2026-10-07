@@ -74,6 +74,7 @@ struct fdb {
     u8  last_unit, last_hd;
     u8  mode_2hd, mode_2dd; /* 動作モードのワークエリアの写し */
     u8  rot;                /* 複数通りのデータの巡回 */
+    u16 cmiss;              /* ID の C が要求と違うまま読み書きしたセクタの数 (FFFFh で頭打ち) */
 };
 
 void fdb_init(struct fdb *fb, u8 nunits);
