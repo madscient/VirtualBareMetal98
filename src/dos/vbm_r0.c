@@ -86,6 +86,7 @@ u32 dev_shot_at[2], dev_menu_at;
 static u8 dev_shot_i;           /* 次に使う dev_shot_at の添字 */
 u8 vid_pal[4];
 u8 vid_color16, vid_anapal[16 * 3];
+u8 vid_gdisp;
 static u8 vid_anaidx;           /* アナログパレットで次に書かれる番号 (A8h) */
 u8 dip_on, dip_sw[3];
 u16 iotrap_guest[IOTRAP_MAX], iotrap_host[IOTRAP_MAX];
@@ -263,6 +264,16 @@ u16 mon_on_out(u16 port, u8 size, u32 val)
     if (port == 0x02 && dev_tick) {
         guest_imr0 = (u8)(v & 1);
         v = (u16)(v & 0xFFFE);
+    }
+    /*
+     * グラフィック GDC のコマンド (A2h): 表示の ON/OFF を追う (design.md §9・§12)。START 6Bh、BCTRL の START 0Dh、
+     * SYNC の表示 ON 0Fh で ON、BCTRL の STOP 0Ch、SYNC の表示 OFF 0Eh で OFF。書き込みは実機へも通す
+     */
+    if (port == 0xA2 && size == 1) {
+        if (v == 0x0D || v == 0x0F || v == 0x6B)
+            vid_gdisp = 1;
+        else if (v == 0x0C || v == 0x0E)
+            vid_gdisp = 0;
     }
     mon_out8(port, (u8)v);
     if (size >= 2)

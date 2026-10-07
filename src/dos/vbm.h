@@ -42,6 +42,11 @@
  */
 extern u8 vid_pal[4];
 extern u8 vid_color16, vid_anapal[16 * 3];
+/*
+ * ゲストのグラフィック表示の ON/OFF (ring 0 側が、グラフィック GDC のコマンドポート A2h への書き込みを追って持つ)。
+ * メニューのあいだ表示を消して、閉じるときにこの状態へ戻す (design.md §9)。起動時の初期化で 0
+ */
+extern u8 vid_gdisp;
 /* 開発用: COPY の代わりにスクリーンショットにするスキャンコード (0 なら無し)。-stopkey と同じ事情 */
 extern u8 kbd_shot_alt;
 /*
@@ -83,6 +88,8 @@ int vm_mount(int unit, const char *path, int quiet);   /* 0 で成功。前に�
 void vm_eject(int unit);
 const char *vm_drive_name(int unit);                   /* 入っているイメージのパス。空なら "" */
 int vm_shot(char *gname);                              /* スクリーンショット。gname (13 バイト以上) に G 側のファイル名。0 なら名前はいらない */
+void vm_gdisp_pause(void);                             /* メニューを開く: グラフィック表示を GDC のコマンドで消す (VRAM には触らない) */
+void vm_gdisp_resume(void);                            /* メニューを閉じる: ゲストの状態 (vid_gdisp) が ON なら表示を戻す */
 
 /* 開発用: モニタに届いたものの記録 (ring 0 側が書き、ホストが止めたときに表示する) */
 #define EVLOG_SIZE 32

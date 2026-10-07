@@ -584,6 +584,7 @@ static void video_guest(void)
     else
         crt_lo = (u8)(host_crt_mode & 0x03);
     int18(0x41, 0, 0);
+    vid_gdisp = 0;
     int18(0x42, 0, 0x80);
     int18(0x0A, (u8)(0x04 | crt_lo), 0);
     int18(0x0C, 0, 0);
@@ -970,6 +971,31 @@ static void reset_vm(struct mon_guest *g, const char *why, int *running, int *co
     }
 }
 
+/* グラフィック GDC (コマンド A2h、状態 A0h) にコマンドを 1 バイト書く。FIFO が満杯なら空くのを待つ (上限つき) */
+static void gdc_cmd(u8 cmd)
+{
+    u16 n = 10000;
+
+    while ((pio_in8(0xA0) & 0x02) && --n)
+        ;
+    pio_out8(0xA2, cmd);
+}
+
+/*
+ * メニューのあいだグラフィック表示を消す (BCTRL の STOP)。VRAM とパレットには触らない (design.md §9)。
+ * 閉じるときは、ゲストが表示 ON にしていた (vid_gdisp) なら BCTRL の START で戻す
+ */
+void vm_gdisp_pause(void)
+{
+    gdc_cmd(0x0C);
+}
+
+void vm_gdisp_resume(void)
+{
+    if (vid_gdisp)
+        gdc_cmd(0x0D);
+}
+
 int vm_shot(char *gname)
 {
     struct shot_info si;
@@ -1140,6 +1166,8 @@ int main(int argc, char **argv)
     mon_trap_port(0xAC, 1);
     mon_trap_port(0xAE, 1);
     mon_trap_port(0x6A, 1);
+    /* グラフィック GDC のコマンド。表示の ON/OFF を追い、メニューのあいだ消した表示を戻すのに使う (vbm_r0.c、§9) */
+    mon_trap_port(0xA2, 1);
     /* DIP スイッチの読み出しポート。-dipsw があればゲストの値に差し替える (vbm_r0.c)。なければ素通し */
     if (dip_on) {
         mon_trap_port(0x31, 1);

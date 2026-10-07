@@ -10,6 +10,7 @@
 #include <libi86/string.h>
 #include "ui.h"
 #include "jis.h"
+#include "vbm.h"
 
 #define TVRAM_SEG  0xA000
 #define TVRAM_ATTR 0x2000
@@ -54,6 +55,7 @@ static void put_wide(u8 row, u8 col, u16 code, u8 attr)
 
 void ui_open(void)
 {
+    vm_gdisp_pause();   /* グラフィック表示を消す (閉じるときにゲストの状態へ戻す。design.md §9) */
     _fmemcpy(save_code, MK_FP(TVRAM_SEG, 0), SHOWN);
     _fmemcpy(save_attr, MK_FP(TVRAM_SEG, TVRAM_ATTR), SHOWN);
     ui_fill(0, 0, UI_COLS, UI_ROWS, UI_WHITE);
@@ -65,6 +67,7 @@ void ui_close(void)
 {
     _fmemcpy(MK_FP(TVRAM_SEG, 0), save_code, SHOWN);
     _fmemcpy(MK_FP(TVRAM_SEG, TVRAM_ATTR), save_attr, SHOWN);
+    vm_gdisp_resume();
 }
 
 void ui_fill(u8 row, u8 col, u8 w, u8 h, u8 attr)
