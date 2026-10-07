@@ -15,7 +15,7 @@ extern u16 mon_rm_cs;
 extern void g_exit(void), g_iopl(void), g_hlt(void), g_hlt_at(void), g_hlt_cli(void), g_hlt_cli_at(void);
 extern void g_reflect(void), g_int0d(void), g_int06(void), g_int00(void);
 extern void g_remap(void), g_reset(void), g_priv(void), g_priv_at(void);
-extern void g_io(void), g_io_native(void), g_ios(void), g_irq(void), g_irq98(void), g_sep(void), g_sep_end(void);
+extern void g_io(void), g_io_native(void), g_ios(void), g_irq98(void), g_sep(void), g_sep_end(void);
 extern void g_v30_bitc(void), g_v30_biti(void), g_v30_bcd(void), g_v30_cmp4s(void), g_v30_rot(void);
 static int no_tr;   /* 引数 notr: 0F 26 (386 の MOV TR) を実行すると止まるエミュレータでは CMP4S の試験を飛ばす */
 extern void g_v30_ins(void), g_v30_insi(void), g_v30_ext(void), g_v30_exti(void);
@@ -240,7 +240,7 @@ static int v30_bit_traps, v30_rot_traps;
  * モニタを使わず、リアルモードのままベクタ 08h と 17h の到着を数える。
  * モニタの下で見える割り込みが、この環境にもともとあるものかを切り分けるための参考情報
  */
-static void survey_irq(int pc98)
+static void survey_irq(void)
 {
     u16 cs = mon_rm_cs;
     u32 __far *old08 = MK_FP(cs, (unsigned)rm_old08);
@@ -260,10 +260,8 @@ static void survey_irq(int pc98)
         ;
     _dos_setvect(0x08, o08);
     _dos_setvect(0x17, o17);
-    printf("# real mode: int08=%u int17=%u during a spin", *cnt08, *cnt17);
-    if (pc98)
-        printf(", master IMR=%02X slave IMR=%02X", rm_inb(0x02), rm_inb(0x0A));
-    printf("\n");
+    printf("# real mode: int08=%u int17=%u during a spin, master IMR=%02X slave IMR=%02X\n",
+           *cnt08, *cnt17, rm_inb(0x02), rm_inb(0x0A));
 }
 
 /*
@@ -303,7 +301,7 @@ static void survey_bios_workarea(u16 handle, u32 guest_off, u32 phys)
         printf("# bios work area: no change observed on either side\n");
 }
 
-static void test_separation(int pc98)
+static void test_separation(void)
 {
     u8 __far *host500 = MK_FP(0, 0x500);
     u16 code = code_off(g_sep);
@@ -347,8 +345,7 @@ static void test_separation(int pc98)
     xms_move(0, xms_far(mon_data_seg(), (u16)(unsigned)back), handle, guest_off + 0x500, 2);
     check("guest memory: the write is visible in the extended memory block", back[0] == 0xA5);
 
-    if (pc98)
-        survey_bios_workarea(handle, guest_off, phys);
+    survey_bios_workarea(handle, guest_off, phys);
 
     xms_a20(0);
     xms_unlock(handle);
@@ -363,11 +360,9 @@ int main(int argc, char **argv)
     const struct event *e;
     u16 cs, rc, i;
     u8 orig;
-    int pc98 = argc > 1 && strcmp(argv[1], "pc98") == 0;
 
-    no_tr = argc > 2 && strcmp(argv[2], "notr") == 0;
-
-    printf("# machine: %s\n", pc98 ? "PC-98" : "PC");
+    /* PC-98 の上で走らせる前提 (割り込みコントローラとタイマのポート、INT 18h) */
+    no_tr = argc > 1 && strcmp(argv[1], "notr") == 0;
     tables = alloc_pages(MONMEM_TABLE_PAGES);
     pa = alloc_pages(3);
     if (!tables || !pa) {
@@ -534,13 +529,13 @@ int main(int argc, char **argv)
         probe_v30 = 0;
     }
 
-    survey_irq(pc98);
-    rc = run(pc98 ? g_irq98 : g_irq, 0);
+    survey_irq();
+    rc = run(g_irq98, 0);
     printf("# irq: handler count=%u, vector 8 arrivals=%u\n", rep[0], count(8, EV_INT));
     check("irq: finishes", rc == X_DONE && nrep == 1);
     check("irq: hardware interrupts are reflected to the guest's handler", rep[0] >= 2 && count(8, EV_INT) >= 2);
 
-    test_separation(pc98);
+    test_separation();
 
     printf("END %u %u\n", failures, checks);
     return failures != 0;

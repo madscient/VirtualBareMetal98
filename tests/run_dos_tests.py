@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """DOS 向けにビルドした試験プログラムを DOS 上で走らせる。
 
-    python tests/run_dos_tests.py [img] [mon] [boot]
+    python tests/run_dos_tests.py [img] [fdb] [mon] [boot] [msdos] [boot2dd] [shot] [menu] [v86]
 
-    img   ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
-    fdb   INT 1Bh の意味論 (fdbios)。同上
-    mon   モニタ核。保護モード・仮想86モード・ページングの動作
-    boot  本体 (VBM98.EXE)。試験用の IPL を起動し、INT 1Bh の読み書きが届くか。PC-98 の環境でだけ走る
-    shot  スクリーンショット。試験用の IPL が書いた文字と色の帯が、-shotat で撮った PNG に写るか。同上
-    menu  VM メニュー。-menuat で開き -menukeys で操作して、画面の復元とゲストの再開を見る。同上
+    img      ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
+    fdb      INT 1Bh の意味論 (fdbios)。同上
+    mon      モニタ核。保護モード・仮想86モード・ページング・V30 の命令の代行
+    boot     本体 (VBM98.EXE)。試験用の IPL を起動し、INT 1Bh の読み書き、スイッチ、リセットなどを見る
+    msdos    実物の MS-DOS の上での本体の動作 (NP21/W で、VBM_MSDOS を指定したときだけ)
+    boot2dd  2DD のイメージからの起動
+    shot     スクリーンショット。試験用の IPL が書いた文字と色の帯が、-shotat で撮った PNG に写るか
+    menu     VM メニュー。-menuat で開き -menukeys で操作して、画面の復元とゲストの再開を見る
+    v86      EMM386 (VCPI) の下での起動 (NP21/W だけ)
 
 引数を省くと全部を走らせる。事前に tools/build16.sh でビルドしておく。
-DOS の実行環境は環境変数で選ぶ (tests/dosenv.py)。DOSBox は PC-98 ではないので機種に依らない
-範囲の確認、NP21/W は PC-98 としての確認になる。本体は起動時に PC-98 の BIOS (INT 18h) と I/O ポートで
-表示系を初期化するので、PC の DOSBox では走らせない (PC の INT 18h は ROM BASIC)。
+DOS の実行環境は環境変数で選ぶ (tests/dosenv.py)。DOSBox-X と NP21/W のどちらも PC-98 として走る
+(BIOS と DOS の実装が違うので、片方の振る舞いに頼った箇所を見つけるために両方で走らせる)。
 """
 import os
 import shutil
@@ -66,7 +68,7 @@ def test_mon(work):
     if os.path.exists(out):
         os.remove(out)
     # NP21/W の CPU コアは 0F 26 (386 の MOV TR) で止まる (ia32_panic) ので、その並びを使う V30 の試験 (CMP4S) を飛ばす
-    args = {'np21w': 'pc98 notr', 'dosboxx': 'pc98'}.get(dosenv.name(), 'pc')
+    args = 'notr' if dosenv.name() == 'np21w' else ''
     finished = dosenv.run_batch(['MONPROBE.EXE %s > MON.OUT' % args], 300, core='normal')
     lines = imgtests.read_lines(work, 'MON.OUT') or []
     for line in lines:
@@ -90,9 +92,6 @@ def host_bytes(lines, label):
 def test_boot2dd(work):
     """2DD (640KB、512 バイト/セクタ) の RAW イメージから起動する。IPL は受け取った DA/UA (70h) と N=2 で INT 1Bh を呼ぶ。
     R=3 のパターンを読み、自分を R=5〜6 に書く。装備情報が 640KB インタフェースのドライブになっていることも見る"""
-    if not dosenv.pc98():
-        print('2DD の起動: この環境は PC-98 ではないので走らせない')
-        return True
     with open(os.path.join(BUILT, 'IPL2DD.BIN'), 'rb') as f:
         ipl = f.read()
     if len(ipl) != 1024:
@@ -135,9 +134,6 @@ def test_boot(work):
     """IPL が起動し、INT 1Bh の読み書きがイメージに届き、HLT で DOS に戻ることを見る。あわせて、-dipsw / -memsw
     ('*' の桁はホストの値)、-iotrap (定義ファイル)、-sbrom がゲストから見えること、IPL が起こすリセットと
     メニューからのリセットで IPL が読み直されて RAM が残ることを見る"""
-    if not dosenv.pc98():
-        print('起動: この環境は PC-98 ではないので走らせない (本体が INT 18h と PC-98 の I/O ポートを使う)')
-        return True
     with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
         ipl = f.read()
     if len(ipl) != 1024:
@@ -254,9 +250,6 @@ def read_png4(path):
 def test_shot(work):
     """スクリーンショット: 試験用の IPL (tests/boot/shotipl.S) が書いたテキストと色の帯が、
     -shotat で撮った 2 つの PNG に写るか。文字の形はフォント ROM 次第なので、色と有無だけを見る"""
-    if not dosenv.pc98():
-        print('スクリーンショット: この環境は PC-98 ではないので走らせない')
-        return True
     with open(os.path.join(BUILT, 'SHOTIPL.BIN'), 'rb') as f:
         ipl = f.read()
     if len(ipl) != 1024:
@@ -324,9 +317,6 @@ def test_menu(work):
     """VM メニュー: -menuat で開き、開発用のキー列で「3 (スクリーンショット)、ESC (知らせを閉じる)、ESC (閉じる)」を
     押したことにする。撮れた PNG にはメニューではなく IPL の画面が写り (開く前の画面を戻してから撮る)、
     ゲストが再開して -stopafter で止まることを見る"""
-    if not dosenv.pc98():
-        print('VM メニュー: この環境は PC-98 ではないので走らせない')
-        return True
     with open(os.path.join(BUILT, 'SHOTIPL.BIN'), 'rb') as f:
         ipl = f.read()
     img = bytearray(77 * 2 * 8 * 1024)

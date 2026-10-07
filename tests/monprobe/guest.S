@@ -11,7 +11,7 @@
         .text
         .global g_exit, g_iopl, g_hlt, g_hlt_at, g_hlt_cli, g_hlt_cli_at
         .global g_remap, g_reset, g_priv, g_priv_at
-        .global g_io, g_io_native, g_ios, g_irq, g_irq98, g_sep, g_sep_end, g_bios, g_bios_end
+        .global g_io, g_io_native, g_ios, g_irq98, g_sep, g_sep_end, g_bios, g_bios_end
         .global g_v30_bitc, g_v30_biti, g_v30_bcd, g_v30_rot, g_v30_ins, g_v30_insi, g_v30_ext, g_v30_exti
         .global rm_inb, rm_isr08, rm_isr17, rm_old08, rm_old17, rm_cnt08, rm_cnt17
 
@@ -385,54 +385,15 @@ g_v30_exti:
         pop     ds
         int     0xFE
 
-/*
- * ハードウェア割り込みの反射。ベクタ 8 (タイマ) に自前のハンドラを掛け、2 回数えるまで待つ。
- * 待ちきれなければそのときの値で諦める。報告: 数えた回数
- */
-g_irq:
-        push    es
-        xor     ax, ax
-        mov     es, ax
-        mov     ax, es:[8 * 4]
-        mov     cs:[irq_old], ax
-        mov     ax, es:[8 * 4 + 2]
-        mov     cs:[irq_old + 2], ax
-        mov     word ptr cs:[irq_count], 0
-        cli
-        mov     word ptr es:[8 * 4], offset g_irq_isr
-        mov     es:[8 * 4 + 2], cs
-        sti
-        mov     dx, 1024
-1:      xor     cx, cx
-2:      cmp     word ptr cs:[irq_count], 2
-        jae     3f
-        loop    2b
-        dec     dx
-        jnz     1b
-3:      cli
-        mov     ax, cs:[irq_old]
-        mov     es:[8 * 4], ax
-        mov     ax, cs:[irq_old + 2]
-        mov     es:[8 * 4 + 2], ax
-        sti
-        pop     es
-        mov     ax, cs:[irq_count]
-        int     0x80
-        int     0xFE
-
-/* 数えてから元のハンドラへ渡す (EOI は元のハンドラが出す) */
-g_irq_isr:
-        inc     word ptr cs:[irq_count]
-        jmp     dword ptr cs:[irq_old]
-
 irq_old:        .skip   4
 irq_count:      .skip   2
 irq_imr:        .skip   1
 
 /*
- * PC-98 向けの同じ試験。PC-98 の DOS ではタイマ割り込み (IRQ0) がマスクされたままなので、
- * 自分で許可して 8253 のチャネル 0 を動かす。ハンドラは自分で EOI を出し、元のハンドラへは渡さない。
- * ポート番号 (PIC 00h/02h、8253 71h/77h) は記憶による (design.md §12)。
+ * ハードウェア割り込みの反射。ベクタ 8 (タイマ) に自前のハンドラを掛け、2 回数えるまで待つ。
+ * 待ちきれなければそのときの値で諦める。報告: 数えた回数。
+ * PC-98 の DOS ではタイマ割り込み (IRQ0) がマスクされたままなので、自分で許可して 8253 のチャネル 0 を
+ * 動かす。ハンドラは自分で EOI を出し、元のハンドラへは渡さない (PIC 00h/02h、8253 71h/77h。design.md §12)。
  */
 g_irq98:
         push    es

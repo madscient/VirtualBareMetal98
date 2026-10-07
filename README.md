@@ -179,7 +179,7 @@ VBM98 -fdd0 GAME.NFD -log VBM98.LOG,2
 | --- | --- | --- |
 | `sh tools/build16.sh` | DOS 向けのビルド。`build/dos/VBM98.EXE` ができる | gcc-ia16、Python 3 |
 | `python tests/run_host_tests.py` | ディスクイメージ層と INT 1Bh の意味論をホスト OS 上で試験する | gcc、Python 3 |
-| `python tests/run_dos_tests.py` | 16 ビット版のディスクイメージ層、モニタ核、起動、スクリーンショット、VM メニューを DOS 上で試験する | 上のビルド結果、DOSBox か NP21/W |
+| `python tests/run_dos_tests.py` | 16 ビット版のディスクイメージ層、モニタ核、起動、スクリーンショット、VM メニューを DOS 上で試験する | 上のビルド結果、DOSBox-X か NP21/W |
 
 試験は仕様書から自作した合成イメージで行う。実物のディスクイメージはリポジトリに入れない。
 

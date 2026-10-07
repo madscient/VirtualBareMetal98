@@ -1,12 +1,12 @@
 """DOS の実行環境でバッチを 1 本流す。
 
 実行環境は環境変数で選ぶ。
-    VBM_DOSENV   dosbox | np21w | dosboxx。省略時は、設定のあるものを dosbox → np21w → dosboxx の順で使う
-    VBM_DOSBOX   DOSBox の実行ファイル (PC)
-    VBM_NP21W    NP21/W スターターセットのフォルダ (np21x64w.exe、fdosboot.hdi、share がある場所。PC-98)
-    VBM_DOSBOXX  DOSBox-X の実行ファイル (machine=pc98 で走らせる。PC-98。BIOS と DOS は DOSBox-X の内蔵のもの)
+    VBM_DOSENV   dosboxx | np21w。省略時は、設定のあるものを dosboxx → np21w の順で使う
+    VBM_DOSBOXX  DOSBox-X の実行ファイル (machine=pc98 で、窓なしで走らせる。BIOS と DOS は DOSBox-X の内蔵のもの)
+    VBM_NP21W    NP21/W スターターセットのフォルダ (np21x64w.exe、fdosboot.hdi、share がある場所。DOS は FreeDOS(98))
+    VBM_MSDOS    実物の MS-DOS の起動ディスクのイメージ (NP21/W でだけ使う。試験 msdos)
 
-試験のファイルは workdir() の返すディレクトリに置く。DOS 側ではそれがカレントドライブになる。
+どちらも PC-98。試験のファイルは workdir() の返すディレクトリに置く。DOS 側ではそれがカレントドライブになる。
 """
 import os
 import shutil
@@ -16,12 +16,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BATCH = 'RUN.BAT'
 DONE = 'DONE.TXT'
 
-ENVS = (('dosbox', 'VBM_DOSBOX'), ('np21w', 'VBM_NP21W'), ('dosboxx', 'VBM_DOSBOXX'))
-PC98_ENVS = ('np21w', 'dosboxx')
+ENVS = (('dosboxx', 'VBM_DOSBOXX'), ('np21w', 'VBM_NP21W'))
 
 # DOSBox-X を PC-98 として。EMS を切るのは、内蔵の EMM が CPU を仮想86 にする設定があり、リアルモードの DOS として
-# 試験したいため (EMM の下の試験は NP21/W の v86 で行う)。cputype=486 は DOSBox と同じ理由 (ソースでは 486 だと
-# 0F 10〜1F・28・2A・31 が未定義命令になる。src/cpu/core_normal/prefix_0f.h、prefix_0f_mmx.h)
+# 試験したいため (EMM の下の試験は NP21/W の v86 で行う)。cputype を 486 に固定するのは、後の世代の命令 (SSE の
+# 0F 10〜1F・28・2A、RDTSC の 0F 31) を未定義命令例外にして、同じバイト列の V30 の命令の代行を試験できるように
+# するため (auto だと実行されてしまう。src/cpu/core_normal/prefix_0f.h、prefix_0f_mmx.h)
 DOSBOXX_CONF = """[sdl]
 output=surface
 [dosbox]
@@ -35,23 +35,6 @@ cycles=max
 xms=true
 ems=false
 umb=false
-[autoexec]
-mount c "%s"
-c:
-call %s
-exit
-"""
-
-# cputype を 486 に固定するのは、後の世代の命令 (RDTSC = 0F 31 など) を未定義命令例外にして、同じバイト列の
-# V30 の命令 (INS reg,reg) の代行を試験できるようにするため。auto だと RDTSC として実行されてしまう
-DOSBOX_CONF = """[sdl]
-output=surface
-[dosbox]
-memsize=16
-[cpu]
-core=%s
-cputype=486_slow
-cycles=max
 [autoexec]
 mount c "%s"
 c:
@@ -88,17 +71,10 @@ def variables():
     return ' / '.join(var for _, var in ENVS)
 
 
-def pc98():
-    """選ばれている実行環境が PC-98 か (本体 VBM98.EXE の試験はそこでだけ走る)"""
-    return _select()[0] in PC98_ENVS
-
-
 def workdir():
     if _select()[0] == 'np21w':
         return os.path.join(ROOT, 'build', 'np2', 'share')
-    if _select()[0] == 'dosboxx':
-        return os.path.join(ROOT, 'build', 'dbx')
-    return os.path.join(ROOT, 'build', 'dos')
+    return os.path.join(ROOT, 'build', 'dbx')
 
 
 def _dosboxx(target, wd, timeout, core):
@@ -110,17 +86,6 @@ def _dosboxx(target, wd, timeout, core):
     # 内蔵の DOS が要るので、OSFREE 版 (ゲスト OS の起動しかできない) では走らない (docs/setup.md)
     subprocess.run([target, '-conf', conf, '-nopromptfolder', '-silent'], cwd=wd,
                    stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
-
-
-def _dosbox(target, wd, timeout, core):
-    conf = os.path.join(wd, 'dosbox.conf')
-    with open(conf, 'w') as f:
-        f.write(DOSBOX_CONF % (core, wd, BATCH))
-    # -conf を渡すと利用者の設定ファイルを読まないので、利用者の設定に左右されない。
-    # 映像出力を無効にして、窓を出さずに走らせる
-    env = dict(os.environ, SDL_VIDEODRIVER='dummy')
-    subprocess.run([target, '-conf', conf, '-noconsole', '-exit'], cwd=wd, env=env,
-                   stdin=subprocess.DEVNULL, timeout=timeout)
 
 
 # 起動イメージの FDCONFIG.SYS のうち、XMS ドライバの行と、コメントアウトされた HIMEMX / EMM386 の行。
@@ -213,7 +178,7 @@ def _np21w(src, share, timeout, core, emm=False, msdos=False):
 def run_batch(commands, timeout, core='auto', emm=False, msdos=False):
     """commands を順に実行する。最後まで走ったら True。
 
-    core は DOSBox の CPU の再現方式。保護モードを使う試験は、命令を逐次解釈する 'normal' を指定する。
+    core は DOSBox-X の CPU の再現方式 ('auto' なら 'normal' = 命令を逐次解釈する方式にする。NP21/W では使わない)。
     emm は NP21/W だけ: EMM386 (VCPI あり) を読み込んだ DOS で走らせる。
     msdos は NP21/W だけ: 実物の MS-DOS の起動ディスク (VBM_MSDOS) から起動した DOS で走らせる。
     """
@@ -232,9 +197,7 @@ def run_batch(commands, timeout, core='auto', emm=False, msdos=False):
     with open(os.path.join(wd, BATCH), 'w', newline='\r\n') as f:
         f.write('\n'.join(['@ECHO OFF'] + list(commands) + ['ECHO done > ' + DONE]) + '\n')
     try:
-        if env == 'dosbox':
-            _dosbox(target, wd, timeout, core)
-        elif env == 'dosboxx':
+        if env == 'dosboxx':
             _dosboxx(target, wd, timeout, core)
         else:
             _np21w(target, wd, timeout, core, emm, msdos)
