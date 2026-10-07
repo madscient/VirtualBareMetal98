@@ -38,9 +38,9 @@ python tests/run_dos_tests.py
 
 DOS 向けにビルドして DOS 上で走らせる。ビルドは `ia16-elf-gcc` に PATH が通った Linux 環境で行う。
 実行環境は環境変数で選ぶ: `VBM_DOSBOX`（DOSBox の実行ファイル。PC）、`VBM_NP21W`（NP21/W
-スターターセットのフォルダ。PC-98）、`VBM_DOSBOXX`（DOSBox-X の実行ファイル。PC-98。未検証）。複数あるときは
+スターターセットのフォルダ。PC-98）、`VBM_DOSBOXX`（DOSBox-X の通常版の実行ファイル。PC-98、窓なし）。複数あるときは
 `VBM_DOSENV` で `dosbox` / `np21w` / `dosboxx` を選ぶ。
-モニタ核の試験は両方で走らせる（docs/setup.md）。
+モニタ核の試験は全部の環境で、本体の試験は PC-98 の 2 つ（`np21w` と `dosboxx`）で走らせる（docs/setup.md）。
 
 - `img`: ホスト OS 上と同じディスクイメージ層の試験。int が 16 ビットの環境でも同じ結果になるかを見る。
   16 ビット幅での演算あふれはコンパイル時の警告では捕まらないので、`src/core/` や `src/dos/` を変えたら走らせる
@@ -49,6 +49,8 @@ DOS 向けにビルドして DOS 上で走らせる。ビルドは `ia16-elf-gcc
 - `boot`: 本体 `VBM98.EXE` で試験用の IPL を起動し、INT 1Bh の往復、`-dipsw` / `-memsw`（`*` の桁を含む）の反映、
   `-iotrap`（定義ファイル）、`-sbrom`、リセット（IPL が起こすものとメニューから）を確かめる。`src/dos/` を変えたら
   走らせる。PC-98 の環境（NP21/W）でだけ走る
+- `msdos`: 実物の MS-DOS（`VBM_MSDOS` に起動ディスクのイメージ。NP21/W だけ）の上で、HIMEM.SYS だけの構成なら起動試験の
+  IPL が動くこと、EMM386.EXE（NEC 版は既定で VCPI なし）の下では案内を出して止まることを確かめる
 - `boot2dd`: 2DD（512 バイト/セクタ）の RAW イメージから、受け取った DA/UA（70h）と N=2 で起動して INT 1Bh が通ることを
   確かめる。PC-98 の環境でだけ走る
 - `shot`: スクリーンショット。試験用の IPL が書いた文字と色の帯が PNG に写るかを確かめる。PC-98 の環境でだけ走る

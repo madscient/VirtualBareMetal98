@@ -408,7 +408,64 @@ def test_v86(work):
     return ok
 
 
+def test_msdos(work):
+    """実物の MS-DOS (VBM_MSDOS の起動ディスクから起動) の上での動作。HIMEM.SYS だけの構成では起動試験の IPL が動くこと、
+    MS-DOS の EMM386.EXE を読み込んだ構成 (NEC 版は既定で VCPI を提供しない) では、案内を出して止まることを見る。
+    FreeDOS とは常駐物とベクタの様子が違う"""
+    if dosenv.name() != 'np21w' or not dosenv.msdos_image():
+        print('MS-DOS: NP21/W で、VBM_MSDOS に MS-DOS の起動ディスクのイメージを指定したときだけ走らせる')
+        return True
+    with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
+        ipl = f.read()
+    pattern = bytes((i * 13 + 7) & 0xFF for i in range(1024))
+    want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 1024, 2)) & 0xFFFF
+    ok = True
+    for emm in (False, True):
+        tag = 'EMM386' if emm else 'HIMEM'
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = ipl
+        img[1024:2048] = pattern
+        with open(os.path.join(work, 'E.IMG'), 'wb') as f:
+            f.write(img)
+        out = os.path.join(work, 'MSDOS.OUT')
+        if os.path.exists(out):
+            os.remove(out)
+        # EMM386 を引数なしで実行すると状態 (EMS・UMB・VCPI が使えるか) を表示する。切り分けの材料として残す
+        status = ['A:\\EMM386 >> MSDOS.OUT'] if emm else []
+        finished = dosenv.run_batch(['VER > MSDOS.OUT'] + status +
+                                    ['VBM98.EXE -fdd0 E.IMG -trace -menukeys 04,15 >> MSDOS.OUT'],
+                                    180, core='normal', emm=emm, msdos=True)
+        lines = imgtests.read_lines(work, 'MSDOS.OUT') or []
+        for line in lines:
+            if 'tvram row' not in line:
+                print('  ' + line)
+        with open(os.path.join(work, 'E.IMG'), 'rb') as f:
+            rec = f.read()[2048:3072]
+        if emm:
+            # この EMM386.EXE は既定では VCPI を提供しない。VBM98 は案内を出して止まり、ゲストを起動しない
+            checks = (
+                ('batch finished', finished),
+                ('EMM386 is active (its status report is in the output)', any('EMM386' in l and '動作中' in l for l in lines)),
+                ('VBM98 reported a V86 monitor without VCPI and stopped', any('V86 monitor without VCPI' in l for l in lines)),
+                ('VBM98 did not start the guest', not any('booting from drive' in l for l in lines) and rec[0x300:0x308] != b'VBM98IPL'),
+            )
+        else:
+            checks = (
+                ('batch finished', finished),
+                ('VBM98 saw real mode (no V86 monitor)', not any('V86 monitor' in l for l in lines)),
+                ('guest halted and VBM98 returned to DOS', any('halted' in l for l in lines) and any('back to DOS' in l for l in lines)),
+                ('IPL ran (after its own reset) and wrote itself to sector 3', rec[0x300:0x308] == b'VBM98IPL' and rec[0x31D] == 1),
+                ('sector 2 contents arrived in the guest', int.from_bytes(rec[0x30A:0x30C], 'little') == want_sum),
+            )
+        for name, c in checks:
+            print('%s MS-DOS + %s: %s' % ('ok  ' if c else 'FAIL', tag, name))
+            ok = ok and c
+    print('MS-DOS: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
+         ('msdos', 'VBM98.EXE', test_msdos),
          ('boot2dd', 'VBM98.EXE', test_boot2dd),
          ('shot', 'VBM98.EXE', test_shot), ('menu', 'VBM98.EXE', test_menu), ('v86', 'VBM98.EXE', test_v86))
 

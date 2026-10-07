@@ -169,6 +169,7 @@ BIOS ワークエリア（0000:0400–05FF）はホストのものを写し、�
 | --- | --- | --- |
 | 割り込みマスク | ○ | ○ |
 | A20 | ○ | ○ |
+| タイマ（8253 のカウンタ 0） | ○ | ○ |
 | テキスト画面の内容と表示状態 | — | ○ |
 | キーボードの押下状態の後始末 | — | ○ |
 
@@ -177,6 +178,10 @@ BIOS ワークエリア（0000:0400–05FF）はホストのものを写し、�
 
 いまの実装は、モニタが `mon_run` から戻ることで世界を切り替え、ゲストのメモリとの複写は
 XMS の転送（機能 0Bh）でホスト側から行っている。切り替える状態は割り込みマスクだけ。
+タイマは未実装: ホストの BIOS / DOS がホスト世界でカウンタ 0 を設定し直すことがあり（§12。DOSBox-X で確認）、
+ゲストが設定した周期割り込みが戻ったあと止まりうる。8253 は設定を読み出せないので、ゲストの 77h / 71h への
+書き込みをトラップして写しを持ち、戻るときに書き直す形になる（位相はずれる）。開発用の `-tick` の時計だけは
+戻るたびに設定し直している。
 転送バッファ（D5）は fdbios と共有している。
 
 切り替えの規則: **ゲストの割り込みマスクが効いている間に、ホストのベクタ表で割り込みを受けては
@@ -397,7 +402,11 @@ START / SYNC の表示 ON で 1、STOP / SYNC の表示 OFF で 0。起動時の
 | VCPI 1.0（INT 67h）: AX=DE00h で有無（AH = 0 なら在り、BH.BL が版）。DE01h は ES:DI の 4KB のページ表に先頭 1MB（とサーバの分）の項を埋め、DS:SI の GDT 3 項の最初をサーバのコードセグメントにし、EBX に入口のオフセットを返す。DE03h は空きページ数、DE04h は 4KB ページの確保（EDX = 物理番地）、DE0Ah / DE0Bh は 8259 のベクタ対応の取得 / 通知。DE0Ch は ESI の構造体（CR3、GDTR と IDTR の 6 バイトの線形番地、LDTR、TR、CS:EIP の PWORD。22 バイト）で保護モードへ。保護モード側からは、DS = 平坦なセレクタ、SS:ESP が 1MB 未満、スタックに GS・FS・DS・ES・SS・ESP・EFLAGS（サーバが入れる）・CS・EIP を積み、EAX=DE0Ch で入口を 32 ビットの far call すると仮想86 へ戻る。切替のあいだ割り込みは禁止 | 確認済み（資料）: Ralf Brown's Interrupt List（INT 67/AX=DE00h〜DE0Ch）と VCPI 1.0 の仕様書（Phar Lap / Quarterdeck）の本文。実物（EMM386）での動作は `run_dos_tests.py v86` | §18 で使う。SMSW が仮想86 でも実行できて実物の CR0 を返すことは 80386 の仕様（SMSW は特権命令でない） |
 | V30 固有の命令の届き方（モニタ核の試験の記録）: DOSBox 0.74-3（core=normal）では 0F 10・18・1D・1E・28・2A・39・3B が未定義命令例外、0F 20・22・26・33 が一般保護例外になる。0F 31（RDTSC）は `cputype=auto` だと例外なく実行され、`cputype=486_slow` に固定すると未定義命令例外になる（試験はこの設定で走らせる。`tests/dosenv.py`）。NP21/W では 0F 10〜1F・28・2A・31 が例外なく実行され（SSE の命令と RDTSC）、0F 26（386 / 486 ではテストレジスタへの MOV）は CPU コアが未実装で止まる（`ia32_panic` の "MOV_TdRd: not implemented yet!"） | 確認済み（エミュレータ 2 種） | `run_dos_tests.py mon` の `# v30 ...` の行と、NP21/W のダイアログ（利用者が確認）。NP21/W では CMP4S の試験を引数 `notr` で飛ばす。実機の 386 / 486 では 0F 24 / 26 は一般保護例外、Pentium 以降は未定義命令例外になるはずで、どちらも代行に届く（未検証） |
 | V30 固有の命令の代行の正しさ | 確認済み（DOSBox、cputype=486_slow）: TEST1 / CLR1 / SET1 / NOT1（CL 形と即値形、レジスタとメモリ）、ADD4S / SUB4S / CMP4S、ROL4 / ROR4、INS / EXT（レジスタ形と即値形、語をまたぐ場合）の 9 断片すべてが表の期待値どおり。NP21/W では ADD4S / SUB4S と INS / EXT の即値形、EXT reg,reg だけ届く | `tests/monprobe` の `g_v30_*`。期待値は MAME の NEC コアの意味から手で計算した |
-| DOSBox-X（2026.10.01）の normal コアは、`cputype=486` なら 0F 10〜18・28・2A（SSE。Pentium III 未満で未定義命令）、0F 19〜1F（Pentium Pro 未満で未定義命令）、0F 31（RDTSC。Pentium 未満で未定義命令）を未定義命令例外にし、0F 24 / 26（テストレジスタ）は CPL > 0 で一般保護例外にする。`cputype=auto` はどの世代の判定も通す。`-silent` は映像・音声を dummy にして AUTOEXEC の後に終了する | 未検証（ソースを読んだ） | DOSBox-X `src/cpu/core_normal/prefix_0f.h`・`prefix_0f_mmx.h`、`include/cpu.h`（CPU_ARCHTYPE_*）、`src/cpu/cpu.cpp`（`CPU_WRITE_TRX`）、`src/gui/sdlmain.cpp`（`-silent`）。同じ仕組みは DOSBox 0.74 で確かめた（上の行）。DOSBox-X そのものは開発機で起動できず、走らせていない（setup.md） |
+| DOSBox-X（2026.10.01）の normal コアは、`cputype=486` なら 0F 10〜18・28・2A（SSE。Pentium III 未満で未定義命令）、0F 19〜1F（Pentium Pro 未満で未定義命令）、0F 31（RDTSC。Pentium 未満で未定義命令）を未定義命令例外にし、0F 24 / 26（テストレジスタ）は CPL > 0 で一般保護例外にする。`cputype=auto` はどの世代の判定も通す。`-silent` は映像・音声を dummy にして AUTOEXEC の後に終了する | 確認済み（DOSBox-X、machine=pc98、cputype=486、`-silent`） | ソースは `src/cpu/core_normal/prefix_0f.h`・`prefix_0f_mmx.h`、`include/cpu.h`、`src/cpu/cpu.cpp`、`src/gui/sdlmain.cpp`。`run_dos_tests.py mon` が 74 項目（V30 の 9 断片すべて）通り、窓なしで走った。内蔵の DOS が要るので OSFREE 版では走らない |
+| DOSBox-X の PC-98（内蔵の BIOS と DOS）は NP21/W + FreeDOS(98) と次が違い、どちらでも本体の試験が通る: 割り込みマスクの初期値がスレーブ DCh（マウスの IRQ13 が開いていて、ベクタ 15h が毎秒 100 回以上来る）、メモリスイッチ `00 00 04 00 00 00 00 00`、DIP スイッチのポート E3h・F9h・94h、RAM を指すベクタ 01・02・03・04・0F | 確認済み（DOSBox-X） | `run_dos_tests.py boot` の出力。試験の刻み（`-tick`）を全割り込みの数で測っていたときは、マウスの割り込みで時間がずれて試験が落ちた。IRQ0 だけを数えるようにした（`vbm_r0.c` の `dev_now`） |
+| ホスト世界にいる間に、ホストの BIOS / DOS が 8253 のカウンタ 0 を設定し直すことがある。ゲスト（または `-tick`）が設定した周期割り込みは、戻ったあと止まる | 確認済み（DOSBox-X）: 現象と対処。どの呼び出しが書き換えるかは未確認 | スクリーンショットの試験（ホスト世界で DOS にファイルを 2 つ書く）が 2〜3 回に 1 回、2 枚目のあとタイマ割り込みが来なくなって固まった（`-log` の心拍で特定）。ゲスト世界へ戻るたびに `-tick` のタイマを設定し直すと 20 回続けて通った。**ゲスト自身が設定したタイマは退避・復元していない**（§7。実機の BIOS でも起きるかは未確認） |
+| 実物の MS-DOS 5.00A（NEC、HIMEM.SYS だけ）の上では、RAM を指すベクタが 00・05・06・0D・1A・1F になる（FreeDOS(98) は 00・01・03・05・06・1F）。INT 1Ah（プリンタ・CMT の BIOS）と 0Dh（IRQ5）を DOS が横取りしているので、ゲストには「何もせずに戻る」印が見える | 確認済み（NP21/W + MS-DOS 5.00A） | `run_dos_tests.py msdos`。起動試験の IPL（INT 1Bh の往復とリセット）は通る。INT 1Ah を呼ぶゲストは未確認（§6 の規則 2 が要る例） |
+| NEC 版の EMM386.EXE（MS-DOS 5.00A）は、引数なしだと EMS だけを提供し、VCPI は提供しない: 仮想86 モード（CR0 の PE = 1）で、INT 67h AX=DE00h が AH = 84h（未定義の機能）を返す | 確認済み（NP21/W + MS-DOS 5.00A） | `run_dos_tests.py msdos`。VBM98 は「VCPI なし」と表示して止まる。実行ファイルの引数解析には `VCPI` という語との比較があるが、`/VCPI` と `VCPI` はどちらも「ドライバが組み込まれていない」結果になり、有効にする書き方は分かっていない（資料で確かめる） |
 | 参考実装の起動手順（`bootstrapload` → `boot_fd`）: ドライブごとに 1.25MB（DA 90h）、1.44MB（30h）、2DD（70h）の順に試し、起動した媒体に合わせて装備情報を 1MB インタフェース（下位バイト）か 640KB インタフェース（上位バイトの上位ニブル）の片方だけにする。IPL は N が 0 か FM か 1.44MB なら 1FE0:0000 に 512 バイト、それ以外は 1FC0:0000 に 1024 バイト | 未検証（NP2 の実装を読んだ） | NP2kai `bios/bios1b.c`（`boot_fd1`・`boot_fd`・`fddbios_equip`）。VBM98 は起動する媒体から同じ DA/UA と装備情報を作る（§6）。確認済み（NP21/W）: 2DD の RAW イメージで、受け取った 70h と N=2 で INT 1Bh の読み書きが通る（`run_dos_tests.py boot2dd`）|
 | EPSON の互換機でも動く | 推測 | 利用者の見立て。設計はホストの ROM・ワークエリア・スイッチの値をそのまま使い、NEC 固有の振る舞いに依っていない。実物では未確認。ハイレゾモードは VRAM と GDC の番地が違うので対象外（spec.md） |
 | グラフィック GDC（コマンド A2h、状態 A0h）: BCTRL の 0Ch が表示 OFF、0Dh が表示 ON。SYNC の 0Eh は表示 OFF、0Fh は表示 ON を伴う。START 6Bh は表示 ON。状態ポートの bit 1 が FIFO full、bit 2 が FIFO empty | 未検証（NP2 の実装を読んだ） | NP2kai `io/gdc.c`（`gdc_work` の CMD_START / CMD_START_ / CMD_SYNC_ON と CMD_STOP / CMD_STOP_ / CMD_SYNC_OFF、`gdc_ia0`）と `io/gdc_cmd.tbl` の対応表（0Ch STOP、0Dh START、0Eh / 0Fh SYNC、6Bh START）。μPD7220 の資料と実機では未確認。メニューのあいだの表示 OFF に使う（§9） |
@@ -665,7 +674,9 @@ IRQ0 = ベクタ 08h のままで、使う必要がなかった）、VCPI のペ
 往復、IPL が起こすリセット、HLT から DOS へ）。実イメージでも、リアルモードと EMM の下で `-tick -stopafter` の
 同じ刻み数まで走らせて割り込みの内訳が一致した: イース2 は 6000 刻みで INT 1Bh 33 回・VSYNC 約 1800 回、
 ソーサリアン（FM 音源）は 9000 刻みで INT 1Bh 16 回・VSYNC 約 700 回・IRQ12 約 1000 回で、止まった番地も同じ
-領域。上の「割り込みの取りこぼし」はこの 2 本の範囲では症状として出ていない。MS-DOS の EMM386 は未確認。
+領域。上の「割り込みの取りこぼし」はこの 2 本の範囲では症状として出ていない。
+MS-DOS 5.00A（NEC）の EMM386.EXE は、引数なしでは VCPI を提供しないので、その下では案内を出して止まる（§12。
+`run_dos_tests.py msdos`）。VCPI を有効にした MS-DOS の EMM386 の下での動作は未確認。
 
 ## 19. 診断ログ（-log）
 

@@ -151,6 +151,18 @@ static u16 kbd_irq(void)
     return 0;
 }
 
+/*
+ * 開発用の時機 (-stopafter / -shotat / -menuat) を測る物差し。-tick のときはタイマ割り込み (IRQ0、約 10ms) の回数、
+ * そうでなければ全部のハードウェア割り込みの回数。-tick で他の割り込みを数えないのは、マウスなどの割り込みを
+ * 開けたまま起動するホスト (DOSBox-X の PC-98 など) で、同じ数でも経過時間が変わってしまうため
+ */
+static u32 tick_count;
+
+static u32 dev_now(void)
+{
+    return dev_tick ? tick_count : irq_count;
+}
+
 u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
 {
     u16 x;
@@ -160,9 +172,11 @@ u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
         log_ev(vec, in_halt_wake ? EV_HALTWAKE : EV_IRQ, f, (u16)r->eax);
         in_halt_wake = 0;
         irq_count++;
+        if (vec == IRQ_FIRST)
+            tick_count++;
         if (irq_hits[vec - IRQ_FIRST] != 0xFFFF)
             irq_hits[vec - IRQ_FIRST]++;
-        if (stop_after_irqs && irq_count >= stop_after_irqs) {
+        if (stop_after_irqs && dev_now() >= stop_after_irqs) {
             /* 取り込んだ割り込みをゲストへは渡さずに止めるので、EOI だけ出しておく */
             eoi(vec);
             return X_STOP;
@@ -175,11 +189,11 @@ u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
         if (vec == IRQ_FIRST && dev_tick && guest_imr0) {
             /* ゲストは IRQ0 を閉じているつもりなので渡さない。数えるだけ */
             eoi(vec);
-            if (dev_shot_i < 2 && dev_shot_at[dev_shot_i] && irq_count >= dev_shot_at[dev_shot_i]) {
+            if (dev_shot_i < 2 && dev_shot_at[dev_shot_i] && dev_now() >= dev_shot_at[dev_shot_i]) {
                 dev_shot_i++;
                 return X_HOTKEY_SHOT;
             }
-            if (dev_menu_at && irq_count >= dev_menu_at) {
+            if (dev_menu_at && dev_now() >= dev_menu_at) {
                 dev_menu_at = 0;
                 return X_HOTKEY_MENU;
             }
@@ -193,7 +207,7 @@ u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
         log_ev(vec, EV_SOFT, f, (u16)r->eax);
     }
     mon_reflect(vec, f);
-    if (dev_menu_at && vec >= IRQ_FIRST + 2 && vec <= IRQ_LAST && irq_count >= dev_menu_at) {
+    if (dev_menu_at && vec >= IRQ_FIRST + 2 && vec <= IRQ_LAST && dev_now() >= dev_menu_at) {
         /*
          * 開発用: ゲストのハンドラに入る形 (反射済み) にしてからメニューへ抜ける。戻ればハンドラが動くので
          * 割り込みは失われない。IRQ0・1 のときは ISR がホストのキーボード割り込み (IRQ1) を塞ぐので IRQ2 以降だけ

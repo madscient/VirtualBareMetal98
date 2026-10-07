@@ -61,7 +61,9 @@ static int check_v86(void)
     if (vec67)
         int86(0x67, &r, &r);
     if (!vec67 || r.h.ah != 0) {
-        say("VBM98: running under a V86 monitor without VCPI. Boot without the EMM driver\n");
+        /* 切り分けのため、INT 67h のベクタと応答も出す (ベクタが 0 なら EMS のドライバ自体がいない) */
+        say("VBM98: running under a V86 monitor without VCPI (INT 67h at %04X:%04X, AX=DE00h -> AH=%02X). "
+            "Boot without the EMM driver\n", (u16)(vec67 >> 16), (u16)vec67, vec67 ? r.h.ah : 0xFF);
         return 1;
     }
     say("VBM98: running under a V86 monitor (VCPI %u.%u)\n", r.h.bh, r.h.bl);
@@ -1177,8 +1179,22 @@ static void dump_guest(const struct mon_guest *g)
 }
 
 /* 世界の切替で入れ替えるハードウェアの状態。いまは割り込みマスクだけ */
+/* -tick の時計: 8253 のカウンタ 0 を約 10ms (2.4576MHz / 6000h) の矩形波にする */
+static void tick_arm(void)
+{
+    pio_out8(0x77, 0x36);
+    pio_out8(0x71, 0x00);
+    pio_out8(0x71, 0x60);
+}
+
 static void guest_hw(void)
 {
+    /*
+     * ホスト世界にいる間に、ホストの BIOS / DOS がカウンタ 0 を別のモードに設定し直すことがある (インターバル
+     * タイマ)。そのままだと時計が止まるので、戻るたびに設定し直す (design.md §12)
+     */
+    if (dev_tick)
+        tick_arm();
     pio_out8(PIC_M_IMR, dev_tick ? (u8)(guest_imr_m & 0xFE) : guest_imr_m);
     pio_out8(PIC_S_IMR, guest_imr_s);
 }
@@ -1306,9 +1322,7 @@ int main(int argc, char **argv)
         /* 8253 のカウンタ 0 を約 10ms (2.4576MHz / 6000h) の矩形波にし、IRQ0 をモニタの時計にする */
         mon_trap_port(PIC_M_IMR, 1);
         guest_imr0 = (u8)(guest_imr_m & 1);
-        pio_out8(0x77, 0x36);
-        pio_out8(0x71, 0x00);
-        pio_out8(0x71, 0x60);
+        tick_arm();
     }
     screen_save();
     screen_clear();
