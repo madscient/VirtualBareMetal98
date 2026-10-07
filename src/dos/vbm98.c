@@ -396,13 +396,27 @@ const char *vm_drive_name(int unit)
     return drive_name[unit];
 }
 
+/*
+ * 起動装置の DA/UA と、ゲストに見せる装備情報 (0000:055Ch の 2 バイト)。参考実装の起動手順に合わせ、2HD と 1.44MB は
+ * 1MB インタフェース (下位バイトの bit 0〜1 = ドライブ 0・1)、2DD と 2D は 640KB インタフェース (上位バイトの bit 4〜5)
+ * として起動する。両方のインタフェースを同時に見せることはしない (参考実装も起動時に片方だけにする)
+ */
 static u8 boot_dua(void)
 {
     switch (imgs[0].media) {
     case DIMG_MEDIA_144: return 0x30;
     case DIMG_MEDIA_2DD: return 0x70;
+    case DIMG_MEDIA_2D:  return 0x50;
     default:             return 0x90;
     }
+}
+
+static void boot_equip(u8 *equip)
+{
+    int if640 = imgs[0].media == DIMG_MEDIA_2DD || imgs[0].media == DIMG_MEDIA_2D;
+
+    equip[0] = (u8)(if640 ? 0x00 : 0x03);
+    equip[1] = (u8)(if640 ? 0x30 : 0x00);
 }
 
 /* ---------------------------------------------------------------- INT 1Bh */
@@ -738,11 +752,12 @@ static int guest_memory(int first)
     u16 i, off;
     u8 vec[4] = { 0x00, 0x00, 0x00, 0xF7 };
     u8 ent[4];
-    u8 equip[2] = { 0x03, 0x00 };
+    u8 equip[2];
 
     if (xms_move(xms_handle, guest_off, 0, xms_far(0, 0), 0x600))
         return 1;
     g_write(0x1B * 4, mon_data_seg(), (u16)(unsigned)vec, 4);
+    boot_equip(equip);
     g_write(FDB_WA_EQUIP, mon_data_seg(), (u16)(unsigned)equip, 2);
     g_rmw8(WA_BOOT, boot_dua(), 0xFF);
     if (dip_on)

@@ -87,6 +87,50 @@ def host_bytes(lines, label):
     return None
 
 
+def test_boot2dd(work):
+    """2DD (640KB、512 バイト/セクタ) の RAW イメージから起動する。IPL は受け取った DA/UA (70h) と N=2 で INT 1Bh を呼ぶ。
+    R=3 のパターンを読み、自分を R=5〜6 に書く。装備情報が 640KB インタフェースのドライブになっていることも見る"""
+    if dosenv.name() != 'np21w':
+        print('2DD の起動: この環境は PC-98 ではないので走らせない')
+        return True
+    with open(os.path.join(BUILT, 'IPL2DD.BIN'), 'rb') as f:
+        ipl = f.read()
+    if len(ipl) != 1024:
+        print('IPL2DD.BIN が 1024 バイトでない')
+        return False
+    pattern = bytes((i * 11 + 5) & 0xFF for i in range(512))
+    img = bytearray(80 * 2 * 8 * 512)
+    img[0:1024] = ipl
+    img[1024:1536] = pattern
+    with open(os.path.join(work, 'D.IMG'), 'wb') as f:
+        f.write(img)
+    out = os.path.join(work, 'BOOT2.OUT')
+    if os.path.exists(out):
+        os.remove(out)
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 D.IMG -trace -menukeys 04,15 > BOOT2.OUT'], 180, core='normal')
+    lines = imgtests.read_lines(work, 'BOOT2.OUT') or []
+    for line in lines:
+        print('  ' + line)
+    with open(os.path.join(work, 'D.IMG'), 'rb') as f:
+        rec = f.read()[2048:3072]
+    want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 512, 2)) & 0xFFFF
+    checks = (
+        ('batch finished', finished),
+        ('guest halted and VBM98 returned to DOS', any('halted' in l for l in lines) and any('back to DOS' in l for l in lines)),
+        ('IPL ran and wrote itself to R=5', rec[0x300:0x308] == b'VBM98IPL'),
+        ('IPL received the boot DA/UA 70h (640KB interface) in AL', rec[0x308] == 0x70),
+        ('INT 1Bh read with the received DA/UA returned 00h', rec[0x309] == 0),
+        ('sector 3 contents arrived in the guest', int.from_bytes(rec[0x30A:0x30C], 'little') == want_sum),
+        ('result bytes in the work area: ST0=00, next R=4', rec[0x30C] == 0 and rec[0x311] == 4),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('2DD の起動: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
 def test_boot(work):
     """IPL が起動し、INT 1Bh の読み書きがイメージに届き、HLT で DOS に戻ることを見る。あわせて、-dipsw / -memsw
     ('*' の桁はホストの値)、-iotrap (定義ファイル)、-sbrom がゲストから見えること、IPL が起こすリセットと
@@ -354,6 +398,7 @@ def test_v86(work):
 
 
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
+         ('boot2dd', 'VBM98.EXE', test_boot2dd),
          ('shot', 'VBM98.EXE', test_shot), ('menu', 'VBM98.EXE', test_menu), ('v86', 'VBM98.EXE', test_v86))
 
 

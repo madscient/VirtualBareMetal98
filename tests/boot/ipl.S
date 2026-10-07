@@ -9,6 +9,22 @@
  * サウンド BIOS (CC000h) の 4 バイト (先頭 2 つ、末尾、+2000h) を自分の中 (300h から) に書き込んでから、
  * 自分自身の 1024 バイトをセクタ 3 に書き、割り込み禁止で HLT する。
  */
+/*
+ * 2 とおりにビルドする (tools/build16.sh)。IPL.BIN は 2HD (1024 バイト/セクタ: 読むのは R=2、自分を書くのは R=3)、
+ * IPL2DD.BIN は -DIPL_2DD で 2DD (512 バイト/セクタ: IPL が R=1〜2 を占めるので読むのは R=3、書くのは R=5〜6)。
+ * INT 1Bh の DA/UA は BIOS から AL で受けた値をそのまま使う (2HD は 90h、2DD は 70h)
+ */
+#ifdef IPL_2DD
+#define SECT_N      2
+#define SECT_BYTES  512
+#define READ_R      3
+#define WRITE_R     5
+#else
+#define SECT_N      3
+#define SECT_BYTES  1024
+#define READ_R      2
+#define WRITE_R     3
+#endif
         .arch   i386
         .intel_syntax noprefix
         .code16
@@ -34,20 +50,20 @@ start:
 after_reset:
         mov     byte ptr [rec_reset], 1
 
-        mov     ax, 0x5690              /* READ DATA、先にシーク、1MB インタフェースの 2HD */
-        mov     bx, 1024
-        mov     cx, 0x0300              /* N = 3、C = 0 */
-        mov     dx, 0x0002              /* H = 0、R = 2 */
+        mov     bx, SECT_BYTES
+        mov     cx, SECT_N << 8         /* N、C = 0 */
+        mov     dx, READ_R              /* H = 0 */
         mov     ax, 0x2000
         mov     es, ax
-        mov     ax, 0x5690
+        mov     ah, 0x56                /* READ DATA、先にシーク。DA/UA は受け取ったもの */
+        mov     al, [rec_al]
         xor     bp, bp
         int     0x1B
         mov     [rec_st], ah
 
         xor     ax, ax
         xor     si, si
-        mov     cx, 512
+        mov     cx, SECT_BYTES / 2
 1:      add     ax, es:[si]
         add     si, 2
         loop    1b
@@ -115,12 +131,13 @@ after_reset:
         dec     dx
         jnz     3b
 
-        mov     ax, 0x5590              /* WRITE DATA: 自分の 1024 バイトをセクタ 3 へ */
-        mov     bx, 1024
-        mov     cx, 0x0300
-        mov     dx, 0x0003
+        mov     bx, 1024                /* WRITE DATA: 自分の 1024 バイトを WRITE_R から (2DD では 2 セクタ) */
+        mov     cx, SECT_N << 8
+        mov     dx, WRITE_R
         push    ds
         pop     es
+        mov     ah, 0x55
+        mov     al, [rec_al]
         xor     bp, bp
         int     0x1B
         mov     [rec_wst], ah

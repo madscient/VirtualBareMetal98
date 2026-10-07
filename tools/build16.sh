@@ -104,6 +104,9 @@ link VBM98.EXE
 ia16-elf-gcc -c "$root/tests/boot/ipl.S" -o "$out/ipl.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/IPL.BIN" "$out/ipl.o"
 ls -l "$out/IPL.BIN" | awk '{print $5, "bytes  IPL.BIN"}'
+ia16-elf-gcc -c -DIPL_2DD "$root/tests/boot/ipl.S" -o "$out/ipl2dd.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/IPL2DD.BIN" "$out/ipl2dd.o"
+ls -l "$out/IPL2DD.BIN" | awk '{print $5, "bytes  IPL2DD.BIN"}'
 ia16-elf-gcc -c "$root/tests/boot/shotipl.S" -o "$out/shotipl.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTIPL.BIN" "$out/shotipl.o"
 ls -l "$out/SHOTIPL.BIN" | awk '{print $5, "bytes  SHOTIPL.BIN"}'

@@ -132,7 +132,9 @@ D3 のとおり ROM の写しで横取りしている。
 
 BIOS ワークエリア（0000:0400–05FF）はホストのものを写し、次を直す。
 
-- ブートデバイス、ディスク装備情報（FDD 2 台、HDD なし）
+- ブートデバイス、ディスク装備情報（FDD 2 台、HDD なし。参考実装の起動手順に合わせ、2HD・1.44MB で起動するときは
+  1MB インタフェースの 2 台（055Ch = 03h）、2DD・2D のときは 640KB インタフェースの 2 台（055Dh = 30h）として見せ、
+  DA/UA はそれぞれ 90h・30h・70h・50h）
 - 拡張メモリ量（0）
 - 機種判別と装置の有無のフラグ（機種は PC-9801VM、装置の有無はホストの実物に合わせる。値は資料で確かめて決める）
 - DIP スイッチ・メモリスイッチから ITF が導く設定（§15）
@@ -395,6 +397,7 @@ START / SYNC の表示 ON で 1、STOP / SYNC の表示 OFF で 0。起動時の
 | VCPI 1.0（INT 67h）: AX=DE00h で有無（AH = 0 なら在り、BH.BL が版）。DE01h は ES:DI の 4KB のページ表に先頭 1MB（とサーバの分）の項を埋め、DS:SI の GDT 3 項の最初をサーバのコードセグメントにし、EBX に入口のオフセットを返す。DE03h は空きページ数、DE04h は 4KB ページの確保（EDX = 物理番地）、DE0Ah / DE0Bh は 8259 のベクタ対応の取得 / 通知。DE0Ch は ESI の構造体（CR3、GDTR と IDTR の 6 バイトの線形番地、LDTR、TR、CS:EIP の PWORD。22 バイト）で保護モードへ。保護モード側からは、DS = 平坦なセレクタ、SS:ESP が 1MB 未満、スタックに GS・FS・DS・ES・SS・ESP・EFLAGS（サーバが入れる）・CS・EIP を積み、EAX=DE0Ch で入口を 32 ビットの far call すると仮想86 へ戻る。切替のあいだ割り込みは禁止 | 確認済み（資料）: Ralf Brown's Interrupt List（INT 67/AX=DE00h〜DE0Ch）と VCPI 1.0 の仕様書（Phar Lap / Quarterdeck）の本文。実物（EMM386）での動作は `run_dos_tests.py v86` | §18 で使う。SMSW が仮想86 でも実行できて実物の CR0 を返すことは 80386 の仕様（SMSW は特権命令でない） |
 | V30 固有の命令の届き方（モニタ核の試験の記録）: DOSBox 0.74-3（core=normal）では 0F 10・18・1D・1E・28・2A・39・3B が未定義命令例外、0F 20・22・26・33 が一般保護例外になり、0F 31（RDTSC）は例外なく実行される。NP21/W では 0F 10〜1F・28・2A・31 が例外なく実行され（SSE の命令と RDTSC）、0F 26（386 / 486 ではテストレジスタへの MOV）は CPU コアが未実装で止まる（`ia32_panic` の "MOV_TdRd: not implemented yet!"） | 確認済み（エミュレータ 2 種） | `run_dos_tests.py mon` の `# v30 ...` の行と、NP21/W のダイアログ（利用者が確認）。NP21/W では CMP4S の試験を引数 `notr` で飛ばす。実機の 386 / 486 では 0F 24 / 26 は一般保護例外、Pentium 以降は未定義命令例外になるはずで、どちらも代行に届く（未検証） |
 | V30 固有の命令の代行の正しさ | 確認済み（DOSBox）: TEST1 / CLR1 / SET1 / NOT1（CL 形と即値形、レジスタとメモリ）、ADD4S / SUB4S / CMP4S、ROL4 / ROR4、INS / EXT（即値形、語をまたぐ場合）、EXT reg,reg が表の期待値どおり。NP21/W では ADD4S / SUB4S と INS / EXT の即値形、EXT reg,reg だけ届く | `tests/monprobe` の `g_v30_*`。期待値は MAME の NEC コアの意味から手で計算した。INS reg,reg（0F 31）はどちらのエミュレータでも RDTSC として実行され、未検証 |
+| 参考実装の起動手順（`bootstrapload` → `boot_fd`）: ドライブごとに 1.25MB（DA 90h）、1.44MB（30h）、2DD（70h）の順に試し、起動した媒体に合わせて装備情報を 1MB インタフェース（下位バイト）か 640KB インタフェース（上位バイトの上位ニブル）の片方だけにする。IPL は N が 0 か FM か 1.44MB なら 1FE0:0000 に 512 バイト、それ以外は 1FC0:0000 に 1024 バイト | 未検証（NP2 の実装を読んだ） | NP2kai `bios/bios1b.c`（`boot_fd1`・`boot_fd`・`fddbios_equip`）。VBM98 は起動する媒体から同じ DA/UA と装備情報を作る（§6）。確認済み（NP21/W）: 2DD の RAW イメージで、受け取った 70h と N=2 で INT 1Bh の読み書きが通る（`run_dos_tests.py boot2dd`）|
 | EPSON の互換機でも動く | 推測 | 利用者の見立て。設計はホストの ROM・ワークエリア・スイッチの値をそのまま使い、NEC 固有の振る舞いに依っていない。実物では未確認。ハイレゾモードは VRAM と GDC の番地が違うので対象外（spec.md） |
 | グラフィック GDC（コマンド A2h、状態 A0h）: BCTRL の 0Ch が表示 OFF、0Dh が表示 ON。SYNC の 0Eh は表示 OFF、0Fh は表示 ON を伴う。START 6Bh は表示 ON。状態ポートの bit 1 が FIFO full、bit 2 が FIFO empty | 未検証（NP2 の実装を読んだ） | NP2kai `io/gdc.c`（`gdc_work` の CMD_START / CMD_START_ / CMD_SYNC_ON と CMD_STOP / CMD_STOP_ / CMD_SYNC_OFF、`gdc_ia0`）と `io/gdc_cmd.tbl` の対応表（0Ch STOP、0Dh START、0Eh / 0Fh SYNC、6Bh START）。μPD7220 の資料と実機では未確認。メニューのあいだの表示 OFF に使う（§9） |
 | 電源投入直後の表示系: CRT モード 04h（簡易グラフィック属性）+ SW2-3 が OFF なら 20 行（bit 1）+ SW2-4 が OFF なら 40 桁（bit 0）、グラフィックは 640×200・表示 OFF・ページ 0・8 色、GDC クロック 2.5MHz、デジタルパレットは恒等 | 未検証（NP2 の実装を読んだ） | NP2kai `bios/bios.c`（`bios_screeninit`: `4 + ((sw2 & 04h) >> 1) + ((sw2 & 08h) >> 3)`、`bios_reinitbyswitch`: PRXDUPD = 18h + SW2-8、bit 2 = 400 ライン）、`io/gdc.c`（`gdc_biosreset`、`defdegpal`）。実機の ITF は未確認 |
