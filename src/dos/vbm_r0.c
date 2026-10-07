@@ -91,6 +91,7 @@ u8 vid_gdisp, vid_tdisp;
 static u8 vid_anaidx;           /* アナログパレットで次に書かれる番号 (A8h) */
 u8 dip_on, dip_sw[3];
 u8 v30_on;
+u16 hook_seg = HOOK_SEG_FALLBACK;
 u16 iotrap_guest[IOTRAP_MAX], iotrap_host[IOTRAP_MAX];
 u8 iotrap_n;
 

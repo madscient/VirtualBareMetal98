@@ -89,6 +89,14 @@ def host_bytes(lines, label):
     return None
 
 
+def hook_page(lines):
+    """VBM98 が出した 'VBM98: hook page at XXXXX' の行のセグメント。なければ None"""
+    for line in lines:
+        if line.startswith('VBM98: hook page at '):
+            return int(line.split()[4], 16) >> 4
+    return None
+
+
 def test_boot2dd(work):
     """2DD (640KB、512 バイト/セクタ) の RAW イメージから起動する。IPL は受け取った DA/UA (70h) と N=2 で INT 1Bh を呼ぶ。
     R=3 のパターンを読み、自分を R=5〜6 に書く。装備情報が 640KB インタフェースのドライブになっていることも見る"""
@@ -106,7 +114,8 @@ def test_boot2dd(work):
     out = os.path.join(work, 'BOOT2.OUT')
     if os.path.exists(out):
         os.remove(out)
-    finished = dosenv.run_batch(['VBM98.EXE -fdd0 D.IMG -trace -menukeys 04,15 > BOOT2.OUT'], 180, core='normal')
+    # 横取り印のページを従来の場所 (BASIC ROM の末尾) に置く経路もここで通す (空きページが見つからない機械の代わり)
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 D.IMG -trace -menukeys 04,15 -hookseg F700 > BOOT2.OUT'], 180, core='normal')
     lines = imgtests.read_lines(work, 'BOOT2.OUT') or []
     for line in lines:
         print('  ' + line)
@@ -121,6 +130,8 @@ def test_boot2dd(work):
         ('INT 1Bh read with the received DA/UA returned 00h', rec[0x309] == 0),
         ('sector 3 contents arrived in the guest', int.from_bytes(rec[0x30A:0x30C], 'little') == want_sum),
         ('result bytes in the work area: ST0=00, next R=4', rec[0x30C] == 0 and rec[0x311] == 4),
+        ('with -hookseg F700 the hook page is at F700h (the fallback place) and INT 1Bh goes through it',
+         int.from_bytes(rec[0x330:0x332], 'little') == 0xF700 and rec[0x332:0x336] == b'\xF4\xF4\xF4\xF4'),
     )
     ok = True
     for name, c in checks:
@@ -199,6 +210,9 @@ def test_boot(work):
         ('VBM98 reported the reset from the guest and the one from the menu',
          any('reset (guest)' in l for l in lines) and any('reset (menu)' in l for l in lines)),
         ('no extended memory is shown to the guest (0401h and 0594h are 0)', rec[0x32B:0x32E] == b'\0\0\0'),
+        ('the hook page is outside the BASIC ROM: INT 1Bh points to the page VBM98 reported, not to F700h',
+         hook_page(lines) not in (None, 0xF700) and int.from_bytes(rec[0x330:0x332], 'little') == hook_page(lines) and rec[0x33E] == 0xF4),
+        ('the last 4KB of the BASIC ROM area is not replaced with HLT bytes', rec[0x332:0x336] != b'\xF4\xF4\xF4\xF4'),
         ('-log: the log file holds the same lines as the console (boot, INT 1Bh trace, resets, exit)',
          any('booting from drive' in l for l in loglines) and any(l.startswith('1B 5690') for l in loglines) and
          any('reset (menu)' in l for l in loglines) and any('back to DOS' in l for l in loglines)),

@@ -85,6 +85,7 @@ struct opts {
     const char *iotrap;             /* -iotrap の値: 一覧 ('=' を含む) か定義ファイル名。後のものが有効 */
     const char *sbrom;              /* -sbrom のファイル名 (0 なら無し) */
     u32 sbrom_lin;                  /* サウンド BIOS を置く線形番地 (C8000h か CC000h) */
+    u16 hookseg;                    /* 開発用 (-hookseg) */
     const char *log;                /* -log のファイル名 (0 なら無し) */
     u16 log_sec;                    /* -log の心拍の間隔 (秒)。0 なら心拍なし */
 };
@@ -254,6 +255,10 @@ static int parse_args(int argc, char **argv, struct opts *o)
                     break;
                 p = *end == ',' ? end + 1 : end;
             }
+            i++;
+        } else if (eq(a, "-hookseg") && v) {
+            /* 開発用: 横取り印のページのセグメント (16 進 4 桁。F700 で従来の BASIC ROM の末尾) */
+            o->hookseg = (u16)strtol(v, 0, 16);
             i++;
         } else if (eq(a, "-log") && v) {
             /* <ファイル名>[,<秒>]。秒があれば、その間隔でゲストの様子をログに書く心拍を入れる (-tick を使う) */
@@ -772,12 +777,15 @@ static int guest_memory(int first)
 {
     static const u8 zero2[2] = { 0, 0 };
     u16 i, off;
-    u8 vec[4] = { 0x00, 0x00, 0x00, 0xF7 };
+    u8 vec[4];
     u8 ent[4];
     u8 equip[2];
 
     if (xms_move(xms_handle, guest_off, 0, xms_far(0, 0), 0x600))
         return 1;
+    vec[0] = vec[1] = 0;
+    vec[2] = (u8)HOOK_PAGE_SEG;
+    vec[3] = (u8)(HOOK_PAGE_SEG >> 8);
     g_write(0x1B * 4, mon_data_seg(), (u16)(unsigned)vec, 4);
     boot_equip(equip);
     g_write(FDB_WA_EQUIP, mon_data_seg(), (u16)(unsigned)equip, 2);
@@ -822,6 +830,42 @@ static int guest_memory(int first)
 }
 
 /*
+ * 横取り印のページを置く番地を決める (vbm.h、design.md §5)。C0000h〜DFFFFh (拡張 ROM の領域) を 4KB ずつ見て、
+ * ホストに何も載っていない (全部 FFh に読める) ページのうち、いちばん上を使う。-sbrom を置く範囲は避ける。
+ * なければ BASIC ROM 領域の末尾 (F7000h) にする。あわせて、領域の様子を 1 行で表示する (動作報告の材料)
+ */
+#define UPPER_FIRST 0xC000
+#define UPPER_LAST  0xDF00
+static u16 force_hook_seg;      /* 開発用 (-hookseg): 探した結果を使わず、このセグメントに置く (0 なら探す) */
+
+static int page_is_empty(u16 seg)
+{
+    const u8 __far *p = MK_FP(seg, 0);
+
+    /* 先頭が FFh で、1 バイトずらした自分自身と一致すれば全部 FFh。far ポインタを添字で回さない (CLAUDE.md の規約) */
+    return *p == 0xFF && _fmemcmp(MK_FP(seg, 0), MK_FP(seg, 1), 0xFFF) == 0;
+}
+
+static u16 pick_hook_seg(void)
+{
+    char map[33];
+    u16 seg, found = 0;
+    u8 i = 0;
+
+    for (seg = UPPER_FIRST; seg <= UPPER_LAST; seg += 0x100) {
+        u32 l = (u32)seg << 4;
+        int empty = page_is_empty(seg);
+
+        map[i++] = empty ? '.' : '#';
+        if (empty && !(sbrom_path && l >= sbrom_lin && l < sbrom_lin + 0x8000UL))
+            found = seg;
+    }
+    map[i] = 0;
+    say("VBM98: upper memory C0000-DFFFF, 4KB each (. = empty): %s\n", map);
+    return found ? found : HOOK_SEG_FALLBACK;
+}
+
+/*
  * ゲストの器を作る (一度だけ): ゲスト用メモリの確保、横取り印とリセットベクタのページ、メモリスイッチの
  * ページの写し、サウンド BIOS、ページ表、モニタの初期化。中身は guest_memory が入れる
  */
@@ -857,6 +901,12 @@ static int setup_guest(u32 tables)
         p[i] = rom[i];
     p[RESET_LIN & 0xFFF] = 0xF4;
 
+    hook_seg = pick_hook_seg();
+    if (force_hook_seg)
+        hook_seg = force_hook_seg;
+    say("VBM98: hook page at %04X0%s\n", hook_seg,
+        hook_seg != HOOK_SEG_FALLBACK ? "" : force_hook_seg ? " (the last 4KB of the BASIC ROM is hidden from the guest)" :
+        " (no empty page found; the last 4KB of the BASIC ROM is hidden from the guest)");
     monmem_build(&pg, tables, phys);
     monmem_map(HOOK_PAGE_LIN, hookpage);
     monmem_map(RESET_LIN & ~0xFFFUL, rompage);
@@ -1263,6 +1313,7 @@ int main(int argc, char **argv)
     }
     if (o.iotrap && iotrap_setup(o.iotrap))
         return 2;
+    force_hook_seg = o.hookseg;
     sbrom_path = o.sbrom;
     sbrom_lin = o.sbrom_lin;
     trace = o.trace;

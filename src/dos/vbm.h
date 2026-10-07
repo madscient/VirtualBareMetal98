@@ -4,13 +4,17 @@
 #include "mon.h"
 
 /*
- * 横取り印の置き場。BASIC ROM 領域の末尾 1 ページを HLT で埋めてゲストに見せる。
+ * 横取り印の置き場。4KB のページを HLT で埋めてゲストに見せる。番地は起動時に決める (hook_seg。design.md §5):
+ * C0000h〜DFFFFh でホストに何も載っていないページを探し、なければ BASIC ROM 領域の末尾 (F7000h) を使う。
+ * BASIC ROM を使うゲスト (ディスク版の N88-BASIC など) では、F7000h に置くと ROM のその 4KB が見えなくなる
  *   +000h          INT 1Bh のベクタの先
  *   +100h + vec*4  ホストの RAM を指していたベクタ vec の先 (vec < 20h)
  *   +200h          ホストが注入したキー割り込みの戻り先 (design.md §9)
  */
-#define HOOK_PAGE_LIN  0xF7000UL
-#define HOOK_PAGE_SEG  0xF700
+extern u16 hook_seg;                    /* ページのセグメント (ring 0 側が持つ。vbm98.c が起動時に決める) */
+#define HOOK_PAGE_SEG  hook_seg
+#define HOOK_PAGE_LIN  ((u32)hook_seg << 4)     /* ring 0 の C からは使わない (32 ビットのシフト) */
+#define HOOK_SEG_FALLBACK 0xF700
 #define HOOK_VEC_OFF   0x100
 #define HOOK_VEC_MAX   0x20
 #define HOOK_KBD_OFF   0x200
