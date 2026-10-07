@@ -15,7 +15,7 @@ extern u16 mon_rm_cs;
 extern void g_exit(void), g_iopl(void), g_hlt(void), g_hlt_at(void), g_hlt_cli(void), g_hlt_cli_at(void);
 extern void g_reflect(void), g_int0d(void), g_int06(void), g_int00(void);
 extern void g_remap(void), g_reset(void), g_priv(void), g_priv_at(void);
-extern void g_io(void), g_io_native(void), g_irq(void), g_irq98(void), g_sep(void), g_sep_end(void);
+extern void g_io(void), g_io_native(void), g_ios(void), g_irq(void), g_irq98(void), g_sep(void), g_sep_end(void);
 extern void g_bios(void), g_bios_end(void);
 extern u8 rm_inb(u16 port);
 extern void rm_isr08(void), rm_isr17(void);
@@ -454,6 +454,19 @@ int main(int argc, char **argv)
     /* トラップした I/O はモニタ核が片付けるので、組み込む側の例外処理には届かない */
     check("io: trapped I/O is handled inside the monitor, never reported as a fault", faults() == 0);
     check("io: an untrapped port executes without exception", fault_at(cs, code_off(g_io_native)) == 0);
+
+    /* 文字列形 (REP OUTSB / REP INSW)。1 回ずつモニタに届き、SI・DI・CX が進む */
+    mon_trap_port(PROBE_PORT, 1);
+    probe_in_word = 0xBEEF;
+    probe_out_count = 0;
+    probe_out_val = 0;
+    rc = run(g_ios, 0);
+    mon_trap_port(PROBE_PORT, 0);
+    check("string io: finishes", rc == X_DONE && nrep == 5 && rep[4] == 0x3333);
+    check("string io: REP OUTSB delivers each byte to the monitor, last one last", probe_out_count == 3 && probe_out_val == 0x33);
+    check("string io: REP OUTSB advances SI by the count", rep[3] == 3);
+    check("string io: REP INSW stores the monitor's words at ES:DI", rep[0] == 0xBEEF && rep[1] == 0xBEEF);
+    check("string io: REP INSW stops after CX words", rep[2] == 0x5A5A && faults() == 0);
 
     survey_irq(pc98);
     rc = run(pc98 ? g_irq98 : g_irq, 0);

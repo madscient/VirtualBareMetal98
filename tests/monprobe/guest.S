@@ -11,7 +11,7 @@
         .text
         .global g_exit, g_iopl, g_hlt, g_hlt_at, g_hlt_cli, g_hlt_cli_at
         .global g_remap, g_reset, g_priv, g_priv_at
-        .global g_io, g_io_native, g_irq, g_irq98, g_sep, g_sep_end, g_bios, g_bios_end
+        .global g_io, g_io_native, g_ios, g_irq, g_irq98, g_sep, g_sep_end, g_bios, g_bios_end
         .global rm_inb, rm_isr08, rm_isr17, rm_old08, rm_old17, rm_cnt08, rm_cnt17
 
 g_exit:
@@ -153,6 +153,44 @@ g_io_native:
         mov     ax, 0x3333
         int     0x80
         int     0xFE
+
+/*
+ * 文字列形のポート I/O (トラップされた 300h)。REP OUTSB で 3 バイト (11h 22h 33h) を出し、REP INSW で 2 語を
+ * 受け、その先の 1 語は触らない。報告: 受けた 2 語、その先の語 (5A5Ah のまま)、SI の進み (3)、最後まで来た印 3333h
+ */
+g_ios:
+        mov     dx, PROBE_PORT
+        push    ds
+        push    es
+        push    cs
+        pop     ds
+        push    cs
+        pop     es
+        cld
+        mov     si, offset ios_src
+        mov     cx, 3
+        rep     outsb
+        mov     bx, si
+        mov     di, offset ios_dst
+        mov     cx, 2
+        rep     insw
+        pop     es
+        pop     ds
+        mov     ax, cs:[ios_dst]
+        int     0x80
+        mov     ax, cs:[ios_dst + 2]
+        int     0x80
+        mov     ax, cs:[ios_dst + 4]
+        int     0x80
+        mov     ax, bx
+        sub     ax, offset ios_src
+        int     0x80
+        mov     ax, 0x3333
+        int     0x80
+        int     0xFE
+
+ios_src:        .byte   0x11, 0x22, 0x33
+ios_dst:        .word   0, 0, 0x5A5A
 
 /*
  * ハードウェア割り込みの反射。ベクタ 8 (タイマ) に自前のハンドラを掛け、2 回数えるまで待つ。

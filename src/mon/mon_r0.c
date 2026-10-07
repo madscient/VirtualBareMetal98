@@ -26,27 +26,88 @@ static void set_ip(struct mon_vframe *f, u16 ip)
 }
 
 /*
+ * IN / OUT の文字列形 (6Ch INSB、6Dh INSW、6Eh OUTSB、6Fh OUTSW)。16 ビットのアドレスと 8 / 16 ビットのデータだけ
+ * 扱い、32 ビットの形 (66h・67h) は扱わない (0 を返して一般保護例外として報告させる)。
+ * REP では 1 回ずつ進めて CX・SI・DI を書き戻すので、途中で mon_on_* が 0 以外を返してホストへ抜けても、
+ * 命令の番地を進めなければ戻ってきた続きが正しく進む (いまの組み込み側は I/O で 0 以外を返さない)
+ */
+static int string_io(struct mon_vframe *f, struct mon_gregs *r, u16 *rc, u8 op, u16 next_ip,
+                     u8 wide, u8 rep, u8 asz, u16 seg)
+{
+    u16 port = (u16)r->edx, cx = (u16)r->ecx, si = (u16)r->esi, di = (u16)r->edi;
+    u8 size = (u8)((op & 1) ? 2 : 1);
+    u16 step = (f->eflags & 0x400) ? (u16)(0 - size) : size;
+    u32 val;
+
+    if (wide || asz)
+        return 0;
+    *rc = 0;
+    while (!rep || cx) {
+        if (op & 2) {
+            val = size == 2 ? mon_peek16(mon_lin(seg, si)) : mon_peek8(mon_lin(seg, si));
+            *rc = mon_on_out(port, size, val);
+            si = (u16)(si + step);
+        } else {
+            val = 0;
+            *rc = mon_on_in(port, size, &val);
+            if (size == 2)
+                mon_poke16(mon_lin((u16)f->es, di), (u16)val);
+            else
+                mon_poke8(mon_lin((u16)f->es, di), (u8)val);
+            di = (u16)(di + step);
+        }
+        if (rep)
+            cx--;
+        if (*rc || !rep)
+            break;
+    }
+    r->ecx = (r->ecx & 0xFFFF0000UL) | cx;
+    r->esi = (r->esi & 0xFFFF0000UL) | si;
+    r->edi = (r->edi & 0xFFFF0000UL) | di;
+    if (*rc == 0)
+        set_ip(f, next_ip);
+    return 1;
+}
+
+/*
  * 一般保護例外の原因が IN / OUT なら代行して 1 を返す (結果は *rc)。違えば 0。
- * 文字列 I/O (6Ch〜6Fh) は扱わない。
  */
 static int io_trap(struct mon_vframe *f, struct mon_gregs *r, u16 *rc)
 {
     u16 cs = (u16)f->cs;
     u16 ip = (u16)f->eip;
     u16 port;
+    u16 seg = (u16)f->ds;      /* OUTS の元のセグメント。上書きのプリフィクスで変わる */
     u32 val;
-    u8 op, n, size, wide = 0;
+    u8 op, n, size, wide = 0, rep = 0, asz = 0;
 
-    /* プリフィクスを読み飛ばす。命令長の上限が 15 バイトなので、それ以上は追わない */
+    /* プリフィクスを読み飛ばす (意味のあるものは控える)。命令長の上限が 15 バイトなので、それ以上は追わない */
     for (n = 0; n < 15; n++) {
         op = mon_peek8(mon_lin(cs, ip));
         if (op == 0x66)
             wide = 1;
-        else if (op != 0x26 && op != 0x2E && op != 0x36 && op != 0x3E && op != 0x64 &&
-                 op != 0x65 && op != 0x67 && op != 0xF0 && op != 0xF2 && op != 0xF3)
+        else if (op == 0x67)
+            asz = 1;
+        else if (op == 0xF2 || op == 0xF3)
+            rep = 1;
+        else if (op == 0x26)
+            seg = (u16)f->es;
+        else if (op == 0x2E)
+            seg = cs;
+        else if (op == 0x36)
+            seg = (u16)f->ss;
+        else if (op == 0x3E)
+            seg = (u16)f->ds;
+        else if (op == 0x64)
+            seg = (u16)f->fs;
+        else if (op == 0x65)
+            seg = (u16)f->gs;
+        else if (op != 0xF0)
             break;
         ip++;
     }
+    if (op >= 0x6C && op <= 0x6F)
+        return string_io(f, r, rc, op, (u16)(ip + 1), wide, rep, asz, seg);
     switch (op) {
     case 0xE4: case 0xE5: case 0xE6: case 0xE7:
         port = mon_peek8(mon_lin(cs, (u16)(ip + 1)));
