@@ -10,6 +10,7 @@
  *   +000h          INT 1Bh のベクタの先
  *   +100h + vec*4  ホストの RAM を指していたベクタ vec の先 (vec < 20h)
  *   +200h          ホストが注入したキー割り込みの戻り先 (design.md §9)
+ *   +300h          IRET 1 バイト。20h 以上のベクタのうち、ホストの RAM を指していたものの飛び先 (design.md §6)
  */
 extern u16 hook_seg;                    /* ページのセグメント (ring 0 側が持つ。vbm98.c が起動時に決める) */
 #define HOOK_PAGE_SEG  hook_seg
@@ -18,6 +19,7 @@ extern u16 hook_seg;                    /* ページのセグメント (ring 0 �
 #define HOOK_VEC_OFF   0x100
 #define HOOK_VEC_MAX   0x20
 #define HOOK_KBD_OFF   0x200
+#define HOOK_IRET_OFF  0x300
 
 /* 横取り印の識別子 */
 #define HOOK_INT1B 1

@@ -9,6 +9,9 @@
  * サウンド BIOS (CC000h) の 4 バイト (先頭 2 つ、末尾、+2000h)、拡張メモリ量、INT 1Bh・09h・1Ah・19h のベクタと
  * BASIC ROM の末尾のページの先頭 4 バイトを自分の中 (300h から) に書き込み、INT 1Ah を 1 回呼んでから、
  * 自分自身の 1024 バイトをセクタ 3 に書き、割り込み禁止で HLT する。
+ * ほかに、INT 89h・8Ah のベクタ (20h 以上のベクタの扱いを見る。89h は 0 でなければ 1 回呼ぶ) と、
+ * 8000:0000 から 512 バイトの和 (ゲストの RAM が 0 で埋まっているか) を記録し、最後にその 512 バイトを 5Ah で埋める
+ * (次に起動した VBM98 が同じ拡張メモリを使ったとき、埋めていなければこの値が見える)。
  */
 /*
  * 2 とおりにビルドする (tools/build16.sh)。IPL.BIN は 2HD (1024 バイト/セクタ: 読むのは R=2、自分を書くのは R=3)、
@@ -50,6 +53,19 @@ start:
         .word   0x0000, 0xFFFF
 after_reset:
         mov     byte ptr [rec_reset], 1
+        /* 8000:0000 から 512 バイトの和。起動時に RAM が 0 で埋まっていれば 0。埋まっていないと、前に動いた VBM98 の
+           ゲストが残した値 (最後に書く 5Ah と、上のリセットの印) が見えて、リセットを経ずにここへ来る */
+        push    ds
+        mov     ax, 0x8000
+        mov     ds, ax
+        xor     si, si
+        xor     ax, ax
+        mov     cx, 0x100
+6:      add     ax, [si]
+        add     si, 2
+        loop    6b
+        pop     ds
+        mov     [rec_zsum], ax
 
         mov     bx, SECT_BYTES
         mov     cx, SECT_N << 8         /* N、C = 0 */
@@ -148,6 +164,18 @@ after_reset:
         mov     [rec_v19], ax
         mov     ax, es:[0x19 * 4 + 2]
         mov     [rec_v19 + 2], ax
+        mov     ax, es:[0x8A * 4]
+        mov     [rec_v8a], ax
+        mov     ax, es:[0x8A * 4 + 2]
+        mov     [rec_v8a + 2], ax
+        mov     ax, es:[0x89 * 4]
+        mov     [rec_v89], ax
+        mov     bx, es:[0x89 * 4 + 2]
+        mov     [rec_v89 + 2], bx
+        or      ax, bx
+        jz      7f
+        int     0x89                    /* 飛び先がコードでなければ、ここから戻ってこない */
+7:
         les     bx, [rec_v1b]
         mov     al, es:[bx]
         mov     [rec_hook], al
@@ -172,6 +200,14 @@ after_reset:
 4:      loop    4b
         dec     dx
         jnz     3b
+
+        mov     ax, 0x8000
+        mov     es, ax
+        xor     di, di
+        mov     ax, 0x5A5A
+        mov     cx, 0x100
+        cld
+        rep     stosw
 
         mov     bx, 1024                /* WRITE DATA: 自分の 1024 バイトを WRITE_R から (2DD では 2 セクタ) */
         mov     cx, SECT_N << 8
@@ -209,4 +245,7 @@ rec_v09:        .skip   4
 rec_v1a:        .skip   4
 rec_hook:       .byte   0
 rec_v19:        .skip   4
+rec_v89:        .skip   4
+rec_v8a:        .skip   4
+rec_zsum:       .word   0
         .org    1024

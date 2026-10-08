@@ -773,7 +773,7 @@ static int sbrom_setup(const char *path, u32 lin)
  * 値を直す。ホストの RAM を指すベクタの横取り印は first のときだけ登録する (リセットでは番地が同じ)。
  * 残りの RAM には触らない (実機のリセットでも RAM は残る)
  */
-u32 rom_trace(u16 vec, u16 ax, u16 *rej);   /* romtrace.S */
+u32 rom_trace(u16 vec, u16 ax, u16 *info);  /* romtrace.S */
 
 /*
  * ROM の入口を突き止める割り込み: タイマ・キーボード・VSYNC (ROM の BIOS が自分でハンドラを持つハードウェア割り込み) と、
@@ -783,6 +783,7 @@ u32 rom_trace(u16 vec, u16 ax, u16 *rej);   /* romtrace.S */
  */
 static const u8 rom_traced[] = { 0x08, 0x09, 0x0A, 0x18, 0x19, 0x1A, 0x1C };
 static u32 rom_ent[HOOK_VEC_MAX];   /* 突き止めた入口 (上位がセグメント)。0 なら無し */
+static u8 rom_form[HOOK_VEC_MAX];   /* その入り方: 'a' far jmp の鎖、'b' pushf + far call、'c' MS-DOS の INT 1Ah (romtrace.S) */
 
 /*
  * seg:off がゲストからも同じ中身で見える ROM か。A0000h 未満と 100000h 以上 (HMA) はホストの RAM。E8000h 以上は ROM。
@@ -845,11 +846,12 @@ static int guest_memory(int first)
     if (first) {
         for (i = 0; i < sizeof rom_traced; i++) {
             const u8 *e = ivtbuf + rom_traced[i] * 4;
-            u16 rej[3];
+            u16 rej[4];
 
             if (in_rom((u16)(e[2] | (e[3] << 8)), (u16)(e[0] | (e[1] << 8))))
                 continue;
             rom_ent[rom_traced[i]] = rom_trace(rom_traced[i], 0xFF00, rej);
+            rom_form[rom_traced[i]] = (u8)rej[3];
             /* 入口として使えない入り方で ROM に入った所。実機の報告から、未知の横取りの形を知るための材料 */
             if (rej[1])
                 say("VBM98: INT %02Xh enters the ROM at %04X:%04X with %u bytes pushed, not usable as its entry\n",
@@ -885,9 +887,36 @@ static int guest_memory(int first)
         say("\nVBM98: vectors into host RAM, traced to their ROM entries:");
         for (i = 0; i < HOOK_VEC_MAX; i++)
             if (rom_ent[i])
-                say(" %02X=%04X:%04X", i, (u16)(rom_ent[i] >> 16), (u16)rom_ent[i]);
+                say(" %02X=%04X:%04X(%c)", i, (u16)(rom_ent[i] >> 16), (u16)rom_ent[i], rom_form[i]);
         say("\n");
     }
+
+    /*
+     * 20h 以上のベクタ。ホストの DOS や常駐物、以前に動いたソフトの残り物が入っている。ROM を指すもの (サウンド BIOS
+     * など) と 0000:0000 (未設定) はそのまま渡し、ホストの RAM を指すものは IRET 1 バイトへ向ける (規則 3)。
+     * そのまま渡すと、ゲストがその割り込みを出したときに、中身のないゲストの RAM へ飛ぶ
+     */
+    ent[0] = (u8)HOOK_IRET_OFF;
+    ent[1] = (u8)(HOOK_IRET_OFF >> 8);
+    ent[2] = (u8)HOOK_PAGE_SEG;
+    ent[3] = (u8)(HOOK_PAGE_SEG >> 8);
+    off = 0;
+    for (i = HOOK_VEC_MAX; i < 256; i++) {
+        const u8 *e = ivtbuf + (i % HOOK_VEC_MAX) * 4;
+        u16 vseg, voff;
+
+        if (i % HOOK_VEC_MAX == 0 &&
+            xms_move(0, xms_far(mon_data_seg(), (u16)(unsigned)ivtbuf), 0, xms_far(0, (u16)(i * 4)), HOOK_VEC_MAX * 4))
+            return 1;
+        vseg = (u16)(e[2] | (e[3] << 8));
+        voff = (u16)(e[0] | (e[1] << 8));
+        if ((vseg | voff) == 0 || in_rom(vseg, voff))
+            continue;
+        g_write((u32)i * 4, mon_data_seg(), (u16)(unsigned)ent, 4);
+        off++;
+    }
+    if (first)
+        say("VBM98: vectors 20-FF into host RAM, pointed at an IRET: %u\n", off);
     return 0;
 }
 
@@ -949,6 +978,16 @@ static int setup_guest(u32 tables)
     phys = (lock + 0xFFF) & ~0xFFFUL;
     guest_off = phys - lock;
     xms_a20(1);
+    /*
+     * ゲストの RAM を 0 で埋める (電源投入後の姿。design.md §6)。XMS で確保した領域には前の内容が残っている。
+     * リセットでは消さない (§10)
+     */
+    _fmemset(MK_FP(xfer_seg(), 0), 0, 0x8000);
+    for (i = 0; i < GUEST_KB / 32; i++)
+        if (g_write((u32)i * 0x8000UL, xfer_seg(), 0, 0x8000)) {
+            say("VBM98: cannot clear the guest memory\n");
+            return 1;
+        }
 
     hookpage = alloc_pages(1);
     rompage = alloc_pages(1);
@@ -957,6 +996,7 @@ static int setup_guest(u32 tables)
     p = page_ptr(hookpage);
     for (i = 0; i < 0x1000; i++)
         p[i] = 0xF4;
+    p[HOOK_IRET_OFF] = 0xCF;
     rom = page_ptr(RESET_LIN & ~0xFFFUL);
     p = page_ptr(rompage);
     for (i = 0; i < 0x1000; i++)
@@ -1054,6 +1094,18 @@ static int load_ipl(struct mon_guest *g)
     g->esp = 0x7C00;
     g->eflags = EFL_IF;
     return 0;
+}
+
+/*
+ * メニューの結果を残す。終了は表示にも出す (理由の分からない終了を作らない)。再開はゲストの画面を汚さないよう、
+ * ログにだけ書く。リセットは reset_vm が表示する
+ */
+static void note_menu(const char *why, int mrc)
+{
+    if (mrc == MENU_EXIT)
+        say("VBM98: exit from the VM menu (%s)\n", why);
+    else if (mrc == MENU_RESUME)
+        log_line("VBM98: VM menu (%s): resumed\n", why);
 }
 
 static void print_hits(void)
@@ -1471,8 +1523,10 @@ int main(int argc, char **argv)
         print_memsw("guest", MK_FP((u16)(mswpage >> 4), 0xFE0));
     }
     /* -fdd0 がなければここで選ばせる (spec.md)。取り消したら起動せずに戻る */
-    if (!fb.img[0] && !menu_pick_boot())
+    if (!fb.img[0] && !menu_pick_boot()) {
+        say("VBM98: no disk was selected\n");
         running = 0;
+    }
     if (running) {
         set_shot_base(o.ss ? o.ss : vm_drive_name(0));
         if (load_ipl(&g)) {
@@ -1498,9 +1552,13 @@ int main(int argc, char **argv)
             break;
         case MON_HALT:
             /* アプリが自分で止まった (spec.md): メニューで終了かリセットを選ばせる。戻ってもまた同じ HLT で止まる */
+            /* 画面はこのあとメニューが使うので、-trace がなければログにだけ残す */
             if (trace)
                 say("VBM98: guest halted with interrupts disabled at %04X:%04X\n", g.cs, g.ip);
+            else
+                log_line("VBM98: guest halted with interrupts disabled at %04X:%04X\n", g.cs, g.ip);
             mrc = menu_main();
+            note_menu("guest halted", mrc);
             if (mrc == MENU_EXIT)
                 running = 0;
             else if (mrc == MENU_RESET)
@@ -1524,13 +1582,17 @@ int main(int argc, char **argv)
             running = 0;
             break;
         case X_HOTKEY_STOP:
-            if (menu_confirm_exit())
+            if (menu_confirm_exit()) {
+                say("VBM98: exit by the hotkey (CTRL+GRPH+STOP)\n");
                 running = 0;
-            else
+            } else {
+                log_line("VBM98: CTRL+GRPH+STOP: cancelled\n");
                 resume_keys(&g);
+            }
             break;
         case X_HOTKEY_MENU:
             mrc = menu_main();
+            note_menu("hotkey", mrc);
             if (mrc == MENU_EXIT)
                 running = 0;
             else if (mrc == MENU_RESET)

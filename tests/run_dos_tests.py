@@ -365,6 +365,8 @@ def test_menu(work):
          t is not None and cell(t['rows'], 6, 18) == set() and cell(t['rows'], 9, 22) == set()),
         ('-log heartbeat: a tick line with the guest CS:IP and the stop dump reached the log',
          any(l.startswith('VBM98: tick: CS:IP=') for l in loglines) and any('stopped after 150' in l for l in loglines)),
+        ('the log records that the VM menu was opened by the hotkey path and the guest resumed',
+         any('VM menu (hotkey): resumed' in l for l in loglines)),
     )
     ok = True
     for name, c in checks:
@@ -424,7 +426,8 @@ def boot_rec(path):
         return '%04X:%04X' % (int.from_bytes(rec[off + 2:off + 4], 'little'), int.from_bytes(rec[off:off + 2], 'little'))
 
     return {'ran': rec[0x300:0x308] == b'VBM98IPL', 'ext': rec[0x32B:0x32E], 'v1b': far(0x32E), 'f7': rec[0x332:0x336],
-            'v09': far(0x336), 'v1a': far(0x33A), 'hook': rec[0x33E], 'v19': far(0x33F)}
+            'v09': far(0x336), 'v1a': far(0x33A), 'hook': rec[0x33E], 'v19': far(0x33F),
+            'v89': far(0x343), 'v8a': far(0x347), 'zsum': int.from_bytes(rec[0x34B:0x34D], 'little')}
 
 
 def test_hook(work):
@@ -456,7 +459,10 @@ def test_hook(work):
     a = boot_rec(os.path.join(work, 'H1.IMG'))
     b = boot_rec(os.path.join(work, 'H2.IMG'))
     for when, r in (('before the TSR:', a), ('after the TSR: ', b)):
-        print('  %s INT 09h %s, INT 1Ah %s, INT 19h %s, ext %s' % (when, r['v09'], r['v1a'], r['v19'], r['ext'].hex()))
+        print('  %s INT 09h %s, INT 1Ah %s, INT 19h %s, INT 89h %s, INT 8Ah %s, ext %s, RAM sum %04X' % (
+            when, r['v09'], r['v1a'], r['v19'], r['v89'], r['v8a'], r['ext'].hex(), r['zsum']))
+    hook = hook_page(after)
+    traced = ' '.join(l for l in after if 'traced to their ROM entries' in l)
     checks = (
         ('batch finished', finished),
         ('the IPL ran both before and after the TSR was loaded', a['ran'] and b['ran']),
@@ -467,6 +473,16 @@ def test_hook(work):
          any('INT 19h enters the ROM at' in l and 'not usable' in l for l in after)),
         ('INT 19h hooked by the TSR (far call into the ROM, then jmp far): the guest still gets the ROM entry it had before',
          b['v19'] == a['v19']),
+        ('the way each entry was reached is shown: 09h by pushf + far call (b), 1Ah and 19h by far jmp (a)',
+         ('09=%s(b)' % a['v09']) in traced and ('1A=%s(a)' % a['v1a']) in traced and ('19=%s(a)' % a['v19']) in traced),
+        ('INT 89h pointing into host RAM (set by the TSR): the guest gets the IRET in the hook page, and calling it returns',
+         hook is not None and b['v89'] == '%04X:0300' % hook),
+        ('INT 8Ah left as 0000:0000 by the TSR stays 0000:0000', b['v8a'] == '0000:0000'),
+        ('the number of vectors 20-FF pointed at the IRET is shown', any('pointed at an IRET: ' in l for l in after)),
+        ('guest RAM is cleared at start: the bytes the first run left in extended memory are not seen by the second',
+         a['zsum'] == 0 and b['zsum'] == 0),
+        ('the reason for leaving is shown: exit from the VM menu after the guest halted',
+         any('exit from the VM menu (guest halted)' in l for l in after)),
     )
     ok = True
     for name, c in checks:
@@ -530,7 +546,8 @@ def test_msdos(work):
                 ('guest halted and VBM98 returned to DOS', any('halted' in l for l in lines) and any('back to DOS' in l for l in lines)),
                 ('IPL ran (after its own reset) and wrote itself to sector 3', rec[0x300:0x308] == b'VBM98IPL' and rec[0x31D] == 1),
                 ('sector 2 contents arrived in the guest', int.from_bytes(rec[0x30A:0x30C], 'little') == want_sum),
-                ('INT 1Ah hooked by IO.SYS: VBM98 traced it to a ROM entry', any(' 1A=' in l for l in traced)),
+                ('INT 1Ah hooked by IO.SYS: VBM98 traced it to a ROM entry, by the jump past the entry (c)',
+                 any(' 1A=' in l and '(c)' in l.split(' 1A=')[1][:12] for l in traced)),
                 ('INT 1Ah hooked by IO.SYS: the guest vector is in the ROM, not in the hook page',
                  hook is not None and v1a_seg >= 0xE800 and v1a_seg != hook),
             )

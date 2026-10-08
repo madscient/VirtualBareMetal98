@@ -41,13 +41,14 @@ tr_last:        .word   0, 0            /* 直前のトラップが指してい�
 tr_depth:       .word   0               /* ハンドラに入ってから積まれたバイト数。スタックが切り替わっていたら FFFFh */
 tr_rej:         .word   0, 0, 0         /* 入口と認めなかった最初の番地 (オフセット、セグメント) と、そのときの tr_depth */
 tr_inrom:       .byte   0               /* 入口と認めなかった ROM のコードを実行している間 1 */
-                .byte   0
+tr_form:        .byte   0               /* 入口と認めた入り方: 'a'・'b'・'c' (冒頭の説明)。未発見なら 0 */
 
 /*
- * u32 rom_trace(u16 vec, u16 ax, u16 *rej)
+ * u32 rom_trace(u16 vec, u16 ax, u16 *info)
  * 入口: vec = 割り込みベクタの番号、ax = ハンドラに渡す AX (機能番号で分かれる BIOS では、どの機能でもない値)、
- *       rej = 3 語の置き場 (DS 相対)。
- * 出口: DX:AX = ROM の入口 (セグメント:オフセット)。見つからなければ 0。rej には tr_rej の 3 語 (無ければセグメントが 0)。
+ *       info = 4 語の置き場 (DS 相対)。
+ * 出口: DX:AX = ROM の入口 (セグメント:オフセット)。見つからなければ 0。info には tr_rej の 3 語 (無ければセグメントが 0)
+ *       と、tr_form の 1 語。
  * 保存: SI, DI, BP, ES, DS。壊す: AX, BX, CX, DX。割り込みフラグは入口と同じ
  */
         .global rom_trace
@@ -69,6 +70,7 @@ rom_trace:
         mov     cs:[tr_rej + 2], ax
         mov     cs:[tr_rej + 4], ax
         mov     cs:[tr_inrom], al
+        mov     cs:[tr_form], al
         mov     ax, es:[1 * 4]
         mov     cs:[tr_old01], ax
         mov     ax, es:[1 * 4 + 2]
@@ -124,6 +126,9 @@ tr_done:
         mov     [bx + 2], ax
         mov     ax, cs:[tr_rej + 4]
         mov     [bx + 4], ax
+        mov     al, cs:[tr_form]
+        xor     ah, ah
+        mov     [bx + 6], ax
         mov     ax, cs:[tr_found]
         mov     dx, cs:[tr_found + 2]
         popf
@@ -193,10 +198,12 @@ tr_rom:
         jne     tr_call
         sub     bx, 0x19                /* (c) */
         mov     cs:[tr_found], bx
+        mov     byte ptr cs:[tr_form], 'c'
         jmp     tr_take_seg
 tr_take_jmp:
         mov     ax, [bp + 2]
         mov     cs:[tr_found], ax
+        mov     byte ptr cs:[tr_form], 'a'
 tr_take_seg:
         mov     ax, [bp + 4]
         mov     cs:[tr_found + 2], ax
@@ -225,6 +232,7 @@ tr_call:
         mov     cs:[tr_found], ax
         mov     ax, [bp + 4]
         mov     cs:[tr_found + 2], ax
+        mov     byte ptr cs:[tr_form], 'b'
         mov     word ptr [bp + 2], offset tr_iret
         mov     [bp + 4], cs
         jmp     tr_stop

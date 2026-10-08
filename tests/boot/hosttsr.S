@@ -6,6 +6,8 @@
  *   INT 19h: 先に ROM の中の RETF 1 バイトを far call し (割り込みの入口ではない入り方。戻り番地の下には FLAGS として
  *            読めない語を積んでおく)、そのあと元のハンドラへ飛ぶ形。ROM に入った最初の番地を入口と取り違えないかを見る。
  *            F000h のセグメントに CBh のバイトが無ければ、この横取りは入れない
+ *   INT 89h: コードではない番地 (この常駐部分のデータ) を指すベクタにする。INT 8Ah は 0000:0000 にする。
+ *            20h 以上のベクタのうち、ホストの RAM を指すものがゲストにそのまま渡らないかを見る
  *   BIOS ワークエリアの拡張メモリ量: 0401h = 68h、0594h = 0010h (ホストの XMS ドライバが 0 にしていても、
  *   ゲストに見せる値を VBM98 が自分で 0 にしているかを見るため)
  * COM 形式 (100h から)。常駐部分は new19 の終わりまで
@@ -59,6 +61,10 @@ install:
         mov     [old1a + 2], ax
         mov     word ptr es:[0x1A * 4], offset new1a
         mov     es:[0x1A * 4 + 2], cs
+        mov     word ptr es:[0x89 * 4], offset old09
+        mov     es:[0x89 * 4 + 2], cs
+        mov     word ptr es:[0x8A * 4], 0
+        mov     word ptr es:[0x8A * 4 + 2], 0
         mov     byte ptr es:[0x0401], 0x68
         mov     word ptr es:[0x0594], 0x0010
 
