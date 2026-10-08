@@ -63,6 +63,11 @@ extern u8 kbd_shot_alt;
  * dip_sw (SW1・SW2・SW3。bit n-1 が SW n、1 = OFF) から作った値を返す。ホストのスイッチは読むだけ
  */
 extern u8 dip_on, dip_sw[3];
+/*
+ * -dipsw を省略したとき (design.md §15)。0 でなければ、ポート 31h の bit 7 (SW2-8) だけを 1 (OFF = GDC 2.5MHz) にして
+ * 返す。ほかのビットとポートはホストの値のまま。dip_on と同時には立てない
+ */
+extern u8 dip_gdc25;
 /* -v30 (design.md §14): V30 固有の命令を代行し、ゼロ除算の戻り番地を命令の次にする */
 extern u8 v30_on;
 /*

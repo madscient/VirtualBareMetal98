@@ -833,6 +833,8 @@ static int guest_memory(int first)
     g_rmw8(WA_BOOT, boot_dua(), 0xFF);
     if (dip_on)
         dipsw_workarea();
+    else if (dip_gdc25)
+        g_rmw8(WA_PRXDUPD, 0, 0x20);    /* 054Dh の bit 5 = SW2-8 ON (5MHz を使う)。dipsw_workarea と同じ式 */
 
     /*
      * ホストの RAM (MS-DOS や常駐物) を指すベクタは、ゲストのメモリには中身がない (design.md §6)。
@@ -1436,6 +1438,13 @@ int main(int argc, char **argv)
         for (i = 0; i < 3; i++)
             dip_sw[i] = optval_merge(o.dipsw[i], hsw[i], o.dipsw_hm[i]);
         dip_on = 1;
+    } else {
+        /*
+         * 省略時はホストの値のまま、SW2-8 だけ OFF にする。ゲストは PC-9801VM 相当で、VM のグラフィック GDC は
+         * 2.5MHz だけ。5MHz の設定のホストでは、2.5MHz を前提にしたソフトの表示が崩れる (design.md §15)。
+         * ホストの設定どおりに見せたいときは -dipsw ****** と書く
+         */
+        dip_gdc25 = 1;
     }
     if (o.iotrap && iotrap_setup(o.iotrap))
         return 2;
@@ -1483,6 +1492,8 @@ int main(int argc, char **argv)
         mon_trap_port(0x33, 1);
         mon_trap_port(0x42, 1);
     }
+    if (dip_gdc25)
+        mon_trap_port(0x31, 1);
     /* -iotrap の読み替え元。読み替え先は vbm_r0.c が決める */
     for (i = 0; i < iotrap_n; i++)
         mon_trap_port(iotrap_guest[i], 1);
@@ -1504,6 +1515,8 @@ int main(int argc, char **argv)
     say("VBM98: host dipsw ports 31h 33h 42h: %02X %02X %02X\n", pio_in8(0x31), pio_in8(0x33), pio_in8(0x42));
     if (dip_on)
         say("VBM98: guest dipsw SW1-3: %02X %02X %02X\n", dip_sw[0], dip_sw[1], dip_sw[2]);
+    else
+        say("VBM98: guest dipsw: the host's, with SW2-8 OFF (GDC 2.5MHz). -dipsw ****** shows the host's as they are\n");
     if (dev_tick) {
         /* 8253 のカウンタ 0 を約 10ms (2.4576MHz / 6000h) の矩形波にし、IRQ0 をモニタの時計にする */
         mon_trap_port(PIC_M_IMR, 1);

@@ -117,13 +117,15 @@ def test_boot2dd(work):
     if os.path.exists(out):
         os.remove(out)
     # 横取り印のページを従来の場所 (BASIC ROM の末尾) に置く経路もここで通す (空きページが見つからない機械の代わり)
-    finished = dosenv.run_batch(['VBM98.EXE -fdd0 D.IMG -trace -menukeys 04,15 -hookseg F700 > BOOT2.OUT'], 180, core='normal')
+    # -dipsw ****** は「ホストの値どおり」: 省略時に OFF にする SW2-8 (GDC クロック) も、ホストの値のまま見える
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 D.IMG -trace -menukeys 04,15 -hookseg F700 -dipsw ****** > BOOT2.OUT'], 180, core='normal')
     lines = imgtests.read_lines(work, 'BOOT2.OUT') or []
     for line in lines:
         print('  ' + line)
     with open(os.path.join(work, 'D.IMG'), 'rb') as f:
         rec = f.read()[2048:3072]
     want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 512, 2)) & 0xFFFF
+    h31 = (host_bytes(lines, 'host dipsw ports 31h 33h 42h') or b'\0')[0]
     checks = (
         ('batch finished', finished),
         ('guest halted and VBM98 returned to DOS', any('halted' in l for l in lines) and any('back to DOS' in l for l in lines)),
@@ -134,6 +136,8 @@ def test_boot2dd(work):
         ('result bytes in the work area: ST0=00, next R=4', rec[0x30C] == 0 and rec[0x311] == 4),
         ('with -hookseg F700 the hook page is at F700h (the fallback place) and INT 1Bh goes through it',
          int.from_bytes(rec[0x330:0x332], 'little') == 0xF700 and rec[0x332:0x336] == b'\xF4\xF4\xF4\xF4'),
+        ('-dipsw ******: port 31h is the host value as it is, and work area 054Dh bit 5 follows the host SW2-8',
+         h31 != 0 and rec[0x315] == h31 and (rec[0x31C] & 0x20) == (0 if h31 & 0x80 else 0x20)),
     )
     ok = True
     for name, c in checks:
@@ -427,7 +431,8 @@ def boot_rec(path):
 
     return {'ran': rec[0x300:0x308] == b'VBM98IPL', 'ext': rec[0x32B:0x32E], 'v1b': far(0x32E), 'f7': rec[0x332:0x336],
             'v09': far(0x336), 'v1a': far(0x33A), 'hook': rec[0x33E], 'v19': far(0x33F),
-            'v89': far(0x343), 'v8a': far(0x347), 'zsum': int.from_bytes(rec[0x34B:0x34D], 'little')}
+            'v89': far(0x343), 'v8a': far(0x347), 'zsum': int.from_bytes(rec[0x34B:0x34D], 'little'),
+            'p31': rec[0x315], 'prxdupd': rec[0x31C]}
 
 
 def test_hook(work):
@@ -463,6 +468,8 @@ def test_hook(work):
             when, r['v09'], r['v1a'], r['v19'], r['v89'], r['v8a'], r['ext'].hex(), r['zsum']))
     hook = hook_page(after)
     traced = ' '.join(l for l in after if 'traced to their ROM entries' in l)
+    h31 = (host_bytes(after, 'host dipsw ports 31h 33h 42h') or b'\0')[0]
+    print('  host port 31h %02X; guest port 31h %02X, work area 054Dh %02X' % (h31, b['p31'], b['prxdupd']))
     checks = (
         ('batch finished', finished),
         ('the IPL ran both before and after the TSR was loaded', a['ran'] and b['ran']),
@@ -483,6 +490,10 @@ def test_hook(work):
          a['zsum'] == 0 and b['zsum'] == 0),
         ('the reason for leaving is shown: exit from the VM menu after the guest halted',
          any('exit from the VM menu (guest halted)' in l for l in after)),
+        ('without -dipsw: port 31h is the host value with bit 7 (SW2-8 OFF, GDC 2.5MHz) set, nothing else changed',
+         h31 != 0 and b['p31'] == (h31 | 0x80)),
+        ('without -dipsw: work area 054Dh bit 5 (5MHz allowed) is 0', (b['prxdupd'] & 0x20) == 0),
+        ('without -dipsw: the start-up output says SW2-8 is shown as OFF', any('with SW2-8 OFF (GDC 2.5MHz)' in l for l in after)),
     )
     ok = True
     for name, c in checks:
