@@ -436,7 +436,7 @@ def boot_rec(path):
     return {'ran': rec[0x300:0x308] == b'VBM98IPL', 'ext': rec[0x32B:0x32E], 'v1b': far(0x32E), 'f7': rec[0x332:0x336],
             'v09': far(0x336), 'v1a': far(0x33A), 'hook': rec[0x33E], 'v19': far(0x33F),
             'v89': far(0x343), 'v8a': far(0x347), 'zsum': int.from_bytes(rec[0x34B:0x34D], 'little'),
-            'p31': rec[0x315], 'prxdupd': rec[0x31C]}
+            'p31': rec[0x315], 'prxdupd': rec[0x31C], 'imr_m': rec[0x34D], 'imr_s': rec[0x34E]}
 
 
 def test_hook(work):
@@ -449,15 +449,21 @@ def test_hook(work):
         ipl = f.read()
     img = bytearray(77 * 2 * 8 * 1024)
     img[0:1024] = ipl
-    for name in ('H1.IMG', 'H2.IMG'):
+    for name in ('H1.IMG', 'H2.IMG', 'H3.IMG'):
         with open(os.path.join(work, name), 'wb') as f:
             f.write(img)
     shutil.copy2(os.path.join(BUILT, 'HOSTTSR.COM'), os.path.join(work, 'HOSTTSR.COM'))
-    for name in ('HOOK1.OUT', 'HOOK2.OUT'):
+    for name in ('HOOK1.OUT', 'HOOK2.OUT', 'HOOK3.OUT'):
         if os.path.exists(os.path.join(work, name)):
             os.remove(os.path.join(work, name))
     finished = dosenv.run_batch(['VBM98.EXE -fdd0 H1.IMG -menukeys 04,15 > HOOK1.OUT', 'HOSTTSR.COM',
-                                 'VBM98.EXE -fdd0 H2.IMG -menukeys 04,15 > HOOK2.OUT'], 180, core='normal')
+                                 'VBM98.EXE -fdd0 H2.IMG -menukeys 04,15 > HOOK2.OUT',
+                                 # 3 回目: キーボードを、元のハンドラへ渡さない形で横取りさせる (ROM の入口を追えない)
+                                 'HOSTTSR.COM K', 'VBM98.EXE -fdd0 H3.IMG -menukeys 04,15 > HOOK3.OUT'], 240, core='normal')
+    third = [l for l in imgtests.read_lines(work, 'HOOK3.OUT') or [] if 'redirected:' in l or 'booting from' in l]
+    for line in third:
+        print('  HOOK3: ' + line)
+    c = boot_rec(os.path.join(work, 'H3.IMG'))
     after = []
     for name in ('HOOK1.OUT', 'HOOK2.OUT'):
         for line in imgtests.read_lines(work, name) or []:
@@ -474,6 +480,7 @@ def test_hook(work):
     traced = ' '.join(l for l in after if 'traced to their ROM entries' in l)
     h31 = (host_bytes(after, 'host dipsw ports 31h 33h 42h') or b'\0')[0]
     print('  host port 31h %02X; guest port 31h %02X, work area 054Dh %02X' % (h31, b['p31'], b['prxdupd']))
+    print('  guest IMR before the TSR: %02X %02X, after: %02X %02X' % (a['imr_m'], a['imr_s'], b['imr_m'], b['imr_s']))
     checks = (
         ('batch finished', finished),
         ('the IPL ran both before and after the TSR was loaded', a['ran'] and b['ran']),
@@ -498,6 +505,10 @@ def test_hook(work):
          h31 != 0 and b['p31'] == (h31 | 0x80)),
         ('without -dipsw: work area 054Dh bit 5 (5MHz allowed) is 0', (b['prxdupd'] & 0x20) == 0),
         ('without -dipsw: the start-up output says SW2-8 is shown as OFF', any('with SW2-8 OFF (GDC 2.5MHz)' in l for l in after)),
+        ('IRQ9 (vector 11h) taken by the TSR: open before, masked for the guest after, other slave IRQs unchanged',
+         (a['imr_s'] & 0x02) == 0 and (b['imr_s'] & 0x02) == 0x02 and (b['imr_s'] | 0x02) == (a['imr_s'] | 0x02)),
+        ('a keyboard hook that cannot be traced: INT 09h is redirected, yet the keyboard IRQ stays open for the guest',
+         c['ran'] and any('redirected:' in l and ' 09' in l.split('redirected:')[1] for l in third) and (c['imr_m'] & 0x02) == 0),
     )
     ok = True
     for name, c in checks:

@@ -783,6 +783,13 @@ u32 rom_trace(u16 vec, u16 ax, u16 *info);  /* romtrace.S */
  */
 static const u8 rom_traced[] = { 0x08, 0x09, 0x0A, 0x18, 0x19, 0x1A, 0x1C };
 static u32 rom_ent[HOOK_VEC_MAX];   /* 突き止めた入口 (上位がセグメント)。0 なら無し */
+/*
+ * ホストのハンドラが受け持っている IRQ (マスタ・スレーブの割り込みマスクのビット)。ゲストの割り込みマスクの初期値で
+ * 閉じておく (design.md §6 の規則 3)。開けたまま「EOI を出して戻る」印で受けると、装置側の要求が片付かないまま消え、
+ * 立ち上がりで反応する割り込みコントローラには、以後その IRQ が来なくなる (ホストのディスクが止まる)。
+ * 閉じておけば保留され、ホストに戻ってマスクを戻したときにホストのハンドラへ届く
+ */
+static u8 held_imr_m, held_imr_s;
 static u8 rom_form[HOOK_VEC_MAX];   /* その入り方: 'a' far jmp の鎖、'b' pushf + far call、'c' MS-DOS の INT 1Ah (romtrace.S) */
 
 /*
@@ -861,6 +868,7 @@ static int guest_memory(int first)
         }
         say("VBM98: vectors into host RAM, redirected:");
     }
+    held_imr_m = held_imr_s = 0;
     for (i = 0; i < HOOK_VEC_MAX; i++) {
         const u8 *e = ivtbuf + i * 4;
 
@@ -874,6 +882,14 @@ static int guest_memory(int first)
             g_write((u32)i * 4, mon_data_seg(), (u16)(unsigned)ent, 4);
             continue;
         }
+        /*
+         * 印で受ける IRQ は閉じる。キーボード (IR1) は閉じない: モニタがホットキーをこの割り込みで拾う。
+         * マスタの IR7 も閉じない: スレーブの中継で、閉じるとスレーブ側の割り込みが全部止まる
+         */
+        if (i >= 0x08 && i <= 0x0F && i != 0x09 && i != 0x0F)
+            held_imr_m |= (u8)(1 << (i - 0x08));
+        else if (i >= 0x10 && i <= 0x17)
+            held_imr_s |= (u8)(1 << (i - 0x10));
         off = (u16)(HOOK_VEC_OFF + i * 4);
         ent[0] = (u8)off;
         ent[1] = (u8)(off >> 8);
@@ -1503,8 +1519,8 @@ int main(int argc, char **argv)
     /* ゲストの割り込みマスクの初期値は、電源投入後の BIOS が残す値に近いホストの現在値 */
     host_imr_m = pio_in8(PIC_M_IMR);
     host_imr_s = pio_in8(PIC_S_IMR);
-    guest_imr_m = o.have_imr ? o.imr[0] : host_imr_m;
-    guest_imr_s = o.have_imr ? o.imr[1] : host_imr_s;
+    guest_imr_m = o.have_imr ? o.imr[0] : (u8)(host_imr_m | held_imr_m);
+    guest_imr_s = o.have_imr ? o.imr[1] : (u8)(host_imr_s | held_imr_s);
     init_imr_m = guest_imr_m;
     init_imr_s = guest_imr_s;
     say("VBM98: booting from drive 0 (host IMR %02X %02X, guest IMR %02X %02X; IRR %02X %02X ISR %02X %02X)\n",

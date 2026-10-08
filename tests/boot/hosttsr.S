@@ -8,9 +8,14 @@
  *            F000h のセグメントに CBh のバイトが無ければ、この横取りは入れない
  *   INT 89h: コードではない番地 (この常駐部分のデータ) を指すベクタにする。INT 8Ah は 0000:0000 にする。
  *            20h 以上のベクタのうち、ホストの RAM を指すものがゲストにそのまま渡らないかを見る
+ *   INT 11h (スレーブの IR1): 元のハンドラへ飛ぶだけの横取り。ホストのハンドラが受け持つ IRQ を、VBM98 がゲストの
+ *            割り込みマスクで閉じるかを見る (入口を追う対象ではない IRQ)
  *   BIOS ワークエリアの拡張メモリ量: 0401h = 68h、0594h = 0010h (ホストの XMS ドライバが 0 にしていても、
  *   ゲストに見せる値を VBM98 が自分で 0 にしているかを見るため)
- * COM 形式 (100h から)。常駐部分は new19 の終わりまで
+ * 引数に K を付けて実行すると、上の横取りは入れず、INT 09h を「元のハンドラへ渡さず自分で片付ける」形で横取りする
+ * (ROM の入口を追えない横取り。キーボードの IRQ が印で受けられる状態でも、ゲストの割り込みマスクで閉じられない
+ * ことを見る。閉じるとホットキーが効かなくなる)。
+ * COM 形式 (100h から)。常駐部分は new09k の終わりまで
  */
         .arch   i386
         .intel_syntax noprefix
@@ -23,6 +28,7 @@ start:
 old09:  .word   0, 0
 old1a:  .word   0, 0
 old19:  .word   0, 0
+old11:  .word   0, 0
 romretf: .word  0, 0xF000
 
 new09:
@@ -37,15 +43,43 @@ new1a:
         iret
 1:      jmp     dword ptr cs:[old1a]
 
+new11:
+        jmp     dword ptr cs:[old11]
+
 new19:
         push    0x8000
         call    dword ptr cs:[romretf]
         add     sp, 2
         jmp     dword ptr cs:[old19]
 
+/* キーボードの割り込みを自分で片付ける (データを読み捨てて EOI)。元のハンドラへは渡さない */
+new09k:
+        push    ax
+        in      al, 0x41
+        mov     al, 0x20
+        out     0x00, al
+        pop     ax
+        iret
+
 resident_end:
 
 install:
+        mov     si, 0x81                /* コマンド行の最初の空白でない文字 */
+8:      lodsb
+        cmp     al, 0x20
+        je      8b
+        and     al, 0xDF
+        cmp     al, 0x4B                /* K */
+        jne     9f
+        xor     ax, ax
+        mov     es, ax
+        cli
+        mov     word ptr es:[0x09 * 4], offset new09k
+        mov     es:[0x09 * 4 + 2], cs
+        sti
+        mov     dx, offset resident_end
+        int     0x27
+9:
         xor     ax, ax
         mov     es, ax
         cli
@@ -61,6 +95,12 @@ install:
         mov     [old1a + 2], ax
         mov     word ptr es:[0x1A * 4], offset new1a
         mov     es:[0x1A * 4 + 2], cs
+        mov     ax, es:[0x11 * 4]
+        mov     [old11], ax
+        mov     ax, es:[0x11 * 4 + 2]
+        mov     [old11 + 2], ax
+        mov     word ptr es:[0x11 * 4], offset new11
+        mov     es:[0x11 * 4 + 2], cs
         mov     word ptr es:[0x89 * 4], offset old09
         mov     es:[0x89 * 4 + 2], cs
         mov     word ptr es:[0x8A * 4], 0
