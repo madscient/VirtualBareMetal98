@@ -1584,12 +1584,15 @@ int main(int argc, char **argv)
             reset_vm(&g, "hotkey", &running, &code);
             break;
         case X_FAULT:
+            /* ダンプは画面へ先に全部出す。ログへは終了の直前にまとめて書く (log.h) */
+            log_hold(xfer_seg(), 0x8000);
             say("VBM98: guest raised an unexpected exception at %04X:%04X\n", g.cs, g.ip);
             dump_guest(&g);
             running = 0;
             code = 1;
             break;
         case X_STOP:
+            log_hold(xfer_seg(), 0x8000);
             say("VBM98: stopped after %lu hardware interrupts\n", (unsigned long)stop_after_irqs);
             dump_guest(&g);
             running = 0;
@@ -1632,6 +1635,7 @@ int main(int argc, char **argv)
             kbd_done(&g);
             break;
         default:
+            log_hold(xfer_seg(), 0x8000);
             mon_panic_get(&pn);
             say("VBM98: exception %02X inside the monitor at %04X:%08lX (code %04X)\n",
                    pn.vec, pn.cs, (unsigned long)pn.eip, rc);
@@ -1649,9 +1653,10 @@ int main(int argc, char **argv)
     for (i = 0; i < DRIVES; i++)
         if (fb.img[i])
             dosio_close(&files[i]);
-    xfer_free();
     print_hits();
     say("VBM98: back to DOS\n");
+    log_release();
+    xfer_free();
     log_close();
     return code;
 }

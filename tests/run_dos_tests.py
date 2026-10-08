@@ -371,6 +371,10 @@ def test_menu(work):
          any(l.startswith('VBM98: tick: CS:IP=') for l in loglines) and any('stopped after 150' in l for l in loglines)),
         ('the log records that the VM menu was opened by the hotkey path and the guest resumed',
          any('VM menu (hotkey): resumed' in l for l in loglines)),
+        ('the stop dump is written to the log at the end, in one piece: every console line from the stop on is in the log',
+         bool(lines) and any('stopped after 150' in l for l in lines) and
+         [l for l in lines[next(i for i, l in enumerate(lines) if 'stopped after 150' in l):] if 'tvram row' not in l] ==
+         [l for l in loglines[next((i for i, l in enumerate(loglines) if 'stopped after 150' in l), len(loglines)):] if 'tvram row' not in l]),
     )
     ok = True
     for name, c in checks:

@@ -15,5 +15,12 @@ int log_is_open(void);
 void say(const char *fmt, ...);
 /* ログだけに書く (開いていなければ捨てる)。ゲストの画面を汚したくないもの (心拍) に使う */
 void log_line(const char *fmt, ...);
+/*
+ * ここから先のログへの書き込みを、ファイルに書かずに seg:0000 から size バイトの置き場に溜める。log_release で
+ * まとめてファイルに書く。止まったときのダンプに使う: ディスクが応答しなくなっていると、1 行目のログの書き込みで
+ * 止まって、画面にも続きが出ない。溜めておけば、画面には最後まで出る。置き場からあふれたぶんは捨てる
+ */
+void log_hold(unsigned seg, unsigned size);
+void log_release(void);
 
 #endif

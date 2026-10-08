@@ -11,6 +11,7 @@
 
 static int handle = -1;
 static char buf[256];
+static unsigned hold_seg, hold_size, hold_len;     /* hold_size が 0 でなければ溜めている (log.h) */
 
 int log_open(const char *path)
 {
@@ -49,6 +50,13 @@ static void to_log(const char *s, unsigned len)
 
     if (handle < 0)
         return;
+    if (hold_size) {
+        if (len > hold_size - hold_len)
+            len = hold_size - hold_len;
+        _fmemcpy(MK_FP(hold_seg, hold_len), s, len);
+        hold_len += len;
+        return;
+    }
     _dos_write(handle, (const void __far *)s, len, &put);
     r.h.ah = DOS_COMMIT;
     r.x.bx = (unsigned)handle;
@@ -60,6 +68,31 @@ static unsigned format(const char *fmt, va_list ap)
     int n = vsprintf(buf, fmt, ap);
 
     return n < 0 ? 0 : (unsigned)n;
+}
+
+void log_hold(unsigned seg, unsigned size)
+{
+    if (handle < 0 || hold_size)
+        return;
+    hold_seg = seg;
+    hold_size = size;
+    hold_len = 0;
+}
+
+void log_release(void)
+{
+    union REGS r;
+    unsigned put;
+
+    if (!hold_size)
+        return;
+    hold_size = 0;
+    if (!hold_len)
+        return;
+    _dos_write(handle, MK_FP(hold_seg, 0), hold_len, &put);
+    r.h.ah = DOS_COMMIT;
+    r.x.bx = (unsigned)handle;
+    intdos(&r, &r);
 }
 
 void say(const char *fmt, ...)
