@@ -614,6 +614,12 @@ NP21/W の FreeDOS(98) + HIMEMX + EMM386（NOEMS）で `run_dos_tests.py v86` �
   0060:FFF0）、現在の版は起動して AUTOEXEC.BAT がディスクに書いた。報告のログにはもう 1 点、09h と 11h のベクタが
   A5AA:001D と D00F:43D3（A0000h 以上の、ROM BIOS ではない番地）を指したまま渡っていた。v0.1.1 は A0000h 以上を ROM と
   みなしていたため。v0.1.2 以降は書き込めるかで見分けるが、上位メモリに常駐物を置いた EMM のホストでの確認はしていない
+  - 同じ報告のホストの CONFIG.SYS（利用者経由）: `DOS=HIGH,UMB`、HSB.EXE（高速リブートの常駐物）を VEM486 の前に 1 回と
+    `DEVICEHIGH` で 1 回、`VEM486.EXE /U /TRAPFM`、`DEVICEHIGH` で DOSVER.EXE と NECCDD.SYS。09h の A5AA:001D は、最初に
+    `DEVICEHIGH` で上位メモリへ入る HSB のハンドラ、という利用者の読みと合う（最初の UMB の先頭付近で、デバイスドライバの
+    ヘッダのすぐ後ろの番地。ログからは断定できない。HSB を外して 09h が ROM を指すかを見れば決まる）。11h（IRQ9）の
+    D00F:43D3 は、あとから上位メモリへ入るドライバの番地。v0.1.4 では 09h は入口の追跡の対象で、起動時の表示の `traced` か
+    `redirected` のどちらに出るかで、HSB の横取りが解けたかが分かる
 
 ## 見送った提案
 
