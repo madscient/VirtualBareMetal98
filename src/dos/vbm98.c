@@ -1126,6 +1126,35 @@ static void note_menu(const char *why, int mrc)
         log_line("VBM98: VM menu (%s): resumed\n", why);
 }
 
+/* 仮想の DMA コントローラを電源投入時の状態にする: 全チャネルを閉じ、ほかは 0 */
+static void dma_reset(void)
+{
+    memset(&vdma, 0, sizeof vdma);
+    vdma.mask = 0x0F;
+    vdma_opened = 0;
+}
+
+/*
+ * ゲストが DMA のチャネルを開けたら、その設定を記録に残す。いまは転送を代行していない (design.md §20) ので、
+ * DMA を使うソフトは動かない。どのソフトがどう使うかを知る材料にする。ゲストの画面を汚さないようログにだけ書き、
+ * 回数は終了時に表示する
+ */
+static u16 dma_opens;
+
+static void dma_note(void)
+{
+    u8 ch, opened = vdma_opened;
+
+    vdma_opened = 0;
+    for (ch = 0; ch < 4; ch++)
+        if (opened & (1 << ch)) {
+            if (dma_opens != 0xFFFF)
+                dma_opens++;
+            log_line("VBM98: guest opened DMA channel %u: mode %02X, address %02X%02X%04X, count %04X (no transfer is performed)\n",
+                     ch, vdma.mode[ch], vdma.xbank[ch], vdma.bank[ch], vdma.addr[ch], vdma.count[ch]);
+        }
+}
+
 static void print_hits(void)
 {
     u16 v;
@@ -1137,6 +1166,8 @@ static void print_hits(void)
     say("\n");
     if (fb.cmiss)
         say("VBM98: sectors matched without the cylinder number in their ID: %u\n", fb.cmiss);
+    if (dma_opens)
+        say("VBM98: DMA channels opened by the guest (DMA is not transferred yet): %u\n", dma_opens);
 }
 
 /* ---------------------------------------------------------------- メニューからの再開 */
@@ -1216,6 +1247,7 @@ static int vm_reset(struct mon_guest *g)
     screen_clear();
     kbd_pending = 0;
     inject_n = inject_i = 0;
+    dma_reset();
     guest_imr_m = init_imr_m;
     guest_imr_s = init_imr_s;
     if (dev_tick)
@@ -1510,6 +1542,13 @@ int main(int argc, char **argv)
     }
     if (dip_gdc25)
         mon_trap_port(0x31, 1);
+    /* DMA コントローラ。ゲストのアクセスは仮想のコントローラで受け、実物には届けない (vbm_r0.c、design.md §20) */
+    for (i = 0x01; i <= 0x29; i += 2)
+        if (i <= 0x1F || i >= 0x21)
+            mon_trap_port((u16)i, 1);
+    for (i = 0x0E05; i <= 0x0E0B; i += 2)
+        mon_trap_port((u16)i, 1);
+    dma_reset();
     /* -iotrap の読み替え元。読み替え先は vbm_r0.c が決める */
     for (i = 0; i < iotrap_n; i++)
         mon_trap_port(iotrap_guest[i], 1);
@@ -1575,6 +1614,8 @@ int main(int argc, char **argv)
         rc = mon_run(&g);
         host_hw();
         _enable();
+        if (vdma_opened)
+            dma_note();
         switch (rc) {
         case X_INT1B:
             service_int1b(&g);

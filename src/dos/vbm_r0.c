@@ -250,6 +250,96 @@ u16 mon_on_fault(u8 vec, u32 err, struct mon_vframe *f, struct mon_gregs *r)
 }
 
 /*
+ * 仮想の DMA コントローラ (vbm.h、design.md §20)。ポートの割り当て (出典は design.md §12):
+ *   01h + 4n: チャネル n の番地、03h + 4n: 長さ (どちらも下位・上位の順に 2 回)
+ *   11h: 書き込みはコマンド、読み出しはステータス    13h: 要求レジスタ
+ *   15h: マスクを 1 チャネルずつ (bit 2 が 1 で閉じる)   17h: モード (bit 1-0 がチャネル)
+ *   19h: 上位・下位の切替を戻す   1Bh: 初期化 (全チャネルを閉じる)   1Dh: 全チャネルを開ける   1Fh: マスクを一括で
+ *   27h・21h・23h・25h: チャネル 0・1・2・3 のバンク    29h: バンクの繰り上がりの設定
+ *   0E05h + 2n: チャネル n の拡張バンク
+ * 扱ったら 1 を返す。実物の番地・長さは読むと進んだ値を返すが、ここでは転送が起きないので書いた値のまま返す
+ */
+struct vdma vdma;
+u8 vdma_opened;
+
+static u8 dma_reg(u16 port, u8 **bank)
+{
+    static const u8 bank_ch[4] = { 1, 2, 3, 0 };
+
+    if (port >= 0x21 && port <= 0x27 && (port & 1)) {
+        *bank = &vdma.bank[bank_ch[(port - 0x21) >> 1]];
+        return 1;
+    }
+    if (port >= 0x0E05 && port <= 0x0E0B && (port & 1)) {
+        *bank = &vdma.xbank[(port - 0x0E05) >> 1];
+        return 1;
+    }
+    return 0;
+}
+
+static u8 dma_out(u16 port, u8 v)
+{
+    u8 was = vdma.mask;
+    u8 *bank;
+
+    if (port >= 0x01 && port <= 0x0F && (port & 1)) {
+        u8 ch = (u8)((port >> 2) & 3);
+        u16 *reg = (port & 2) ? &vdma.count[ch] : &vdma.addr[ch];
+
+        *reg = vdma.ff ? (u16)((*reg & 0x00FF) | ((u16)v << 8)) : (u16)((*reg & 0xFF00) | v);
+        vdma.ff ^= 1;
+        return 1;
+    }
+    if (dma_reg(port, &bank)) {
+        *bank = v;
+        return 1;
+    }
+    switch (port) {
+    case 0x11: vdma.cmd = v; break;
+    case 0x13: break;
+    case 0x15:
+        if (v & 4)
+            vdma.mask |= (u8)(1 << (v & 3));
+        else
+            vdma.mask &= (u8)~(1 << (v & 3));
+        break;
+    case 0x17: vdma.mode[v & 3] = v; break;
+    case 0x19: vdma.ff = 0; break;
+    case 0x1B: vdma.mask = 0x0F; vdma.ff = 0; vdma.cmd = 0; vdma.stat = 0; break;
+    case 0x1D: vdma.mask = 0; break;
+    case 0x1F: vdma.mask = (u8)(v & 0x0F); break;
+    case 0x29: vdma.bound[v & 3] = (u8)((v >> 2) & 3); break;
+    default: return 0;
+    }
+    vdma_opened = (u8)(vdma_opened | (was & (vdma.mask ^ 0x0F)));
+    return 1;
+}
+
+static u8 dma_in(u16 port, u16 *v)
+{
+    u8 *bank;
+
+    if (port >= 0x01 && port <= 0x0F && (port & 1)) {
+        u8 ch = (u8)((port >> 2) & 3);
+        u16 reg = (port & 2) ? vdma.count[ch] : vdma.addr[ch];
+
+        *v = vdma.ff ? (u16)(reg >> 8) : (u16)(reg & 0xFF);
+        vdma.ff ^= 1;
+        return 1;
+    }
+    if (port == 0x11) {
+        *v = vdma.stat;
+        vdma.stat &= 0xF0;
+        return 1;
+    }
+    if ((port >= 0x13 && port <= 0x1F && (port & 1)) || port == 0x29 || dma_reg(port, &bank)) {
+        *v = 0xFF;
+        return 1;
+    }
+    return 0;
+}
+
+/*
  * トラップしているポートはキーボード (41h/43h)、表示系の写し、DIP スイッチ、-iotrap の読み替え元、
  * トレース用 (-traceio)。読み替え (iotrap_map) を先に通し、あとの処理は読み替えた先のポートで行う。
  * 記録に残すのはゲストが指したポート。32 ビットの I/O は下位 16 ビットだけ通す (32 ビットのシフトは
@@ -261,6 +351,11 @@ u16 mon_on_in(u16 port, u8 size, u32 *val)
     u16 gport = port;
 
     port = iotrap_map(port);
+    if (size == 1 && dma_in(port, &v)) {
+        *val = v;
+        log_io(0, gport, size, v);
+        return 0;
+    }
     if (port == KBD_DATA && size == 1) {
         /* 割り込みで読み取り済みのスキャンコードを渡す。なければ実機の値 */
         v = kbd_pending ? kbd_code : mon_in8(KBD_DATA);
@@ -291,6 +386,8 @@ u16 mon_on_out(u16 port, u8 size, u32 val)
 
     log_io(1, port, size, v);
     port = iotrap_map(port);
+    if (size == 1 && dma_out(port, (u8)v))
+        return 0;
     /*
      * 表示系の写し (スクリーンショットで色を当てるため。書き込みは実機へも通す)。6Ah は 00h/01h が 16 色
      * モードの切替。A8h〜AEh は 8 色モードではデジタルパレットのレジスタ、16 色モードでは A8h が番号、

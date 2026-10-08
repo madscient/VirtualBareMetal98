@@ -9,7 +9,7 @@
  * サウンド BIOS (CC000h) の 4 バイト (先頭 2 つ、末尾、+2000h)、拡張メモリ量、INT 1Bh・09h・1Ah・19h のベクタと
  * BASIC ROM の末尾のページの先頭 4 バイトを自分の中 (300h から) に書き込み、INT 1Ah を 1 回呼んでから、
  * 自分自身の 1024 バイトをセクタ 3 に書き、割り込み禁止で HLT する。
- * ほかに、割り込みマスク (ポート 02h・0Ah)、INT 89h・8Ah のベクタ (20h 以上のベクタの扱いを見る。89h は 0 でなければ 1 回呼ぶ) と、
+ * ほかに、DMA コントローラのチャネル 1 に書いて読み返した値、割り込みマスク (ポート 02h・0Ah)、INT 89h・8Ah のベクタ (20h 以上のベクタの扱いを見る。89h は 0 でなければ 1 回呼ぶ) と、
  * 8000:0000 から 512 バイトの和 (ゲストの RAM が 0 で埋まっているか) を記録し、最後にその 512 バイトを 5Ah で埋める
  * (次に起動した VBM98 が同じ拡張メモリを使ったとき、埋めていなければこの値が見える)。
  */
@@ -180,6 +180,33 @@ after_reset:
         mov     [rec_imr], al
         in      al, 0x0A
         mov     [rec_imr + 1], al
+
+        /* DMA コントローラのチャネル 1 に番地 1234h・長さ 0FFFh・バンク 05h・モード 49h を書き、読み返してから
+           マスクを開ける。VBM98 の上では仮想のコントローラが受けるので、実物には届かない */
+        out     0x19, al
+        mov     al, 0x34
+        out     0x05, al
+        mov     al, 0x12
+        out     0x05, al
+        mov     al, 0xFF
+        out     0x07, al
+        mov     al, 0x0F
+        out     0x07, al
+        mov     al, 0x05
+        out     0x21, al
+        mov     al, 0x49
+        out     0x17, al
+        out     0x19, al
+        in      al, 0x05
+        mov     [rec_dma], al
+        in      al, 0x05
+        mov     [rec_dma + 1], al
+        in      al, 0x07
+        mov     [rec_dma + 2], al
+        in      al, 0x07
+        mov     [rec_dma + 3], al
+        mov     al, 0x01
+        out     0x15, al
         les     bx, [rec_v1b]
         mov     al, es:[bx]
         mov     [rec_hook], al
@@ -253,4 +280,5 @@ rec_v89:        .skip   4
 rec_v8a:        .skip   4
 rec_zsum:       .word   0
 rec_imr:        .skip   2
+rec_dma:        .skip   4
         .org    1024

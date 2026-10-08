@@ -180,8 +180,18 @@ def test_boot(work):
     log = os.path.join(work, 'B.LOG')
     if os.path.exists(log):
         os.remove(log)
-    finished = dosenv.run_batch(['VBM98.EXE -fdd0 B.IMG -trace -menukeys 05,15,04,15 -dipsw 0*F4FB -memsw ******08******** '
-                                 '-iotrap I.TXT -sbrom S.ROM -log B.LOG > BOOT.OUT'], 180, core='normal')
+    # 前後で実物の DMA コントローラのチャネル 1 を読む (IPL はゲストの中から同じチャネルに書く)
+    shutil.copy2(os.path.join(BUILT, 'DMARD.COM'), os.path.join(work, 'DMARD.COM'))
+    for name in ('DMA0.OUT', 'DMA1.OUT'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    finished = dosenv.run_batch(['DMARD.COM > DMA0.OUT',
+                                 'VBM98.EXE -fdd0 B.IMG -trace -menukeys 05,15,04,15 -dipsw 0*F4FB -memsw ******08******** '
+                                 '-iotrap I.TXT -sbrom S.ROM -log B.LOG > BOOT.OUT',
+                                 'DMARD.COM > DMA1.OUT'], 180, core='normal')
+    dma0 = ' '.join(imgtests.read_lines(work, 'DMA0.OUT') or []).strip()
+    dma1 = ' '.join(imgtests.read_lines(work, 'DMA1.OUT') or []).strip()
+    print('  real DMA channel 1 before: %s, after: %s' % (dma0, dma1))
     lines = imgtests.read_lines(work, 'BOOT.OUT') or []
     for line in lines:
         print('  ' + line)
@@ -219,6 +229,16 @@ def test_boot(work):
         ('the hook page is outside the BASIC ROM: INT 1Bh points to the page VBM98 reported, not to F700h',
          hook_page(lines) not in (None, 0xF700) and int.from_bytes(rec[0x330:0x332], 'little') == hook_page(lines) and rec[0x33E] == 0xF4),
         ('the last 4KB of the BASIC ROM area is not replaced with HLT bytes', rec[0x332:0x336] != b'\xF4\xF4\xF4\xF4'),
+        ('virtual DMA controller: what the guest wrote to channel 1 (address 1234h, count 0FFFh) reads back',
+         rec[0x34F:0x353] == bytes((0x34, 0x12, 0xFF, 0x0F))),
+        ('virtual DMA controller: the real channel 1 is untouched (same before and after, and not the guest value)',
+         dma0.startswith('DMA1 ') and dma0 == dma1 and dma1 != 'DMA1 1234 0FFF'),
+        ('virtual DMA controller: opening the channel is recorded in the log with its settings',
+         any('guest opened DMA channel 1: mode 49, address 00051234, count 0FFF' in l for l in loglines)),
+        # IPL は自分で起こしたリセットのあとと、メニューからのリセットのあとの 2 回、チャネルを開ける。リセットで
+        # チャネルが閉じ直されないと、2 回目は「開けた」にならず 1 になる
+        ('virtual DMA controller: a reset closes the channels again (the IPL opens channel 1 once after each of 2 resets)',
+         any('DMA channels opened by the guest' in l and l.rstrip().endswith(': 2') for l in lines)),
         ('-log: the log file holds the same lines as the console (boot, INT 1Bh trace, resets, exit)',
          any('booting from drive' in l for l in loglines) and any(l.startswith('1B 5690') for l in loglines) and
          any('reset (menu)' in l for l in loglines) and any('back to DOS' in l for l in loglines)),
@@ -280,13 +300,18 @@ def test_shot(work):
     img[0:1024] = ipl
     with open(os.path.join(work, 'S.IMG'), 'wb') as f:
         f.write(img)
-    for name in ('SHOT.OUT', 'S001G.PNG', 'S001T.PNG', 'S002G.PNG', 'S002T.PNG'):
+    for name in ('SHOT.OUT', 'S.LOG', 'S001G.PNG', 'S001T.PNG', 'S002G.PNG', 'S002T.PNG'):
         if os.path.exists(os.path.join(work, name)):
             os.remove(os.path.join(work, name))
     # 1 枚目は 8 色モード。IPL が約 1 秒後に 16 色モードへ移るので、2 枚目は 16 色モード
-    finished = dosenv.run_batch(['VBM98.EXE -fdd0 S.IMG -tick -shotat 50,150 -stopafter 200 > SHOT.OUT'], 180, core='normal')
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 S.IMG -tick -shotat 50,150 -stopafter 200 -log S.LOG,1 > SHOT.OUT'], 180,
+                                core='normal')
     for line in imgtests.read_lines(work, 'SHOT.OUT') or []:
         print('  ' + line)
+    if not finished:
+        # VBM98 が終わらなかったときは SHOT.OUT が空なので、どこまで進んだかは心拍つきのログでしか分からない
+        for line in (imgtests.read_lines(work, 'S.LOG') or [])[-12:]:
+            print('  S.LOG: ' + line)
     g1 = read_png4(os.path.join(work, 'S001G.PNG'))
     t1 = read_png4(os.path.join(work, 'S001T.PNG'))
     g2 = read_png4(os.path.join(work, 'S002G.PNG'))
