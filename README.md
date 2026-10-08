@@ -58,8 +58,10 @@ CPU を仮想86モードにし、その中に PC-9801VM 相当の仮想 PC-98 �
 - 80386 以上の CPU を搭載した PC-98x1。ノーマルモードで動いていること（ハイレゾモードは対象外）。
   EPSON の互換機も対象に含める（実物では未確認）
 - MS-DOS。リアルモードで起動しているか、VCPI のある EMM ドライバの下で起動していること。
-  FreeDOS(98) の EMM386 では動作を確認。NEC の MS-DOS 5.0A の EMM386.EXE は、引数なしでは VCPI を提供しないので、
-  その場合は「VCPI がない」と表示して止まる（EMM386.EXE を外して起動する）
+  FreeDOS(98) の EMM386 では動作を確認。NEC の MS-DOS 付属の EMM386.EXE は、そのままでは VCPI を提供しないので、
+  「VCPI がない」と表示して止まる。MS-DOS 6.2 の EMM386.EXE は、`/DPMI` を付けると VCPI を提供する
+  （例: `DEVICE=A:\DOS\EMM386.EXE /UMB /HIGHSCAN /DPMI`）。MS-DOS 5.0A の EMM386.EXE は `/DPMI` を付けても
+  提供しないので、EMM386.EXE を外して起動する
 - XMS ドライバ（HIMEM.SYS など）。ゲストのメモリを XMS から確保する
 - メモリ: 空きコンベンショナルメモリ 256KB 以上と、XMS で確保できる拡張メモリ 700KB 以上。
   メインメモリ 640KB に拡張メモリ 1MB を足した標準的な構成（計 1.6MB）で足りる。
