@@ -125,6 +125,9 @@ ls -l "$out/HOSTTSR.COM" | awk '{print $5, "bytes  HOSTTSR.COM"}'
 ia16-elf-gcc -c "$root/tests/boot/dmard.S" -o "$out/dmard.o"
 ia16-elf-ld -Ttext=0x100 --oformat=binary -o "$out/DMARD.COM" "$out/dmard.o"
 ls -l "$out/DMARD.COM" | awk '{print $5, "bytes  DMARD.COM"}'
+ia16-elf-gcc -c "$root/tests/boot/pageset.S" -o "$out/pageset.o"
+ia16-elf-ld -Ttext=0x100 --oformat=binary -o "$out/PAGESET.COM" "$out/pageset.o"
+ls -l "$out/PAGESET.COM" | awk '{print $5, "bytes  PAGESET.COM"}'
 ia16-elf-gcc -c "$root/tests/boot/tvdump.S" -o "$out/tvdump.o"
 ia16-elf-ld -Ttext=0x100 --oformat=binary -o "$out/TVDUMP.COM" "$out/tvdump.o"
 ls -l "$out/TVDUMP.COM" | awk '{print $5, "bytes  TVDUMP.COM"}'
@@ -137,5 +140,8 @@ ls -l "$out/SHOTIPL.BIN" | awk '{print $5, "bytes  SHOTIPL.BIN"}'
 ia16-elf-gcc -c -DDIRECT400 "$root/tests/boot/shotipl.S" -o "$out/shot400.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOT400.BIN" "$out/shot400.o"
 ls -l "$out/SHOT400.BIN" | awk '{print $5, "bytes  SHOT400.BIN"}'
+ia16-elf-gcc -c -DPAGE1 "$root/tests/boot/shotipl.S" -o "$out/shotpg1.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTPG1.BIN" "$out/shotpg1.o"
+ls -l "$out/SHOTPG1.BIN" | awk '{print $5, "bytes  SHOTPG1.BIN"}'
 python3 "$root/tools/mkdoc.py" "$root/README.md" "$root/src/dos/vbm98.c" "$out/VBM98.DOC"
 ls -l "$out/VBM98.DOC" | awk '{print $5, "bytes  VBM98.DOC"}'

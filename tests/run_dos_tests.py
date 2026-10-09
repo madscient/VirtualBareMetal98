@@ -338,6 +338,18 @@ def test_shot(work):
         img4[0:1024] = f.read()
     with open(os.path.join(work, 'S4.IMG'), 'wb') as f:
         f.write(img4)
+    # 帯をページ 1 に描いてページ 1 を表示し、描画ページはページ 0 に戻す IPL (SHOTPG1.BIN)。そのあと、ホスト側で
+    # ページ 1 を表示したままにして (PAGESET.COM)、ふつうの IPL を撮る: ゲストがページ 0 を表示して描ける状態で始まること
+    # (起動時に BIOS に画面モードを設定させているので、表示ページもそこで 0 に戻る)
+    shutil.copy2(os.path.join(BUILT, 'PAGESET.COM'), os.path.join(work, 'PAGESET.COM'))
+    with open(os.path.join(BUILT, 'SHOTPG1.BIN'), 'rb') as f:
+        img5 = bytearray(77 * 2 * 8 * 1024)
+        img5[0:1024] = f.read()
+    with open(os.path.join(work, 'S5.IMG'), 'wb') as f:
+        f.write(img5)
+    for name in ('S5001G.PNG', 'S5001T.PNG', 'S6001G.PNG', 'S6001T.PNG', 'SHOT5.OUT', 'SHOT6.OUT'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
     for name in ('S4A001G.PNG', 'S4A001T.PNG', 'S4B001G.PNG', 'S4B001T.PNG', 'SHOT4A.OUT', 'SHOT4B.OUT'):
         if os.path.exists(os.path.join(work, name)):
             os.remove(os.path.join(work, name))
@@ -347,8 +359,11 @@ def test_shot(work):
     # 1 枚目は 8 色モード。IPL が約 1 秒後に 16 色モードへ移るので、2 枚目は 16 色モード
     finished = dosenv.run_batch(['VBM98.EXE -fdd0 S.IMG -tick -shotat 50,150 -stopafter 200 -log S.LOG,1 > SHOT.OUT',
                                  'VBM98.EXE -fdd0 S4.IMG -tick -shotat 50 -stopafter 100 -ss S4A -dipsw *0**** > SHOT4A.OUT',
-                                 'VBM98.EXE -fdd0 S4.IMG -tick -shotat 50 -stopafter 100 -ss S4B -dipsw *1**** > SHOT4B.OUT'],
-                                240, core='normal')
+                                 'VBM98.EXE -fdd0 S4.IMG -tick -shotat 50 -stopafter 100 -ss S4B -dipsw *1**** > SHOT4B.OUT',
+                                 'PAGESET.COM',
+                                 'VBM98.EXE -fdd0 S.IMG -tick -shotat 50 -stopafter 100 -ss S6 > SHOT6.OUT',
+                                 'VBM98.EXE -fdd0 S5.IMG -tick -shotat 50 -stopafter 100 -ss S5 > SHOT5.OUT'],
+                                300, core='normal')
     for line in imgtests.read_lines(work, 'SHOT.OUT') or []:
         print('  ' + line)
     if not finished:
@@ -373,6 +388,8 @@ def test_shot(work):
     bars = ((0, 1), (8, 2), (16, 4), (24, 7))
     g4a = read_png4(os.path.join(work, 'S4A001G.PNG'))
     g4b = read_png4(os.path.join(work, 'S4B001G.PNG'))
+    g5 = read_png4(os.path.join(work, 'S5001G.PNG'))
+    g6 = read_png4(os.path.join(work, 'S6001G.PNG'))
 
     def bars_at(p, y0, y1):
         """帯が画像の y0〜y1-1 行にだけある (その上下 2 行は色 0)"""
@@ -394,6 +411,10 @@ def test_shot(work):
         ('8-colour: outside the bars is colour 0', g is not None and g[19][0] == 0 and g[40][0] == 0 and g[30][32] == 0 and g[100][100] == 0),
         ('400 lines set through the GDC, not the BIOS: VRAM lines 10-19 are image rows 10-19 (not doubled)', bars_at(g4a, 10, 20)),
         ('the same on a standard-resolution display setting (SW1-1 OFF): still taken as 200 lines, rows 20-39', bars_at(g4b, 20, 40)),
+        ('bars drawn on page 1 and shown, with page 0 selected for drawing: the screenshot is of the page on display',
+         bars_at(g5, 20, 40)),
+        ('started while the host shows page 1: the guest gets page 0 for both display and drawing (the bars are in the picture)',
+         bars_at(g6, 20, 40)),
         ('16-colour: palette has 16 entries, entry 8 is the red the IPL set, entry 1 is the power-on half blue',
          g2 is not None and len(g2['plte']) == 16 and g2['plte'][8] == (255, 0, 0) and g2['plte'][1] == (0, 0, 119)),
         ('16-colour: the bars keep indices 1/2/4/7 and the E-plane bar at x 32-39 is index 8',
@@ -476,7 +497,8 @@ def test_con(work):
     for name in ('TV.BIN', 'F.LOG'):
         if os.path.exists(os.path.join(work, name)):
             os.remove(os.path.join(work, name))
-    finished = dosenv.run_batch(['VBM98.EXE -fdd0 F.IMG -trace -menukeys 1C -log F.LOG', 'TVDUMP.COM'], 180, core='normal')
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 F.IMG -trace -menukeys 1C -log F.LOG -progress', 'TVDUMP.COM'], 180,
+                                core='normal')
     flog = imgtests.read_lines(work, 'F.LOG') or []
     shown = {}
     for line in flog:
@@ -498,6 +520,8 @@ def test_con(work):
          shown.get(1, '').startswith('VBM98: guest raised an unexpected exception 0D (error 0000) at 1FC0:')),
         ('guest exception: row 0 asks for a key before going back to DOS',
          shown.get(0, '').startswith('VBM98: stopped. Press any key')),
+        ('-progress: the top right of the screen shows 1 entry, the exit code of the exception (3) and the phase',
+         'E0001 X0003 PW' in shown.get(0, '')),
         ('guest exception: the bytes at CS:IP (CLTS, HLT, JMP) and the 3 before it (MOV AX,1234h) are in the log',
          any(l.startswith('VBM98: code at CS:IP: 0F 06 F4 EB FD') for l in flog) and
          any(l.startswith('VBM98: code before CS:IP:') and l.rstrip().endswith('B8 34 12') for l in flog)),

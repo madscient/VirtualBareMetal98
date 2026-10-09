@@ -74,6 +74,19 @@ extern u8 dip_on, dip_sw[3];
  * 返す。ほかのビットとポートはホストの値のまま。dip_on と同時には立てない
  */
 extern u8 dip_gdc25;
+/*
+ * 開発用 (-progress): 進み具合を画面の右上 (テキスト VRAM の 0 行目) に直接書く。DOS も BIOS も割り込みも使わないので、
+ * 固まったときにも、どこまで進んだかが画面に残る (design.md §19)。prog_on が 0 なら何もしない。
+ * 並びは E (ゲストへ入った回数)、X (最後の戻り値)、P (ホスト側のどの処理の中か。vm_prog の引数)、
+ * I と K (ゲストの実行中に来たハードウェア割り込みとキーボード割り込みを数える 1 桁。ring 0 が書く)
+ */
+#define PROG_COL    58
+#define PROG_COL_I  74
+#define PROG_COL_K  77
+extern u8 prog_on;
+void vm_prog(char phase);
+/* ゲストから戻った理由がホットキー (実物のキー) なら 1。ホスト側が見て 0 に戻す */
+extern u8 kbd_hot;
 /* X_FAULT で戻ったときの、例外のベクタ番号とエラーコード (エラーコードのない例外では 0) */
 extern u8 fault_vec;
 extern u16 fault_err;

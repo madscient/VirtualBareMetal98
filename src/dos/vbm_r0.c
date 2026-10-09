@@ -78,9 +78,12 @@ static void pop_iret(struct mon_vframe *f)
 #define SC_COPY   0x61
 
 static u8 kbd_ctrl, kbd_grph;   /* 押されている修飾キー */
+static u8 prog_i, prog_k;
 u8 kbd_pending;                 /* ゲストがまだ読んでいないスキャンコードがある (ホストの注入でも使う。vbm.h) */
 u8 kbd_code;
 u8 kbd_stop_alt, kbd_shot_alt;
+u8 kbd_hot;
+u8 prog_on;
 u8 dev_tick, guest_imr0;
 u32 dev_shot_at[2], dev_menu_at, dev_log_every;
 static u32 log_count;           /* 心拍までの刻みの数え上げ */
@@ -127,6 +130,48 @@ static u16 dip_port(u16 port, u16 real)
     return real;
 }
 
+/* 進み具合の表示 (vbm.h) の 1 桁を進める。ゲストから見えるテキスト VRAM に直接書く */
+static void prog_spin(u8 col, u8 *n)
+{
+    u32 at = 0xA0000UL + (u16)(col * 2);
+
+    *n = (u8)((*n + 1) % 10);
+    mon_poke16(at, (u16)(0x30 + *n));
+    mon_poke16(at + 0x2000, 0x00E1);
+}
+
+/*
+ * ホットキーを拾ったら、CTRL・GRPH・そのキーが全部離されるまでここで待つ (離した符号をここで読み捨てる)。
+ * 待たずにホストへ戻ると、押した符号はゲストに、離した符号だけがホストに届く。ホストの BIOS によっては、押して
+ * いないキーが離されるとシフト状態が反転したままになる (実機の報告: PC-9801RA2。design.md §9)。
+ * 割り込みは禁止のままなので、キーボードの受信はポーリングで読む (43h の bit 1 が受信あり)。押し続けられても
+ * 固まらないよう、VSYNC (A0h の bit 5) を約 3 秒ぶん数えたら打ち切る。VSYNC が来ない場合に備えて回数でも打ち切る
+ */
+static void kbd_wait_release(u8 key)
+{
+    u8 down = 1, vs = 0, v, sc, k;
+    u16 frames = 0;
+    u32 n = 0;
+
+    while ((kbd_ctrl || kbd_grph || down) && frames < 170 && n < 3000000UL) {
+        n++;
+        if (mon_in8(KBD_STAT) & 0x02) {
+            sc = mon_in8(KBD_DATA);
+            k = (u8)(sc & 0x7F);
+            if (k == SC_CTRL)
+                kbd_ctrl = (u8)!(sc & SC_BREAK);
+            else if (k == SC_GRPH)
+                kbd_grph = (u8)!(sc & SC_BREAK);
+            else if (k == key)
+                down = (u8)!(sc & SC_BREAK);
+        }
+        v = (u8)(mon_in8(0xA0) & 0x20);
+        if (v && !vs)
+            frames++;
+        vs = v;
+    }
+}
+
 /*
  * キーボード割り込み。ホットキーを見るためにスキャンコードをここで読んでしまうので、ゲストには
  * ポート 41h/43h のトラップで同じ値を見せる (mon_on_in)。ホットキーはゲストに渡さず、戻り値で
@@ -149,6 +194,8 @@ static u16 kbd_irq(void)
             key == SC_PAD0 ? X_HOTKEY_FDD0 : key == SC_PAD1 ? X_HOTKEY_FDD1 : 0;
     if (x) {
         eoi(IRQ_FIRST + 1);
+        kbd_wait_release(key);
+        kbd_hot = 1;
         return x;
     }
     kbd_code = sc;
@@ -181,6 +228,8 @@ u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
             tick_count++;
         if (irq_hits[vec - IRQ_FIRST] != 0xFFFF)
             irq_hits[vec - IRQ_FIRST]++;
+        if (prog_on)
+            prog_spin(vec == IRQ_FIRST + 1 ? PROG_COL_K : PROG_COL_I, vec == IRQ_FIRST + 1 ? &prog_k : &prog_i);
         if (stop_after_irqs && dev_now() >= stop_after_irqs) {
             /* 取り込んだ割り込みをゲストへは渡さずに止めるので、EOI だけ出しておく */
             eoi(vec);

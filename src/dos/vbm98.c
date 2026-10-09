@@ -210,6 +210,8 @@ static int parse_args(int argc, char **argv, struct opts *o)
             i++;
         } else if (eq(a, "-tick")) {
             dev_tick = 1;
+        } else if (eq(a, "-progress")) {
+            prog_on = 1;
         } else if (eq(a, "-ss") && v) {
             o->ss = v;
             i++;
@@ -463,9 +465,12 @@ static void service_int1b(struct mon_guest *g)
     in.es = g->es;
     in.bp = (u16)g->ebp;
     dir = fdb_direction(in.ah);
+    vm_prog('a');
     if (dir == FDB_FROM_GUEST && in.bx)
         g_read(buf, xfer_seg(), 0, in.bx);
+    vm_prog('r');
     fdb_call(&fb, &in, &out);
+    vm_prog('w');
     if (dir == FDB_TO_GUEST && out.xfer)
         g_write(buf, xfer_seg(), 0, out.xfer);
     for (i = 0; i < out.nwa; i++)
@@ -483,6 +488,7 @@ static void service_int1b(struct mon_guest *g)
     if (trace)
         say("1B %02X%02X C%u H%u R%u N%u BX=%04X %04X:%04X -> %02X%s\n", in.ah, in.al, in.cl, in.dh, in.dl, in.ch,
                in.bx, in.es, in.bp, out.ah, out.ah >= 0x20 ? " *" : "");
+    vm_prog('s');
 }
 
 /* ホストのテキスト画面を控える。戻るときに screen_host で元に戻す */
@@ -1317,6 +1323,43 @@ static void gdc_cmd(u16 stat_port, u8 cmd)
     pio_out8((u16)(stat_port + 2), cmd);
 }
 
+/* 進み具合の表示 (vbm.h)。ホスト側から。テキスト表示が消されていても見えるように、毎回 ON にする */
+static u16 prog_enters, prog_rc;
+
+static void prog_put(u8 col, char c)
+{
+    u16 __far *pc = MK_FP(TVRAM_SEG, col * 2);
+    u16 __far *pa = MK_FP(TVRAM_SEG, TVRAM_ATTR + col * 2);
+
+    *pc = (u8)c;
+    *pa = 0xE1;
+}
+
+static void prog_hex(u8 col, u16 v)
+{
+    static const char hex[] = "0123456789ABCDEF";
+
+    prog_put(col, hex[v >> 12]);
+    prog_put((u8)(col + 1), hex[(v >> 8) & 15]);
+    prog_put((u8)(col + 2), hex[(v >> 4) & 15]);
+    prog_put((u8)(col + 3), hex[v & 15]);
+}
+
+void vm_prog(char phase)
+{
+    if (!prog_on)
+        return;
+    gdc_cmd(0x60, 0x0D);
+    prog_put(PROG_COL, 'E');
+    prog_hex(PROG_COL + 1, prog_enters);
+    prog_put(PROG_COL + 6, 'X');
+    prog_hex(PROG_COL + 7, prog_rc);
+    prog_put(PROG_COL + 12, 'P');
+    prog_put(PROG_COL + 13, phase);
+    prog_put(PROG_COL_I - 1, 'I');
+    prog_put(PROG_COL_K - 1, 'K');
+}
+
 /*
  * メニューのあいだグラフィック表示を消す (BCTRL の STOP)。VRAM とパレットには触らない (design.md §9)。
  * 閉じるときは、ゲストが表示 ON にしていた (vid_gdisp) なら BCTRL の START で戻す。テキスト表示はメニューが
@@ -1338,6 +1381,8 @@ void vm_gdisp_resume(void)
 int vm_shot(char *gname)
 {
     struct shot_info si;
+    u8 disp, acc;
+    int rc;
 
     /*
      * グラフィックが 400 ラインか (design.md §17)。ゲストが GDC に CSRFORM を書いていれば、その L/R が 0 のとき。
@@ -1354,7 +1399,22 @@ int vm_shot(char *gname)
     si.pal = vid_pal;
     si.color16 = vid_color16;
     si.anapal = vid_anapal;
-    return shot_save(&si, gname);
+    /*
+     * 撮るのは表示しているページ。VRAM の窓に見えているのは描画ページなので、違っていれば撮る間だけ合わせる
+     * (2 つのページを切り替えながら描くソフトでは、描きかけや作業用のページが窓に出ている)。
+     * 表示ページはポート A4h、描画ページは A6h で、どちらも bit 0 がページ、読み出せる (design.md §12。未検証)。
+     * 読んだ値が 0 か 1 でなければ、読み出せない機種と見て触らない
+     */
+    disp = pio_in8(0xA4);
+    acc = pio_in8(0xA6);
+    if ((disp & 0xFE) || (acc & 0xFE))
+        disp = acc;
+    if (disp != acc)
+        pio_out8(0xA6, disp);
+    rc = shot_save(&si, gname);
+    if (disp != acc)
+        pio_out8(0xA6, acc);
+    return rc;
 }
 
 /* 8259 の IRR (ocw3 = 0Ah) / ISR (0Bh) を読む。読み出し選択は初期値の IRR に戻しておく */
@@ -1535,6 +1595,7 @@ static void stop_report(u16 rc, const struct mon_guest *g)
     gdc_cmd(0x60, 0x0D);
     vm_gdisp_pause();
     screen_clear();
+    vm_prog('F');
     ui_tty_begin(1);
     say_sink(ui_tty_put);
     if (rc == X_FAULT) {
@@ -1569,10 +1630,11 @@ static void stop_wait(u16 rc)
     if (rc == X_STOP || !say_on_screen())
         return;
     ui_puts(0, 0, UI_YELLOW, "VBM98: stopped. Press any key to return to DOS.");
+    vm_prog('W');
     if (menu_debug) {
         /* 開発用: 画面に直接書いたものを試験が読めるよう、ログに写す (画面には出さない) */
         say_sink(put_nowhere);
-        ui_debug_dump(0, 48);
+        ui_debug_dump(0, 80);
         ui_debug_dump(1, 72);
         say_sink(0);
     }
@@ -1741,12 +1803,18 @@ int main(int argc, char **argv)
          * mon_enter はこの CLI の状態を保存し、戻るときに復元するので、host_hw まで禁止が続く
          */
         _disable();
+        kbd_hot = 0;
+        prog_enters++;
+        vm_prog('G');
         guest_hw();
         rc = mon_run(&g);
+        prog_rc = rc;
+        vm_prog('H');
         host_hw();
         if (stops(rc))
             stop_report(rc, &g);
         _enable();
+        vm_prog('h');
         if (vdma_opened)
             dma_note();
         switch (rc) {
@@ -1808,9 +1876,14 @@ int main(int argc, char **argv)
         case X_HOTKEY_SHOT:
             if (vm_shot(0))
                 say("VBM98: screenshot failed\n");
+            /* 実物のホットキーなら、離した符号はモニタが読み捨てている。ゲストには押した符号しか届いていない */
+            if (kbd_hot)
+                resume_keys(&g);
             break;
         case X_LOGTICK:
+            vm_prog('L');
             log_heartbeat(&g);
+            vm_prog('l');
             break;
         case X_KBD_DONE:
             kbd_done(&g);

@@ -27,6 +27,22 @@ start:
         call    clear_plane
         mov     ax, 0xE000
         call    clear_plane
+#ifdef PAGE1
+        /*
+         * SHOTPG1.BIN: 帯はページ 1 に描いてページ 1 を表示し、描画ページはページ 0 (消してある) に戻す。
+         * VRAM の窓に見えるのは描画ページなので、表示ページを見ずに撮ると何も写らない
+         */
+        mov     al, 1
+        out     0xA6, al
+        mov     ax, 0xA800
+        call    clear_plane
+        mov     ax, 0xB000
+        call    clear_plane
+        mov     ax, 0xB800
+        call    clear_plane
+        mov     ax, 0xE000
+        call    clear_plane
+#endif
 
         /* VRAM の 10〜19 ライン目に、左から色 1 (B)・2 (R)・4 (G)・7 (全部) の 8 ドット幅の帯 */
         mov     ax, 0xA800
@@ -54,6 +70,12 @@ start:
         add     di, 80
         loop    3b
 
+#ifdef PAGE1
+        mov     al, 1
+        out     0xA4, al
+        xor     al, al
+        out     0xA6, al
+#endif
         /* テキスト。文字は A000:0000、属性は A000:2000。1 桁 2 バイト、1 行 160 バイト */
         mov     ax, 0xA000
         mov     es, ax

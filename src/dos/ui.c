@@ -131,7 +131,9 @@ u16 ui_getkey(void)
     }
     memset(&r, 0, sizeof r);
     r.h.ah = 0x00;
+    vm_prog('K');
     int86(0x18, &r, &r);
+    vm_prog('k');
     return (u16)((r.h.ah << 8) | r.h.al);
 }
 
