@@ -473,6 +473,9 @@ def test_con(work):
          shown.get(1, '').startswith('VBM98: guest raised an unexpected exception 0D (error 0000) at 1FC0:')),
         ('guest exception: row 0 asks for a key before going back to DOS',
          shown.get(0, '').startswith('VBM98: stopped. Press any key')),
+        ('guest exception: the bytes at CS:IP (CLTS, HLT, JMP) and the 3 before it (MOV AX,1234h) are in the log',
+         any(l.startswith('VBM98: code at CS:IP: 0F 06 F4 EB FD') for l in flog) and
+         any(l.startswith('VBM98: code before CS:IP:') and l.rstrip().endswith('B8 34 12') for l in flog)),
         ('guest exception: the registers are in the log and VBM98 returned to DOS',
          any(l.startswith('VBM98: guest CS:IP=1FC0:') for l in flog) and any('back to DOS' in l for l in flog)),
         ('guest exception: after the return, the screen ends with the report shown again and "back to DOS"',

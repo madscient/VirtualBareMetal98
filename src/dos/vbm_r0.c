@@ -235,10 +235,11 @@ static int guest_handles(u8 vec)
  */
 u8 fault_vec;
 u16 fault_err;
+u8 fault_code[FAULT_BYTES];
 
 u16 mon_on_fault(u8 vec, u32 err, struct mon_vframe *f, struct mon_gregs *r)
 {
-    u16 len;
+    u16 len, i;
 
     if (v30_on && (vec == 6 || (vec == 13 && err == 0)) && mon_v30_emulate(f, r))
         return 0;
@@ -251,6 +252,8 @@ u16 mon_on_fault(u8 vec, u32 err, struct mon_vframe *f, struct mon_gregs *r)
     log_ev(vec, EV_FAULT_EV, f, (u16)r->eax);
     fault_vec = vec;
     fault_err = (u16)err;
+    for (i = 0; i < FAULT_BYTES; i++)
+        fault_code[i] = mon_peek8(mon_lin((u16)f->cs, (u16)((u16)f->eip - FAULT_BEFORE + i)));
     return X_FAULT;
 }
 

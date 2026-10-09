@@ -1385,7 +1385,7 @@ static void log_heartbeat(const struct mon_guest *g)
     log_ev_seen = evlog_n;
 }
 
-static void dump_guest(const struct mon_guest *g)
+static void dump_guest(const struct mon_guest *g, int fault)
 {
     const char *const *kinds = ev_kinds;
     u8 code[16];
@@ -1395,7 +1395,18 @@ static void dump_guest(const struct mon_guest *g)
            g->cs, g->ip, g->ss, (u16)g->esp, g->ds, g->es, (u16)g->eflags, guest_imr_m, guest_imr_s);
     say("VBM98: AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X BP=%04X\n",
            (u16)g->eax, (u16)g->ebx, (u16)g->ecx, (u16)g->edx, (u16)g->esi, (u16)g->edi, (u16)g->ebp);
-    g_read(lin(g->cs, g->ip), mon_data_seg(), (u16)(unsigned)code, 16);
+    if (fault) {
+        say("VBM98: code before CS:IP:");
+        for (i = 0; i < FAULT_BEFORE; i++)
+            say(" %02X", fault_code[i]);
+        say("\n");
+        memcpy(code, fault_code + FAULT_BEFORE, 16);
+    } else if (lin(g->cs, g->ip) + 16 <= GUEST_KB * 1024UL) {
+        g_read(lin(g->cs, g->ip), mon_data_seg(), (u16)(unsigned)code, 16);
+    } else {
+        /* ゲストの RAM の外 (ROM など)。ホストから見える内容で代える (ゲストにだけ別のものを見せているページでは違う) */
+        _fmemcpy(code, MK_FP(g->cs, g->ip), 16);
+    }
     say("VBM98: code at CS:IP:");
     for (i = 0; i < 16; i++)
         say(" %02X", code[i]);
@@ -1499,7 +1510,7 @@ static int stops(u16 rc)
  * 止まったときの内容を画面に出す。DOS も BIOS も通さず、テキスト VRAM に直接書く (say_sink)。呼ぶのはゲストから
  * 戻った直後、割り込みを許す前: 実機 (PC-9801BX) で、DOS を通した表示が例外の 1 行目の途中で止まり、何の例外かも
  * 読めなかった。止まる原因が DOS のコンソール出力にあっても、ホスト側で受ける割り込みにあっても、ここは通る。
- * 最初の 2 行 (理由とレジスタ) はメモリの転送も使わない。そのあとの行はゲストのメモリを XMS ドライバ経由で読むので、
+ * ゲストの例外では、理由・レジスタ・命令バイトの行まではメモリの転送も使わない。そのあとの行はゲストのメモリを XMS ドライバ経由で読むので、
  * ドライバが割り込みを許すことはありうる (未確認)。
  * 画面は 1 行目から使い、0 行目は stop_wait の案内に空けておく。ログへは溜めておいて stop_wait で書く
  */
@@ -1517,10 +1528,10 @@ static void stop_report(u16 rc, const struct mon_guest *g)
     if (rc == X_FAULT) {
         say("VBM98: guest raised an unexpected exception %02X (error %04X) at %04X:%04X\n",
             fault_vec, fault_err, g->cs, g->ip);
-        dump_guest(g);
+        dump_guest(g, 1);
     } else if (rc == X_STOP) {
         say("VBM98: stopped after %lu hardware interrupts\n", (unsigned long)stop_after_irqs);
-        dump_guest(g);
+        dump_guest(g, 0);
     } else {
         mon_panic_get(&pn);
         say("VBM98: exception %02X inside the monitor at %04X:%08lX (code %04X)\n",

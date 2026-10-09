@@ -72,6 +72,14 @@ extern u8 dip_gdc25;
 extern u8 fault_vec;
 extern u16 fault_err;
 /*
+ * 例外を起こした場所の前後の命令バイト: CS:IP の FAULT_BEFORE バイト前から FAULT_BYTES バイト。ring 0 でゲストの写像を
+ * 通して読んだもの。ホスト側からは、ゲストの RAM (XMS の塊) の外にある ROM の番地を、ゲストから見えるとおりには
+ * 読めない (横取り印のページや -sbrom のように、ゲストにだけ別のものを見せているページがある)
+ */
+#define FAULT_BEFORE 8
+#define FAULT_BYTES  24
+extern u8 fault_code[FAULT_BYTES];
+/*
  * 仮想の DMA コントローラ (design.md §20)。ゲストの 8237 へのアクセスは全部ここで受け、実物には届けない。
  * いまは状態を持つだけで、転送は起こさない。番地と長さは 8237 と同じく 16 ビット、その上をバンクが持つ
  */
