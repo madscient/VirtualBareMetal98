@@ -13,6 +13,8 @@ static int handle = -1;
 static char buf[256];
 static unsigned hold_seg, hold_size, hold_len;     /* hold_size が 0 でなければ溜めている (log.h) */
 static unsigned keep_seg, keep_off, keep_size, keep_len;   /* keep_size が 0 でなければ写しを取っている (log.h) */
+static unsigned keep_sunk;      /* 写しの先頭から、標準出力に届いていない (say_sink の先へ渡した) ぶんの長さ */
+static void (*sink)(const char *s, unsigned len);
 
 int log_open(const char *path)
 {
@@ -122,22 +124,33 @@ void say_keep(unsigned seg, unsigned off, unsigned size)
     keep_off = off;
     keep_size = size;
     keep_len = 0;
+    keep_sunk = 0;
+}
+
+void say_sink(void (*put)(const char *s, unsigned len))
+{
+    sink = put;
+}
+
+int say_on_screen(void)
+{
+    union REGS r;
+
+    r.x.ax = 0x4400;
+    r.x.bx = 1;
+    intdos(&r, &r);
+    return !r.x.cflag && (r.x.dx & 0x80);
 }
 
 void say_again(void)
 {
-    union REGS r;
-    unsigned at, n;
+    unsigned at, n, end;
 
     keep_size = 0;
-    /* 標準出力が装置 (画面) かどうか。ファイルなら、出したものはそのまま残っている */
-    r.x.ax = 0x4400;
-    r.x.bx = 1;
-    intdos(&r, &r);
-    if (r.x.cflag || !(r.x.dx & 0x80))
-        return;
-    for (at = 0; at < keep_len; at += n) {
-        n = keep_len - at;
+    /* 画面なら全部を出し直す。ファイルなら、まだ届いていないぶんだけ (ほかはそのまま残っている) */
+    end = say_on_screen() ? keep_len : keep_sunk;
+    for (at = 0; at < end; at += n) {
+        n = end - at;
         if (n > sizeof buf)
             n = sizeof buf;
         _fmemcpy(buf, MK_FP(keep_seg, keep_off + at), n);
@@ -153,11 +166,16 @@ void say(const char *fmt, ...)
     va_start(ap, fmt);
     n = format(fmt, ap);
     va_end(ap);
-    to_con(buf, n);
+    if (sink)
+        sink(buf, n);
+    else
+        to_con(buf, n);
     if (keep_size) {
         k = n > keep_size - keep_len ? keep_size - keep_len : n;
         _fmemcpy(MK_FP(keep_seg, keep_off + keep_len), buf, k);
         keep_len += k;
+        if (sink)
+            keep_sunk = keep_len;
     }
     to_log(buf, n);
 }

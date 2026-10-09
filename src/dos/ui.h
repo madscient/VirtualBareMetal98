@@ -57,5 +57,11 @@ void ui_flush_keys(void);
 void ui_set_keys(const u8 *scancodes, int n);
 /* 開発用: テキスト VRAM の行 row の文字コードを標準出力に 16 進で出す (表示の確認用) */
 void ui_debug_dump(u8 row, u8 cols);
+/*
+ * 文字列をテキスト VRAM に直接、端末のように書く (改行で次の行の左端へ、右端で折り返し、画面の下端を越えたぶんは
+ * 捨てる)。DOS も BIOS も呼ばず、割り込み禁止のままでも使える。ui_tty_begin で書き始める行を決める
+ */
+void ui_tty_begin(u8 row);
+void ui_tty_put(const char *s, unsigned len);
 
 #endif

@@ -1484,11 +1484,83 @@ static void host_hw(void)
     imrlog_n++;
 }
 
+/* 止まって終わる戻り値か (ゲストの例外、開発用の停止、モニタ内の例外) */
+static int stops(u16 rc)
+{
+    switch (rc) {
+    case X_INT1B: case MON_HALT: case X_RESET: case X_HOTKEY_RESET: case X_HOTKEY_STOP: case X_HOTKEY_MENU:
+    case X_HOTKEY_FDD0: case X_HOTKEY_FDD1: case X_HOTKEY_SHOT: case X_LOGTICK: case X_KBD_DONE:
+        return 0;
+    }
+    return 1;
+}
+
+/*
+ * 止まったときの内容を画面に出す。DOS も BIOS も通さず、テキスト VRAM に直接書く (say_sink)。呼ぶのはゲストから
+ * 戻った直後、割り込みを許す前: 実機 (PC-9801BX) で、DOS を通した表示が例外の 1 行目の途中で止まり、何の例外かも
+ * 読めなかった。止まる原因が DOS のコンソール出力にあっても、ホスト側で受ける割り込みにあっても、ここは通る。
+ * 最初の 2 行 (理由とレジスタ) はメモリの転送も使わない。そのあとの行はゲストのメモリを XMS ドライバ経由で読むので、
+ * ドライバが割り込みを許すことはありうる (未確認)。
+ * 画面は 1 行目から使い、0 行目は stop_wait の案内に空けておく。ログへは溜めておいて stop_wait で書く
+ */
+static void stop_report(u16 rc, const struct mon_guest *g)
+{
+    struct mon_panic pn;
+
+    log_hold(xfer_seg(), 0x8000);
+    keep_on();
+    gdc_cmd(0x60, 0x0D);
+    vm_gdisp_pause();
+    screen_clear();
+    ui_tty_begin(1);
+    say_sink(ui_tty_put);
+    if (rc == X_FAULT) {
+        say("VBM98: guest raised an unexpected exception %02X (error %04X) at %04X:%04X\n",
+            fault_vec, fault_err, g->cs, g->ip);
+        dump_guest(g);
+    } else if (rc == X_STOP) {
+        say("VBM98: stopped after %lu hardware interrupts\n", (unsigned long)stop_after_irqs);
+        dump_guest(g);
+    } else {
+        mon_panic_get(&pn);
+        say("VBM98: exception %02X inside the monitor at %04X:%08lX (code %04X)\n",
+            pn.vec, pn.cs, (unsigned long)pn.eip, rc);
+    }
+    say_sink(0);
+}
+
+static void put_nowhere(const char *s, unsigned len)
+{
+    (void)s;
+    (void)len;
+}
+
+/*
+ * stop_report のあと、割り込みを許してから呼ぶ。先にログをファイルへ書き (ここで固まっても画面には内容が残っている)、
+ * キーを待つ。待たずに進むと、ホストの画面を戻すときに内容が消える。標準出力がファイルに向いているとき (画面を
+ * 見ていない) と、開発用の停止では待たない
+ */
+static void stop_wait(u16 rc)
+{
+    log_release();
+    if (rc == X_STOP || !say_on_screen())
+        return;
+    ui_puts(0, 0, UI_YELLOW, "VBM98: stopped. Press any key to return to DOS.");
+    if (menu_debug) {
+        /* 開発用: 画面に直接書いたものを試験が読めるよう、ログに写す (画面には出さない) */
+        say_sink(put_nowhere);
+        ui_debug_dump(0, 48);
+        ui_debug_dump(1, 72);
+        say_sink(0);
+    }
+    ui_flush_keys();
+    ui_getkey();
+}
+
 int main(int argc, char **argv)
 {
     struct opts o;
     struct mon_guest g;
-    struct mon_panic pn;
     u32 tables;
     u16 rc;
     int i, mrc, running = 1, code = 0;
@@ -1649,6 +1721,8 @@ int main(int argc, char **argv)
         guest_hw();
         rc = mon_run(&g);
         host_hw();
+        if (stops(rc))
+            stop_report(rc, &g);
         _enable();
         if (vdma_opened)
             dma_note();
@@ -1676,20 +1750,8 @@ int main(int argc, char **argv)
         case X_HOTKEY_RESET:
             reset_vm(&g, "hotkey", &running, &code);
             break;
-        case X_FAULT:
-            /* ダンプは画面へ先に全部出す。ログへは終了の直前にまとめて書く (log.h) */
-            log_hold(xfer_seg(), 0x8000);
-            keep_on();
-            say("VBM98: guest raised an unexpected exception at %04X:%04X\n", g.cs, g.ip);
-            dump_guest(&g);
-            running = 0;
-            code = 1;
-            break;
         case X_STOP:
-            log_hold(xfer_seg(), 0x8000);
-            keep_on();
-            say("VBM98: stopped after %lu hardware interrupts\n", (unsigned long)stop_after_irqs);
-            dump_guest(&g);
+            stop_wait(rc);
             running = 0;
             break;
         case X_HOTKEY_STOP:
@@ -1731,11 +1793,8 @@ int main(int argc, char **argv)
             kbd_done(&g);
             break;
         default:
-            log_hold(xfer_seg(), 0x8000);
-            keep_on();
-            mon_panic_get(&pn);
-            say("VBM98: exception %02X inside the monitor at %04X:%08lX (code %04X)\n",
-                   pn.vec, pn.cs, (unsigned long)pn.eip, rc);
+            /* ゲストの例外 (X_FAULT) と、モニタ内の例外。内容は stop_report が出してある */
+            stop_wait(rc);
             running = 0;
             code = 1;
             break;

@@ -233,6 +233,9 @@ static int guest_handles(u8 vec)
  * 代行できないゼロ除算と未定義命令は、ゲストが自前のハンドラを持っていれば INT 0 / INT 6 として反射する
  * (V30 のゼロ除算は戻り番地が命令の次なので、-v30 では命令の長さぶん IP を進める)。持っていなければ止めて報告する
  */
+u8 fault_vec;
+u16 fault_err;
+
 u16 mon_on_fault(u8 vec, u32 err, struct mon_vframe *f, struct mon_gregs *r)
 {
     u16 len;
@@ -246,6 +249,8 @@ u16 mon_on_fault(u8 vec, u32 err, struct mon_vframe *f, struct mon_gregs *r)
         return 0;
     }
     log_ev(vec, EV_FAULT_EV, f, (u16)r->eax);
+    fault_vec = vec;
+    fault_err = (u16)err;
     return X_FAULT;
 }
 

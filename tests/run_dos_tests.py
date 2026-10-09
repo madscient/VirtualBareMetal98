@@ -440,6 +440,46 @@ def test_con(work):
         ):
             print('%s %s' % ('ok  ' if c else 'FAIL', name))
             ok = ok and c
+
+    # ゲストの例外で止まったとき。内容は DOS を通さずテキスト VRAM に直接書かれ、キーを待つ (開発用のキー列の 1 つが
+    # それに答える)。待っている間の画面は、-trace を付けると VBM98 が 0 行目と 1 行目をログに写すので、それを読む
+    with open(os.path.join(BUILT, 'FAULTIPL.BIN'), 'rb') as f:
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = f.read()
+    with open(os.path.join(work, 'F.IMG'), 'wb') as f:
+        f.write(img)
+    for name in ('TV.BIN', 'F.LOG'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 F.IMG -trace -menukeys 1C -log F.LOG', 'TVDUMP.COM'], 180, core='normal')
+    flog = imgtests.read_lines(work, 'F.LOG') or []
+    shown = {}
+    for line in flog:
+        if line.startswith('VBM98: tvram row '):
+            head, cells = line.split(':', 2)[1:]
+            words = [int(w, 16) for w in cells.split()]
+            shown[int(head.split()[-1])] = ''.join(chr(w) if 0x20 <= w < 0x7F else '?' for w in words).rstrip()
+    for r in sorted(shown):
+        print('  while waiting, row %d |%s' % (r, shown[r]))
+    rows = read_screen(work)
+    for row in rows:
+        if row:
+            print('  |' + row)
+    for name, c in (
+        ('guest exception: batch finished', finished),
+        ('guest exception: the first line gives the vector (0D), the error code and the address',
+         any('guest raised an unexpected exception 0D (error 0000) at 1FC0:' in l for l in flog)),
+        ('guest exception: the report is written straight into the text screen, from row 1',
+         shown.get(1, '').startswith('VBM98: guest raised an unexpected exception 0D (error 0000) at 1FC0:')),
+        ('guest exception: row 0 asks for a key before going back to DOS',
+         shown.get(0, '').startswith('VBM98: stopped. Press any key')),
+        ('guest exception: the registers are in the log and VBM98 returned to DOS',
+         any(l.startswith('VBM98: guest CS:IP=1FC0:') for l in flog) and any('back to DOS' in l for l in flog)),
+        ('guest exception: after the return, the screen ends with the report shown again and "back to DOS"',
+         any(r.startswith('VBM98: back to DOS') for r in rows) and any(r.startswith('VBM98: last events') for r in rows)),
+    ):
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
     print('画面の表示: %s' % ('通過' if ok else '失敗'))
     return ok
 

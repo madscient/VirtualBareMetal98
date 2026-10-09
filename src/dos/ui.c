@@ -160,6 +160,34 @@ void ui_set_keys(const u8 *scancodes, int n)
     dev_keyi = 0;
 }
 
+static u8 tty_row, tty_col;
+
+void ui_tty_begin(u8 row)
+{
+    tty_row = row;
+    tty_col = 0;
+}
+
+void ui_tty_put(const char *s, unsigned len)
+{
+    unsigned i;
+
+    for (i = 0; i < len; i++) {
+        if (s[i] == '\n') {
+            tty_row++;
+            tty_col = 0;
+            continue;
+        }
+        if (tty_col >= UI_COLS) {
+            tty_row++;
+            tty_col = 0;
+        }
+        if (tty_row >= UI_ROWS)
+            return;
+        put_cell(tty_row, tty_col++, (u8)s[i], UI_WHITE);
+    }
+}
+
 void ui_debug_dump(u8 row, u8 cols)
 {
     static u8 buf[UI_COLS * 2];

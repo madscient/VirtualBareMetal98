@@ -30,5 +30,13 @@ void log_release(void);
  */
 void say_keep(unsigned seg, unsigned off, unsigned size);
 void say_again(void);
+/*
+ * say() が標準出力へ書く代わりに put を呼ぶようにする (0 で元に戻す)。止まったときの内容を、DOS を通さずに
+ * 画面へ直接書くのに使う (vbm98.c の stop_report)。ログへは変わらず書く。put へ渡したぶんは標準出力に届いて
+ * いないので、say_keep で写しを取っていれば、say_again が標準出力へ出す (ファイルに向けられていても)
+ */
+void say_sink(void (*put)(const char *s, unsigned len));
+/* 標準出力が画面なら 1 (ファイルなどに向けられていれば 0) */
+int say_on_screen(void);
 
 #endif
