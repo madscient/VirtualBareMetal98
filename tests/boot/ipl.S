@@ -49,10 +49,20 @@ start:
         cmp     word ptr es:[0x0700], 0x5352    /* 'RS' */
         je      after_reset
         mov     word ptr es:[0x0700], 0x5352
+        /* 最初の起動のときの装備情報 (055Ch の 2 バイト) と起動装置 (0584h) を、リセットで消えない所に控える。
+           リセットのあとは VBM98 が書き直すので、最初の起動でどう見えていたかはここでしか分からない */
+        mov     ax, es:[0x055C]
+        mov     es:[0x0702], ax
+        mov     al, es:[0x0584]
+        mov     es:[0x0704], al
         .byte   0xEA                            /* JMP FAR FFFF:0000 (リセットベクタ) */
         .word   0x0000, 0xFFFF
 after_reset:
         mov     byte ptr [rec_reset], 1
+        mov     ax, es:[0x0702]
+        mov     [rec_equip], ax
+        mov     al, es:[0x0704]
+        mov     [rec_equip + 2], al
         /* 8000:0000 から 512 バイトの和。起動時に RAM が 0 で埋まっていれば 0。埋まっていないと、前に動いた VBM98 の
            ゲストが残した値 (最後に書く 5Ah と、上のリセットの印) が見えて、リセットを経ずにここへ来る */
         push    ds
@@ -281,4 +291,5 @@ rec_v8a:        .skip   4
 rec_zsum:       .word   0
 rec_imr:        .skip   2
 rec_dma:        .skip   4
+rec_equip:      .skip   3
         .org    1024

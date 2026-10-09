@@ -117,14 +117,33 @@ def test_boot2dd(work):
     out = os.path.join(work, 'BOOT2.OUT')
     if os.path.exists(out):
         os.remove(out)
+    # 同じイメージを、-fdd0 を付けずに起動前のファイル選択から選ぶ。一覧に何が並ぶかを決めるため、別のフォルダで走らせる
+    # (一覧は「取り出す」、「..」、イメージの順。「..」が出ない環境でも、下へ 2 回でイメージに止まる)
+    pick = os.path.join(work, 'PICK')
+    os.makedirs(pick, exist_ok=True)
+    for name in os.listdir(pick):
+        os.remove(os.path.join(pick, name))
+    with open(os.path.join(pick, 'D2.IMG'), 'wb') as f:
+        f.write(img)
+    shutil.copy2(os.path.join(BUILT, 'VBM98.EXE'), os.path.join(pick, 'VBM98.EXE'))
     # 横取り印のページを従来の場所 (BASIC ROM の末尾) に置く経路もここで通す (空きページが見つからない機械の代わり)
     # -dipsw ****** は「ホストの値どおり」: 省略時に OFF にする SW2-8 (GDC クロック) も、ホストの値のまま見える
-    finished = dosenv.run_batch(['VBM98.EXE -fdd0 D.IMG -trace -menukeys 04,15 -hookseg F700 -dipsw ****** > BOOT2.OUT'], 180, core='normal')
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 D.IMG -trace -menukeys 04,15 -hookseg F700 -dipsw ****** > BOOT2.OUT',
+                                 'CD PICK', 'VBM98.EXE -menukeys 3D,3D,1C,1C,04,15 -log P.LOG > PICK.OUT', 'CD ..'],
+                                240, core='normal')
     lines = imgtests.read_lines(work, 'BOOT2.OUT') or []
     for line in lines:
         print('  ' + line)
     with open(os.path.join(work, 'D.IMG'), 'rb') as f:
         rec = f.read()[2048:3072]
+    with open(os.path.join(pick, 'D2.IMG'), 'rb') as f:
+        rec2 = f.read()[2048:3072]
+    picklog = imgtests.read_lines(pick, 'P.LOG') or []
+    for line in imgtests.read_lines(pick, 'PICK.OUT') or []:
+        if 'tvram row' not in line:
+            print('  PICK: ' + line)
+    print('  first boot, work area 055Ch 055Dh 0584h: -fdd0 %s, picked from the menu %s' % (
+        rec[0x353:0x356].hex(' '), rec2[0x353:0x356].hex(' ')))
     want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 512, 2)) & 0xFFFF
     h31 = (host_bytes(lines, 'host dipsw ports 31h 33h 42h') or b'\0')[0]
     checks = (
@@ -139,6 +158,14 @@ def test_boot2dd(work):
          int.from_bytes(rec[0x330:0x332], 'little') == 0xF700 and rec[0x332:0x336] == b'\xF4\xF4\xF4\xF4'),
         ('-dipsw ******: port 31h is the host value as it is, and work area 054Dh bit 5 follows the host SW2-8',
          h31 != 0 and rec[0x315] == h31 and (rec[0x31C] & 0x20) == (0 if h31 & 0x80 else 0x20)),
+        ('at the first boot the work area shows drives on the 640KB interface and the boot device 70h',
+         rec[0x353:0x356] == bytes((0x00, 0x30, 0x70))),
+        ('picked from the menu before the boot: the IPL ran with DA/UA 70h and INT 1Bh returned 00h',
+         rec2[0x300:0x308] == b'VBM98IPL' and rec2[0x308] == 0x70 and rec2[0x309] == 0),
+        ('picked from the menu before the boot: the work area is the same as with -fdd0 (640KB interface, 70h)',
+         rec2[0x353:0x356] == bytes((0x00, 0x30, 0x70))),
+        ('picked from the menu before the boot: the log names the image and its format',
+         any('drive 0: D2.IMG (RAW, 80 cylinders)' in l for l in picklog)),
     )
     ok = True
     for name, c in checks:
@@ -230,6 +257,8 @@ def test_boot(work):
         ('the hook page is outside the BASIC ROM: INT 1Bh points to the page VBM98 reported, not to F700h',
          hook_page(lines) not in (None, 0xF700) and int.from_bytes(rec[0x330:0x332], 'little') == hook_page(lines) and rec[0x33E] == 0xF4),
         ('the last 4KB of the BASIC ROM area is not replaced with HLT bytes', rec[0x332:0x336] != b'\xF4\xF4\xF4\xF4'),
+        ('at the first boot the work area shows drives on the 1MB interface and the boot device 90h',
+         rec[0x353:0x356] == bytes((0x03, 0x00, 0x90))),
         ('virtual DMA controller: what the guest wrote to channel 1 (address 1234h, count 0FFFh) reads back',
          rec[0x34F:0x353] == bytes((0x34, 0x12, 0xFF, 0x0F))),
         ('virtual DMA controller: the real channel 1 is untouched (same before and after, and not the guest value)',
@@ -541,7 +570,8 @@ def test_hook(work):
                                  'VBM98.EXE -fdd0 H2.IMG -menukeys 04,15 > HOOK2.OUT',
                                  # 3 回目: キーボードを、元のハンドラへ渡さない形で横取りさせる (ROM の入口を追えない)
                                  'HOSTTSR.COM K', 'VBM98.EXE -fdd0 H3.IMG -menukeys 04,15 > HOOK3.OUT'], 240, core='normal')
-    third = [l for l in imgtests.read_lines(work, 'HOOK3.OUT') or [] if 'redirected:' in l or 'booting from' in l]
+    third = [l for l in imgtests.read_lines(work, 'HOOK3.OUT') or []
+             if 'redirected:' in l or 'booting from' in l or 'warning' in l]
     for line in third:
         print('  HOOK3: ' + line)
     c = boot_rec(os.path.join(work, 'H3.IMG'))
@@ -590,6 +620,9 @@ def test_hook(work):
          (a['imr_s'] & 0x02) == 0 and (b['imr_s'] & 0x02) == 0x02 and (b['imr_s'] | 0x02) == (a['imr_s'] | 0x02)),
         ('a keyboard hook that cannot be traced: INT 09h is redirected, yet the keyboard IRQ stays open for the guest',
          c['ran'] and any('redirected:' in l and ' 09' in l.split('redirected:')[1] for l in third) and (c['imr_m'] & 0x02) == 0),
+        ('the keyboard hook that cannot be traced is reported with a warning; without the TSR there is no warning',
+         any('warning: INT 09h' in l for l in third) and
+         not any('warning' in l for l in imgtests.read_lines(work, 'HOOK1.OUT') or ['warning'])),
     )
     ok = True
     for name, c in checks:

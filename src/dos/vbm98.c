@@ -387,13 +387,14 @@ void vm_eject(int unit)
 /* 新しいイメージが開けてから前のを閉じる (開けなければ前のが残る) */
 int vm_mount(int unit, const char *path, int quiet)
 {
+    /* メニューから入れるとき (quiet) は、メニューの画面に重ならないようログにだけ書く */
+    void (*note)(const char *, ...) = quiet ? log_line : say;
     dos_file f;
     u32 size;
     int rc;
 
     if (dosio_open(&f, path, 1, &size) && dosio_open(&f, path, 0, &size)) {
-        if (!quiet)
-            say("VBM98: cannot open %s\n", path);
+        note("VBM98: cannot open %s\n", path);
         return 1;
     }
     vm_eject(unit);
@@ -401,16 +402,14 @@ int vm_mount(int unit, const char *path, int quiet)
     dosio_bind(&ios[unit], &files[unit]);
     rc = dimg_mount(&imgs[unit], &ios[unit], size);
     if (rc) {
-        if (!quiet)
-            say("VBM98: %s: not a supported disk image (%d)\n", path, rc);
+        note("VBM98: %s: not a supported disk image (%d)\n", path, rc);
         dosio_close(&files[unit]);
         return 1;
     }
     fb.img[unit] = &imgs[unit];
     strncpy(drive_name[unit], path, sizeof drive_name[unit] - 1);
     drive_name[unit][sizeof drive_name[unit] - 1] = 0;
-    if (!quiet)
-        say("VBM98: drive %d: %s (%s, %u cylinders%s)\n", unit, path,
+    note("VBM98: drive %d: %s (%s, %u cylinders%s)\n", unit, path,
                imgs[unit].fmt == DIMG_FMT_RAW ? "RAW" : imgs[unit].fmt == DIMG_FMT_FDI ? "FDI" :
                imgs[unit].fmt == DIMG_FMT_NFD0 ? "NFD r0" : imgs[unit].fmt == DIMG_FMT_NFD1 ? "NFD r1" : "FDD",
                imgs[unit].cyls, imgs[unit].readonly ? ", write protected" : "");
@@ -821,7 +820,6 @@ static int guest_memory(int first)
     u16 i, off;
     u8 vec[4];
     u8 ent[4];
-    u8 equip[2];
 
     if (xms_move(xms_handle, guest_off, 0, xms_far(0, 0), 0x600))
         return 1;
@@ -829,15 +827,12 @@ static int guest_memory(int first)
     vec[2] = (u8)HOOK_PAGE_SEG;
     vec[3] = (u8)(HOOK_PAGE_SEG >> 8);
     g_write(0x1B * 4, mon_data_seg(), (u16)(unsigned)vec, 4);
-    boot_equip(equip);
-    g_write(FDB_WA_EQUIP, mon_data_seg(), (u16)(unsigned)equip, 2);
     /*
      * ゲストには拡張メモリがない (spec.md)。0401h が 16MB 未満の量 (128KB 単位)、0594h の語が 16MB 以上の量 (1MB 単位)。
      * ホストの XMS ドライバが 0 にしていることが多いが、それに頼らない (番地は参考実装の bios.c から。design.md §12)
      */
     g_rmw8(WA_EXTMEM, 0, 0xFF);
     g_write(WA_EXTMEM16, mon_data_seg(), (u16)(unsigned)zero2, 2);
-    g_rmw8(WA_BOOT, boot_dua(), 0xFF);
     if (dip_on)
         dipsw_workarea();
     else if (dip_gdc25)
@@ -907,6 +902,19 @@ static int guest_memory(int first)
             if (rom_ent[i])
                 say(" %02X=%04X:%04X(%c)", i, (u16)(rom_ent[i] >> 16), (u16)rom_ent[i], rom_form[i]);
         say("\n");
+        /*
+         * ROM の BIOS の割り込みなのに入口を突き止められなかったもの。ゲストでは何もしない印になるので、
+         * 18h ならキー入力も画面の制御も効かなくなる。黙って起動すると、原因が分からないまま操作できなくなる
+         */
+        for (i = 0; i < sizeof rom_traced; i++) {
+            const u8 *e = ivtbuf + rom_traced[i] * 4;
+
+            if (!rom_ent[rom_traced[i]] && !in_rom((u16)(e[2] | (e[3] << 8)), (u16)(e[0] | (e[1] << 8))))
+                say("VBM98: warning: INT %02Xh is hooked in the host and its ROM entry was not found; "
+                    "in the guest it does nothing%s\n", rom_traced[i],
+                    rom_traced[i] == 0x18 ? " (the BIOS for the keyboard and the screen)" :
+                    rom_traced[i] == 0x09 ? " (the keyboard interrupt)" : "");
+        }
     }
 
     /*
@@ -1066,7 +1074,15 @@ static int load_ipl(struct mon_guest *g)
     struct fdb_out out;
     u16 seg, bytes;
     u8 n;
+    u8 equip[2];
 
+    /*
+     * 装備情報と起動装置はドライブ 0 のイメージの種別で決まる。ワークエリアのほかの項目 (guest_memory) と一緒に
+     * 書かないのは、-fdd0 を付けずに起動したときは、その時点でまだイメージが選ばれていないため
+     */
+    boot_equip(equip);
+    g_write(FDB_WA_EQUIP, mon_data_seg(), (u16)(unsigned)equip, 2);
+    g_rmw8(WA_BOOT, boot_dua(), 0xFF);
     if (dimg_get_track(&imgs[0], 0, 0, &t) || !t->nsect) {
         say("VBM98: drive 0 has no track 0\n");
         return 1;
