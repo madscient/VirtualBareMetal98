@@ -1196,6 +1196,9 @@ static void print_hits(void)
         say("VBM98: sectors matched without the cylinder number in their ID: %u\n", fb.cmiss);
     if (dma_opens)
         say("VBM98: DMA channels opened by the guest (DMA is not transferred yet): %u\n", dma_opens);
+    /* 実機の報告で、どの CPU がこうなのかを知るための材料 (mon.h) */
+    if (mon_errhi_seen)
+        say("VBM98: this CPU leaves the upper half of exception error codes non-zero (%04X)\n", mon_errhi_seen);
 }
 
 /* ---------------------------------------------------------------- メニューからの再開 */

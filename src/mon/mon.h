@@ -109,6 +109,15 @@ void mon_init(const struct mon_paging *pg);
  */
 int mon_vcpi_setup(u32 pt0_phys);
 
+/*
+ * 例外のエラーコード (32 ビットで積まれる) の上位 16 ビット。
+ * mon_errhi_seen は、実際に積まれた値を OR で集めたもの。0 でなければ、上位を 0 にしない CPU で動いている。
+ * mon_test_errhi は試験用: 0 でなければ、積まれた値の上位に OR してから読む (エミュレータは上位を 0 で積むので、
+ * 0 でない CPU の真似はこれでしかできない)
+ */
+extern u16 mon_test_errhi;
+extern u16 mon_errhi_seen;
+
 /* ポートの I/O をトラップするかどうか。トラップしたものは mon_on_in / mon_on_out に届く */
 void mon_trap_port(u16 port, int on);
 

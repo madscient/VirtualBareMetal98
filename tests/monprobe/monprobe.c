@@ -374,6 +374,8 @@ int main(int argc, char **argv)
     monmem_build(&pg, tables, 0);
     mon_init(&pg);
     cs = mon_rm_cs;
+    /* エラーコードの上位 16 ビットが 0 でない CPU を真似る (mon.h)。この先の試験は全部この状態で走る */
+    mon_test_errhi = 0xA5A5;
 
     rc = run(g_exit, 0);
     check("enter V86 and return to real mode", rc == X_DONE && count(VEC_DONE, EV_INT) == 1);
@@ -536,6 +538,8 @@ int main(int argc, char **argv)
     check("irq: hardware interrupts are reflected to the guest's handler", rep[0] >= 2 && count(8, EV_INT) >= 2);
 
     test_separation();
+
+    check("error code: the tests above ran with a non-zero upper half (A5A5)", mon_errhi_seen == 0xA5A5);
 
     printf("END %u %u\n", failures, checks);
     return failures != 0;

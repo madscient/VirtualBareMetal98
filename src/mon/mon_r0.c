@@ -159,6 +159,9 @@ static u16 halt(struct mon_vframe *f, struct mon_gregs *r)
     return mon_on_int((u8)mon_halt_wait(), f, r);
 }
 
+u16 mon_test_errhi;
+u16 mon_errhi_seen;
+
 /* monasm.S の trap_common から呼ばれる */
 u16 mon_trap(u16 vec, u16 has_err, struct mon_gregs *r)
 {
@@ -167,7 +170,14 @@ u16 mon_trap(u16 vec, u16 has_err, struct mon_gregs *r)
     u16 rc;
 
     if (has_err) {
-        err = ((u32 *)f)[-1];
+        /*
+         * エラーコードは 32 ビットで積まれるが、使うのは下位 16 ビットだけ。上位 16 ビットは 0 とは限らない
+         * (design.md §12): 32 ビットのまま 0 と比べると、上位に値が残る CPU では、トラップした I/O も HLT も
+         * 「想定外の例外」になる。上位は、0 でない CPU があったことを知らせるために集めておく
+         */
+        ((u16 *)f)[-1] |= mon_test_errhi;
+        mon_errhi_seen |= ((u16 *)f)[-1];
+        err = ((u16 *)f)[-2];
         if (vec == 13 && (err & 7) == 2) {
             /* DPL=0 のゲートへゲストが INT n (CD nn) で入ろうとした。命令を飛ばして反射する */
             set_ip(f, (u16)(f->eip + 2));
