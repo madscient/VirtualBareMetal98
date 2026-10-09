@@ -136,7 +136,37 @@ def run(exes, verbose=True):
     failed += run_png(pngtest)
     failed += run_simple(jistest, 'Shift-JIS')
     failed += run_simple(optvaltest, 'コマンドラインの値')
+    failed += run_doc()
     return failed
+
+
+def run_doc():
+    """README.md から作る PC-98 用の文書 (tools/mkdoc.py)。変換そのものが、JIS X 0208 にない文字と桁あふれと
+    記法の残りで止まる。ここでは出来たファイルを読み直して、DOS で読める形になっているかを見る"""
+    out = os.path.join(BUILD, 'VBM98.DOC')
+    p = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'mkdoc.py'), os.path.join(ROOT, 'README.md'),
+                        os.path.join(ROOT, 'src', 'dos', 'vbm98.c'), out],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+    err = None
+    if p.returncode != 0:
+        err = '変換: %s' % p.stdout.strip()
+    else:
+        with open(out, 'rb') as f:
+            raw = f.read()
+        lines = raw.split(b'\r\n')
+        text = raw.decode('shift_jis')
+        if b'\n' in raw.replace(b'\r\n', b'') or b'\r' in raw.replace(b'\r\n', b''):
+            err = '行末が CR LF でない'
+        elif max(len(l) for l in lines) > 78:
+            err = '78 桁を越える行がある'
+        elif not lines[0].startswith(b'VirtualBareMetal98  (VBM98.EXE '):
+            err = '先頭の行に版がない'
+        elif any(s not in text for s in ('-fdd0 <ファイル>', 'CTRL + GRPH + HELP', 'うまく動かないとき', '-dipsw ******')):
+            err = '使い方の内容が欠けている'
+        elif any(s in text for s in ('ビルドと試験', 'docs/', 'tools/build16.sh')):
+            err = 'zip に入らないものへの案内が残っている'
+    print('PC-98 用の文書: %s' % ('通過' if err is None else '失敗 (%s)' % err))
+    return 0 if err is None else 1
 
 
 def main():

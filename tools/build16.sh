@@ -5,6 +5,7 @@
 #   build/dos/VBM98.EXE      本体
 #   build/dos/IPL.BIN        起動の試験に使う IPL (1024 バイトの生のバイナリ)
 #   build/dos/SHOTIPL.BIN    スクリーンショットの試験に使う IPL (同上)
+#   build/dos/VBM98.DOC      PC-98 で読める利用者向けの文書 (README.md から作る。Shift-JIS)
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
 out="$root/build/dos"
@@ -133,3 +134,5 @@ ls -l "$out/FAULTIPL.BIN" | awk '{print $5, "bytes  FAULTIPL.BIN"}'
 ia16-elf-gcc -c "$root/tests/boot/shotipl.S" -o "$out/shotipl.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTIPL.BIN" "$out/shotipl.o"
 ls -l "$out/SHOTIPL.BIN" | awk '{print $5, "bytes  SHOTIPL.BIN"}'
+python3 "$root/tools/mkdoc.py" "$root/README.md" "$root/src/dos/vbm98.c" "$out/VBM98.DOC"
+ls -l "$out/VBM98.DOC" | awk '{print $5, "bytes  VBM98.DOC"}'
