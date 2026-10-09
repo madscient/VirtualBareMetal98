@@ -22,5 +22,13 @@ void log_line(const char *fmt, ...);
  */
 void log_hold(unsigned seg, unsigned size);
 void log_release(void);
+/*
+ * ここから先に say() が画面へ出すものの写しを、seg:off から size バイトの置き場に取る (size が 0 なら、取るのをやめて
+ * 捨てる)。say_again で、取った写しをもう一度画面に出す。ゲストの画面が出ている間の表示は、終了時にホストの画面を
+ * 戻すと上書きされて残らないので、戻したあとに出し直すのに使う。標準出力がファイルに向けられているときは、
+ * 消えるものがないので出し直さない。置き場からあふれたぶんは捨てる
+ */
+void say_keep(unsigned seg, unsigned off, unsigned size);
+void say_again(void);
 
 #endif

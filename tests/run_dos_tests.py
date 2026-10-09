@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DOS 向けにビルドした試験プログラムを DOS 上で走らせる。
 
-    python tests/run_dos_tests.py [img] [fdb] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [shot] [menu] [v86]
+    python tests/run_dos_tests.py [img] [fdb] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [shot] [con] [menu] [v86]
 
     img      ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
     fdb      INT 1Bh の意味論 (fdbios)。同上
@@ -12,6 +12,7 @@
     nfdid    ID の C がシリンダ番号と違う NFD からの起動と、IPL が読めないときの表示
     boot2dd  2DD のイメージからの起動
     shot     スクリーンショット。試験用の IPL が書いた文字と色の帯が、-shotat で撮った PNG に写るか
+    con      出力をファイルに向けずに走らせたとき、DOS に戻ったあとの画面に残る表示
     menu     VM メニュー。-menuat で開き -menukeys で操作して、画面の復元とゲストの再開を見る
     v86      EMM386 (VCPI) の下での起動 (NP21/W だけ)
 
@@ -359,6 +360,61 @@ def test_shot(work):
     return ok
 
 
+def read_screen(work):
+    """TVDUMP.COM が書いた TV.BIN (テキスト VRAM の文字の面) を、行ごとの文字列にする。漢字は '?' にする"""
+    path = os.path.join(work, 'TV.BIN')
+    if not os.path.exists(path):
+        return []
+    with open(path, 'rb') as f:
+        tv = f.read()
+    rows = []
+    for r in range(len(tv) // 160):
+        cells = tv[r * 160:(r + 1) * 160]
+        rows.append(''.join(chr(cells[i]) if cells[i + 1] == 0 and 0x20 <= cells[i] < 0x7F else '?'
+                            for i in range(0, 160, 2)).rstrip())
+    return rows
+
+
+def test_con(work):
+    """出力をファイルに向けずに走らせたとき、DOS に戻ったあとの画面に残るもの。ほかの試験は出力をファイルで読むので、
+    画面でだけ起きること (ホストの画面を戻すときに表示が消える、改行で左端に戻らない) はここでしか見えない。
+    実物の MS-DOS (VBM_MSDOS) があれば、その上でも見る (コンソールの改行の扱いが DOS ごとに違う)"""
+    with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
+        ipl = f.read()
+    shutil.copy2(os.path.join(BUILT, 'TVDUMP.COM'), os.path.join(work, 'TVDUMP.COM'))
+    ok = True
+    for msdos in (False, True):
+        if msdos and (dosenv.name() != 'np21w' or not dosenv.msdos_image()):
+            continue
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = ipl
+        with open(os.path.join(work, 'C.IMG'), 'wb') as f:
+            f.write(img)
+        if os.path.exists(os.path.join(work, 'TV.BIN')):
+            os.remove(os.path.join(work, 'TV.BIN'))
+        # IPL は自分でリセットしてから止まる。メニューが開くので、開発用のキー列で「終了」を選ぶ
+        finished = dosenv.run_batch(['VBM98.EXE -fdd0 C.IMG -menukeys 04,15', 'TVDUMP.COM'], 180, core='normal', msdos=msdos)
+        rows = read_screen(work)
+        for row in rows:
+            if row:
+                print('  |' + row)
+        ours = [r for r in rows if 'VBM98: ' in r]
+        tag = 'on MS-DOS: ' if msdos else ''
+        for name, c in (
+            (tag + 'batch finished', finished),
+            (tag + 'the reason for the exit is on the screen after VBM98 returns',
+             any('VBM98: exit from the VM menu (guest halted)' in r for r in rows)),
+            (tag + 'what VBM98 printed before the guest started is still on the screen',
+             any('VBM98: booting from drive 0' in r for r in rows)),
+            (tag + 'every line of VBM98 starts at the left edge of the screen',
+             len(ours) >= 4 and all(r.startswith('VBM98: ') for r in ours)),
+        ):
+            print('%s %s' % ('ok  ' if c else 'FAIL', name))
+            ok = ok and c
+    print('画面の表示: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
 def test_menu(work):
     """VM メニュー: -menuat で開き、開発用のキー列で「3 (スクリーンショット)、ESC (知らせを閉じる)、ESC (閉じる)」を
     押したことにする。撮れた PNG にはメニューではなく IPL の画面が写り (開く前の画面を戻してから撮る)、
@@ -668,7 +724,7 @@ def test_nfdid(work):
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
          ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos), ('nfdid', 'VBM98.EXE', test_nfdid),
          ('boot2dd', 'VBM98.EXE', test_boot2dd),
-         ('shot', 'VBM98.EXE', test_shot), ('menu', 'VBM98.EXE', test_menu), ('v86', 'VBM98.EXE', test_v86))
+         ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('menu', 'VBM98.EXE', test_menu), ('v86', 'VBM98.EXE', test_v86))
 
 
 def main(argv):

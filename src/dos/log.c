@@ -12,6 +12,7 @@
 static int handle = -1;
 static char buf[256];
 static unsigned hold_seg, hold_size, hold_len;     /* hold_size が 0 でなければ溜めている (log.h) */
+static unsigned keep_seg, keep_off, keep_size, keep_len;   /* keep_size が 0 でなければ写しを取っている (log.h) */
 
 int log_open(const char *path)
 {
@@ -95,15 +96,69 @@ void log_release(void)
     intdos(&r, &r);
 }
 
+/*
+ * 標準出力へ。DOS のコンソールは LF では行を送るだけで左端に戻らないので、CR を足す (確認済み: DOSBox-X、
+ * FreeDOS(98)、MS-DOS 6.20 で、足さないと次の行が前の行の終わりの桁から始まった)。長さ 0 では書かない
+ * (DOS の書き込みは、長さ 0 だとファイルをその位置で切り詰める)
+ */
+static void to_con(const char *s, unsigned len)
+{
+    unsigned i, from = 0, put;
+
+    for (i = 0; i < len; i++)
+        if (s[i] == '\n') {
+            if (i > from)
+                _dos_write(1, (const void __far *)(s + from), i - from, &put);
+            _dos_write(1, (const void __far *)"\r\n", 2, &put);
+            from = i + 1;
+        }
+    if (len > from)
+        _dos_write(1, (const void __far *)(s + from), len - from, &put);
+}
+
+void say_keep(unsigned seg, unsigned off, unsigned size)
+{
+    keep_seg = seg;
+    keep_off = off;
+    keep_size = size;
+    keep_len = 0;
+}
+
+void say_again(void)
+{
+    union REGS r;
+    unsigned at, n;
+
+    keep_size = 0;
+    /* 標準出力が装置 (画面) かどうか。ファイルなら、出したものはそのまま残っている */
+    r.x.ax = 0x4400;
+    r.x.bx = 1;
+    intdos(&r, &r);
+    if (r.x.cflag || !(r.x.dx & 0x80))
+        return;
+    for (at = 0; at < keep_len; at += n) {
+        n = keep_len - at;
+        if (n > sizeof buf)
+            n = sizeof buf;
+        _fmemcpy(buf, MK_FP(keep_seg, keep_off + at), n);
+        to_con(buf, n);
+    }
+}
+
 void say(const char *fmt, ...)
 {
     va_list ap;
-    unsigned n, put;
+    unsigned n, k;
 
     va_start(ap, fmt);
     n = format(fmt, ap);
     va_end(ap);
-    _dos_write(1, (const void __far *)buf, n, &put);
+    to_con(buf, n);
+    if (keep_size) {
+        k = n > keep_size - keep_len ? keep_size - keep_len : n;
+        _fmemcpy(MK_FP(keep_seg, keep_off + keep_len), buf, k);
+        keep_len += k;
+    }
     to_log(buf, n);
 }
 

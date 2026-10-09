@@ -124,6 +124,9 @@ ls -l "$out/HOSTTSR.COM" | awk '{print $5, "bytes  HOSTTSR.COM"}'
 ia16-elf-gcc -c "$root/tests/boot/dmard.S" -o "$out/dmard.o"
 ia16-elf-ld -Ttext=0x100 --oformat=binary -o "$out/DMARD.COM" "$out/dmard.o"
 ls -l "$out/DMARD.COM" | awk '{print $5, "bytes  DMARD.COM"}'
+ia16-elf-gcc -c "$root/tests/boot/tvdump.S" -o "$out/tvdump.o"
+ia16-elf-ld -Ttext=0x100 --oformat=binary -o "$out/TVDUMP.COM" "$out/tvdump.o"
+ls -l "$out/TVDUMP.COM" | awk '{print $5, "bytes  TVDUMP.COM"}'
 ia16-elf-gcc -c "$root/tests/boot/shotipl.S" -o "$out/shotipl.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTIPL.BIN" "$out/shotipl.o"
 ls -l "$out/SHOTIPL.BIN" | awk '{print $5, "bytes  SHOTIPL.BIN"}'

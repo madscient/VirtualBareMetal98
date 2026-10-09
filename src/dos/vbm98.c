@@ -1115,13 +1115,25 @@ static int load_ipl(struct mon_guest *g)
 }
 
 /*
+ * ここから先の表示を、ホストの画面を戻したあとでもう一度出す (log.h の say_keep)。置き場は転送バッファの後ろ半分
+ * (前半分は log_hold が使う)。ゲストが動いている間は転送バッファをディスクの読み書きとスクリーンショットに使うので、
+ * 呼ぶのはゲストを動かす前と、終了が決まったあとだけ
+ */
+static void keep_on(void)
+{
+    say_keep(xfer_seg(), 0x8000, 0x7FFF);
+}
+
+/*
  * メニューの結果を残す。終了は表示にも出す (理由の分からない終了を作らない)。再開はゲストの画面を汚さないよう、
  * ログにだけ書く。リセットは reset_vm が表示する
  */
 static void note_menu(const char *why, int mrc)
 {
-    if (mrc == MENU_EXIT)
+    if (mrc == MENU_EXIT) {
+        keep_on();
         say("VBM98: exit from the VM menu (%s)\n", why);
+    }
     else if (mrc == MENU_RESUME)
         log_line("VBM98: VM menu (%s): resumed\n", why);
 }
@@ -1262,12 +1274,16 @@ static void reset_vm(struct mon_guest *g, const char *why, int *running, int *co
 {
     int r;
 
+    /* 起動し直せなかったときは、その理由を出して終わる */
+    keep_on();
     say("VBM98: reset (%s)\n", why);
     r = vm_reset(g);
     if (r) {
         *running = 0;
         if (r == 1)
             *code = 1;
+    } else {
+        say_keep(0, 0, 0);
     }
 }
 
@@ -1578,8 +1594,6 @@ int main(int argc, char **argv)
         guest_imr0 = (u8)(guest_imr_m & 1);
         tick_arm();
     }
-    screen_save();
-    screen_clear();
     if (o.have_memsw) {
         u8 host[8];
 
@@ -1590,6 +1604,10 @@ int main(int argc, char **argv)
         memsw_guest(eff_memsw);
         print_memsw("guest", MK_FP((u16)(mswpage >> 4), 0xFE0));
     }
+    screen_save();
+    screen_clear();
+    /* 起動できずに戻るときの理由 (イメージを選ばなかった、IPL が読めない) */
+    keep_on();
     /* -fdd0 がなければここで選ばせる (spec.md)。取り消したら起動せずに戻る */
     if (!fb.img[0] && !menu_pick_boot()) {
         say("VBM98: no disk was selected\n");
@@ -1602,6 +1620,8 @@ int main(int argc, char **argv)
             code = 1;
         }
     }
+    if (running)
+        say_keep(0, 0, 0);
     while (running) {
         /*
          * ゲストの割り込みマスクが効いている間にホストのベクタ表で割り込みを受けてはいけない。
@@ -1643,6 +1663,7 @@ int main(int argc, char **argv)
         case X_FAULT:
             /* ダンプは画面へ先に全部出す。ログへは終了の直前にまとめて書く (log.h) */
             log_hold(xfer_seg(), 0x8000);
+            keep_on();
             say("VBM98: guest raised an unexpected exception at %04X:%04X\n", g.cs, g.ip);
             dump_guest(&g);
             running = 0;
@@ -1650,12 +1671,14 @@ int main(int argc, char **argv)
             break;
         case X_STOP:
             log_hold(xfer_seg(), 0x8000);
+            keep_on();
             say("VBM98: stopped after %lu hardware interrupts\n", (unsigned long)stop_after_irqs);
             dump_guest(&g);
             running = 0;
             break;
         case X_HOTKEY_STOP:
             if (menu_confirm_exit()) {
+                keep_on();
                 say("VBM98: exit by the hotkey (CTRL+GRPH+STOP)\n");
                 running = 0;
             } else {
@@ -1693,6 +1716,7 @@ int main(int argc, char **argv)
             break;
         default:
             log_hold(xfer_seg(), 0x8000);
+            keep_on();
             mon_panic_get(&pn);
             say("VBM98: exception %02X inside the monitor at %04X:%08lX (code %04X)\n",
                    pn.vec, pn.cs, (unsigned long)pn.eip, rc);
@@ -1704,6 +1728,7 @@ int main(int argc, char **argv)
 
     video_host();
     screen_host();
+    say_again();
     xms_a20(0);
     xms_unlock(xms_handle);
     xms_free(xms_handle);
