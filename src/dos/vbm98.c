@@ -648,6 +648,7 @@ static void video_guest(void)
     int18(0x41, 0, 0);
     vid_gdisp = 0;
     int18(0x42, 0, 0x80);
+    vid_glr = VID_GLR_NONE;
     int18(0x0A, (u8)(0x04 | crt_lo), 0);
     int18(0x0C, 0, 0);
     vid_tdisp = 1;
@@ -1338,10 +1339,18 @@ int vm_shot(char *gname)
 {
     struct shot_info si;
 
-    /* グラフィックが 400 ラインかは、ゲストの BIOS ワークエリアの PRXDUPD bit 2 で見る (§16) */
-    g_read(WA_PRXDUPD & ~1UL, mon_data_seg(), (u16)(unsigned)word_buf, 2);
+    /*
+     * グラフィックが 400 ラインか (design.md §17)。ゲストが GDC に CSRFORM を書いていれば、その L/R が 0 のとき。
+     * BIOS を通さずに GDC を設定するソフトは、BIOS ワークエリアを変えない。ただし標準解像度のディスプレイの設定
+     * (PRXCRT の bit 6 が 0) では、BIOS は 200 ラインでも L/R を 0 にするので、400 ラインとは見なさない。
+     * CSRFORM を見ていなければ (BIOS がポートを通さないエミュレータなど)、BIOS ワークエリアの PRXDUPD の bit 2
+     */
+    g_read(WA_PRXCRT & ~1UL, mon_data_seg(), (u16)(unsigned)word_buf, 2);
     si.base = shot_base;
-    si.lines400 = (word_buf[WA_PRXDUPD & 1] & 0x04) != 0;
+    if (vid_glr != VID_GLR_NONE)
+        si.lines400 = vid_glr == 0 && (word_buf[WA_PRXCRT & 1] & 0x40) != 0;
+    else
+        si.lines400 = (word_buf[WA_PRXDUPD & 1] & 0x04) != 0;
     si.pal = vid_pal;
     si.color16 = vid_color16;
     si.anapal = vid_anapal;

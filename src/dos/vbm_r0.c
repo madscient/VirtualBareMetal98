@@ -88,6 +88,9 @@ static u8 dev_shot_i;           /* 次に使う dev_shot_at の添字 */
 u8 vid_pal[4];
 u8 vid_color16, vid_anapal[16 * 3];
 u8 vid_gdisp, vid_tdisp;
+u8 vid_glr = VID_GLR_NONE;
+static u8 glr_wait;             /* グラフィック GDC に CSRFORM が書かれ、最初のパラメータを待っている */
+static u8 glr_was;              /* 待つ前に、ポート A0h をトラップしていたか */
 static u8 vid_anaidx;           /* アナログパレットで次に書かれる番号 (A8h) */
 u8 dip_on, dip_sw[3];
 u8 dip_gdc25;
@@ -419,6 +422,22 @@ u16 mon_on_out(u16 port, u8 size, u32 val)
      * グラフィック GDC のコマンド (A2h): 表示の ON/OFF を追う (design.md §9・§12)。START 6Bh、BCTRL の START 0Dh、
      * SYNC の表示 ON 0Fh で ON、BCTRL の STOP 0Ch、SYNC の表示 OFF 0Eh で OFF。書き込みは実機へも通す
      */
+    /*
+     * グラフィック GDC の CSRFORM (コマンド 4Bh) の最初のパラメータの下位 5 ビットが L/R (vbm.h の vid_glr)。
+     * パラメータのポート A0h は描画でも頻繁に書かれるので、常にはトラップしない。CSRFORM のコマンドを見てから
+     * 最初の 1 バイトが来るまでの間だけトラップする (別のコマンドが来たらやめる)
+     */
+    if (port == 0xA2 && size == 1) {
+        if (glr_wait)
+            mon_trap_port_r0(0xA0, glr_was);
+        glr_wait = (u8)(v == 0x4B);
+        if (glr_wait)
+            glr_was = mon_trap_port_r0(0xA0, 1);
+    } else if (port == 0xA0 && size == 1 && glr_wait) {
+        vid_glr = (u8)(v & 0x1F);
+        glr_wait = 0;
+        mon_trap_port_r0(0xA0, glr_was);
+    }
     if ((port == 0xA2 || port == 0x62) && size == 1) {
         u8 *disp = port == 0xA2 ? &vid_gdisp : &vid_tdisp;
 

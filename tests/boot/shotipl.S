@@ -93,6 +93,19 @@ start:
         mov     word ptr es:[di], 0x0053
         mov     byte ptr es:[di + 0x2000], 0xE0
 
+#ifdef DIRECT400
+        /*
+         * SHOT400.BIN: BIOS を通さずに、グラフィック GDC の CSRFORM (4Bh) で 1 行 1 ラインにする (400 ライン)。
+         * パラメータは参考実装の BIOS が 400 ラインにするときに書く 40h・00h・00h。BIOS ワークエリアは 200 ラインのまま
+         */
+        mov     al, 0x4B
+        out     0xA2, al
+        mov     al, 0x40
+        out     0xA0, al
+        xor     al, al
+        out     0xA0, al
+        out     0xA0, al
+#endif
         /*
          * 1 枚目 (8 色) を撮る時間を置いてから 16 色モードへ移る。VSYNC (A0h の bit 5) の立ち上がりを
          * 60 回数える (約 1 秒)。VBM98 側は -shotat 50,150 (約 0.5 秒と 1.5 秒) で撮る

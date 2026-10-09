@@ -330,12 +330,25 @@ def test_shot(work):
     img[0:1024] = ipl
     with open(os.path.join(work, 'S.IMG'), 'wb') as f:
         f.write(img)
+    # BIOS を通さずに 400 ラインにする IPL (SHOT400.BIN)。BIOS ワークエリアは 200 ラインのままなので、GDC への設定を
+    # 追っていないと縦 2 倍で写る。-dipsw の SW1-1 (2 桁目の bit 0) が OFF (標準解像度のディスプレイ) なら、同じ設定でも
+    # 200 ラインのままとして扱う
+    with open(os.path.join(BUILT, 'SHOT400.BIN'), 'rb') as f:
+        img4 = bytearray(77 * 2 * 8 * 1024)
+        img4[0:1024] = f.read()
+    with open(os.path.join(work, 'S4.IMG'), 'wb') as f:
+        f.write(img4)
+    for name in ('S4A001G.PNG', 'S4A001T.PNG', 'S4B001G.PNG', 'S4B001T.PNG', 'SHOT4A.OUT', 'SHOT4B.OUT'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
     for name in ('SHOT.OUT', 'S.LOG', 'S001G.PNG', 'S001T.PNG', 'S002G.PNG', 'S002T.PNG'):
         if os.path.exists(os.path.join(work, name)):
             os.remove(os.path.join(work, name))
     # 1 枚目は 8 色モード。IPL が約 1 秒後に 16 色モードへ移るので、2 枚目は 16 色モード
-    finished = dosenv.run_batch(['VBM98.EXE -fdd0 S.IMG -tick -shotat 50,150 -stopafter 200 -log S.LOG,1 > SHOT.OUT'], 180,
-                                core='normal')
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 S.IMG -tick -shotat 50,150 -stopafter 200 -log S.LOG,1 > SHOT.OUT',
+                                 'VBM98.EXE -fdd0 S4.IMG -tick -shotat 50 -stopafter 100 -ss S4A -dipsw *0**** > SHOT4A.OUT',
+                                 'VBM98.EXE -fdd0 S4.IMG -tick -shotat 50 -stopafter 100 -ss S4B -dipsw *1**** > SHOT4B.OUT'],
+                                240, core='normal')
     for line in imgtests.read_lines(work, 'SHOT.OUT') or []:
         print('  ' + line)
     if not finished:
@@ -358,6 +371,16 @@ def test_shot(work):
         return sum(1 for y in range(r * 16, r * 16 + 16) for x in range(c * 8, c * 8 + 8) if rows[y][x] == idx)
 
     bars = ((0, 1), (8, 2), (16, 4), (24, 7))
+    g4a = read_png4(os.path.join(work, 'S4A001G.PNG'))
+    g4b = read_png4(os.path.join(work, 'S4B001G.PNG'))
+
+    def bars_at(p, y0, y1):
+        """帯が画像の y0〜y1-1 行にだけある (その上下 2 行は色 0)"""
+        if p is None:
+            return False
+        rows = p['rows']
+        return (all(rows[y][x] == c for x0, c in bars for x in range(x0, x0 + 8) for y in range(y0, y1)) and
+                all(rows[y][x] == 0 for x in range(32) for y in (y0 - 2, y0 - 1, y1, y1 + 1)))
 
     def bars_ok(rows):
         return all(rows[y][x] == c for x0, c in bars for x in range(x0, x0 + 8) for y in range(20, 40))
@@ -369,6 +392,8 @@ def test_shot(work):
         ('8-colour: palette has 8 entries and colour 1 is blue', g1 is not None and len(g1['plte']) == 8 and g1['plte'][1] == (0, 0, 255)),
         ('8-colour: colour bars 1/2/4/7 at x 0-31, image rows 20-39 (VRAM lines 10-19 doubled)', g is not None and bars_ok(g)),
         ('8-colour: outside the bars is colour 0', g is not None and g[19][0] == 0 and g[40][0] == 0 and g[30][32] == 0 and g[100][100] == 0),
+        ('400 lines set through the GDC, not the BIOS: VRAM lines 10-19 are image rows 10-19 (not doubled)', bars_at(g4a, 10, 20)),
+        ('the same on a standard-resolution display setting (SW1-1 OFF): still taken as 200 lines, rows 20-39', bars_at(g4b, 20, 40)),
         ('16-colour: palette has 16 entries, entry 8 is the red the IPL set, entry 1 is the power-on half blue',
          g2 is not None and len(g2['plte']) == 16 and g2['plte'][8] == (255, 0, 0) and g2['plte'][1] == (0, 0, 119)),
         ('16-colour: the bars keep indices 1/2/4/7 and the E-plane bar at x 32-39 is index 8',

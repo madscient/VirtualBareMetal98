@@ -120,6 +120,8 @@ extern u16 mon_errhi_seen;
 
 /* ポートの I/O をトラップするかどうか。トラップしたものは mon_on_in / mon_on_out に届く */
 void mon_trap_port(u16 port, int on);
+/* 同じことを ring 0 から行う (ゲストの実行中に切り替える)。それまでトラップしていたかを返す */
+u8 mon_trap_port_r0(u16 port, u8 on);
 
 /*
  * g の状態からゲストを仮想86モードで走らせる。mon_on_* が 0 以外を返すと、その値を戻り値にして

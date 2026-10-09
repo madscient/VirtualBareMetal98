@@ -56,6 +56,12 @@ extern u8 vid_color16, vid_anapal[16 * 3];
 extern u8 vid_gdisp;
 /* 同じく、テキスト表示の ON/OFF (テキスト GDC のコマンドポート 62h を追う)。メニューが ON にした表示を閉じるときに戻す */
 extern u8 vid_tdisp;
+/*
+ * ゲストがグラフィック GDC に最後に書いた CSRFORM の L/R (1 行のライン数 - 1。0 なら 400 ライン、1 なら 200 ラインを
+ * 2 回ずつ表示)。VID_GLR_NONE は、まだ書かれていない。スクリーンショットのライン数に使う (design.md §17)
+ */
+#define VID_GLR_NONE 0xFF
+extern u8 vid_glr;
 /* 開発用: COPY の代わりにスクリーンショットにするスキャンコード (0 なら無し)。-stopkey と同じ事情 */
 extern u8 kbd_shot_alt;
 /*

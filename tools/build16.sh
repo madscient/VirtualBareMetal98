@@ -134,5 +134,8 @@ ls -l "$out/FAULTIPL.BIN" | awk '{print $5, "bytes  FAULTIPL.BIN"}'
 ia16-elf-gcc -c "$root/tests/boot/shotipl.S" -o "$out/shotipl.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTIPL.BIN" "$out/shotipl.o"
 ls -l "$out/SHOTIPL.BIN" | awk '{print $5, "bytes  SHOTIPL.BIN"}'
+ia16-elf-gcc -c -DDIRECT400 "$root/tests/boot/shotipl.S" -o "$out/shot400.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOT400.BIN" "$out/shot400.o"
+ls -l "$out/SHOT400.BIN" | awk '{print $5, "bytes  SHOT400.BIN"}'
 python3 "$root/tools/mkdoc.py" "$root/README.md" "$root/src/dos/vbm98.c" "$out/VBM98.DOC"
 ls -l "$out/VBM98.DOC" | awk '{print $5, "bytes  VBM98.DOC"}'

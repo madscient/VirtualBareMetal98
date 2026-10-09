@@ -162,6 +162,18 @@ static u16 halt(struct mon_vframe *f, struct mon_gregs *r)
 u16 mon_test_errhi;
 u16 mon_errhi_seen;
 
+extern u8 mon_tss[];
+
+u8 mon_trap_port_r0(u16 port, u8 on)
+{
+    u8 *b = mon_tss + MON_TSS_BASE + (port >> 3);
+    u8 m = (u8)(1 << (port & 7));
+    u8 was = (u8)((*b & m) != 0);
+
+    *b = (u8)(on ? (*b | m) : (*b & ~m));
+    return was;
+}
+
 /* monasm.S の trap_common から呼ばれる */
 u16 mon_trap(u16 vec, u16 has_err, struct mon_gregs *r)
 {
