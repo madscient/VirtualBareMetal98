@@ -30,7 +30,7 @@
 #include "log.h"
 
 /* 版。GitHub のリリースのタグに合わせ、リリース後の master では末尾に + を付ける (動作報告で版を見分けるため。README) */
-#define VBM98_VERSION   "0.1.6"
+#define VBM98_VERSION   "0.1.6+"
 #define GUEST_KB        640
 #define DRIVES          2
 #define RESET_LIN       0xFFFF0UL
