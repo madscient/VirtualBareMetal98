@@ -74,7 +74,7 @@ sh tools/build16.sh
 | --- | --- |
 | `VBM_NP21W` | NP21/W スターターセットのフォルダ（`np21x64w.exe`、`fdosboot.hdi`、`share` がある場所）。一式を `build/np2/` に複製し、`share/AUTOEXEC.BAT` を差し替えて試験のバッチを流し、`PWOFF` で終了させる。利用者の一式には書き込まない。窓は出るが操作は要らない |
 | `VBM_DOSBOXX` | DOSBox-X の実行ファイルのパス。`machine=pc98`・`cputype=486`・EMS なしで、窓を出さずに（`-silent`）走らせる。BIOS と DOS は DOSBox-X の内蔵のものを使うので、NP21/W + FreeDOS(98) とは別の実装の PC-98 として本体の試験の 2 つ目の環境になる。**通常版が要る**（OSFREE 版は内蔵の DOS がなく、走らない）。確度: 確認済み（2026.10.01 の通常版で全試験が通る） |
-| `VBM_MSDOS` | 実物の MS-DOS の起動ディスクのイメージ（ヘッダなしの生イメージ。MS-DOS 5.0 以降のシステムディスクで、IO.SYS・MSDOS.SYS・COMMAND.COM と、HIMEM.SYS・EMM386.EXE かその圧縮形 `HIMEM.SY_`・`EMM386.EX_` が入っているもの）。指定すると、NP21/W でその写しから起動して本体を走らせる試験 `msdos` が走る。写しは `build/np2/` に作り、元のイメージには書かない。イメージはリポジトリに入れない。FDI 形式のイメージは、先頭のヘッダ（4096 バイト）を除けば生イメージになる。6.20 のディスクなら、EMM386.EXE に `/UMB /HIGHSCAN /DPMI` を付けた構成の 9 項目も走る（5.00A の EMM386.EXE は VCPI を提供しないので、その部分は見ない）。確度: 確認済み（NEC の MS-DOS 5.00A のシステムディスク 1 と、6.20 のディスク 1） |
+| `VBM_MSDOS` | 実物の MS-DOS の起動ディスクのイメージ（ヘッダなしの生イメージ。MS-DOS 5.0 以降のシステムディスクで、IO.SYS・MSDOS.SYS・COMMAND.COM と、HIMEM.SYS・EMM386.EXE かその圧縮形 `HIMEM.SY_`・`EMM386.EX_` が入っているもの）。指定すると、NP21/W でその写しから起動して本体を走らせる試験 `msdos` が走る。写しは `build/np2/` に作り、元のイメージには書かない。イメージはリポジトリに入れない。FDI 形式のイメージは、先頭のヘッダ（4096 バイト）を除けば生イメージになる。6.20 のディスクなら、EMM386.EXE に `/UMB /HIGHSCAN /MOVEHDBIOS /DPMI` を付けた構成の 11 項目も走る（5.00A の EMM386.EXE は VCPI を提供しないので、その部分は見ない）。確度: 確認済み（NEC の MS-DOS 5.00A のシステムディスク 1 と、6.20 のディスク 1） |
 | `VBM_DOSENV` | `dosboxx` か `np21w`。両方の設定があるときに選ぶ。省略時は dosboxx → np21w の順。どちらも PC-98 で、BIOS と DOS の実装が違う。変更したら両方で走らせる |
 
 所要は、DOSBox-X でディスクイメージ層が 2 分強、ほかの全部で 15 秒ほど。NP21/W はエミュレータの起動 1 回ごとに 10〜40 秒かかる。

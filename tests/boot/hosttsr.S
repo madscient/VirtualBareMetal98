@@ -16,6 +16,9 @@
  * (ROM の入口を追えない横取り。キーボードの IRQ が印で受けられる状態でも、ゲストの割り込みマスクで閉じられない
  * ことを見る。閉じるとホットキーが効かなくなる)。
  * 引数なしのときは、常駐する前に「HOSTTSR at <セグメント>」を標準出力へ出す。
+ * 引数に M を付けて実行すると、常駐せずに、INT 0Bh (ふだん閉じてある IRQ3) のベクタを A500:0000 に向けて終わる。
+ * MS-DOS 6.2 の EMM386.EXE が /MOVEHDBIOS でディスク BIOS を移す先で、EMM ドライバが写し替えた、書けないメモリに
+ * なる。そこを指すベクタを VBM98 がホストのものとして扱うことを見る (tests/run_dos_tests.py の msdos)。
  * COM 形式 (100h から)。常駐部分は new09k の終わりまで
  */
         .arch   i386
@@ -70,7 +73,17 @@ install:
         cmp     al, 0x20
         je      8b
         and     al, 0xDF
-        cmp     al, 0x4B                /* K */
+        cmp     al, 0x4D                /* M */
+        jne     7f
+        xor     ax, ax
+        mov     es, ax
+        cli
+        mov     word ptr es:[0x0B * 4], 0
+        mov     word ptr es:[0x0B * 4 + 2], 0xA500
+        sti
+        mov     ax, 0x4C00
+        int     0x21
+7:      cmp     al, 0x4B                /* K */
         jne     9f
         xor     ax, ax
         mov     es, ax

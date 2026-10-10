@@ -790,6 +790,7 @@ static int sbrom_setup(const char *path, u32 lin)
  */
 u32 rom_trace(u16 vec, u16 ax, u16 *info);  /* romtrace.S */
 void rom_trace_moved(u16 lo, u16 hi);
+int rom_writable(u16 seg, u16 off);
 
 /*
  * ROM の入口を突き止める割り込み: タイマ・キーボード・VSYNC (ROM の BIOS が自分でハンドラを持つハードウェア割り込み) と、
@@ -809,28 +810,20 @@ static u8 held_imr_m, held_imr_s;
 static u8 rom_form[HOOK_VEC_MAX];   /* その入り方: 'a' far jmp の鎖、'b' pushf + far call、'c' MS-DOS の INT 1Ah (romtrace.S) */
 
 /*
- * seg:off がゲストからも同じ中身で見える ROM か。A0000h 未満と 100000h 以上 (HMA) はホストの RAM。E8000h 以上は ROM。
- * その間 (VRAM、UMB、拡張 ROM) は 1 バイト書いてみて、書ければ RAM とみなす (値は戻す。romtrace.S と同じ基準)。
- * E8000h 以上でも、EMM ドライバが別のメモリを写しているページは同じく書いてみて決める: MS-DOS 6.2 の EMM386.EXE は
- * /HIGHSCAN で BASIC ROM の領域も UMB にし、そこに常駐物が入る (design.md §12)。ゲストにはそのページの実物が見える
+ * seg:off を指すベクタを、ゲストにそのまま渡してよいか (ゲストからも同じ中身で見える、本体の ROM か)。
+ * E8000h 未満と 100000h 以上 (HMA) は渡さない: ホストの RAM、UMB、拡張 ROM。拡張 ROM (ディスクのボードの BIOS など) は
+ * ゲストからも同じ中身で見えるが、ホストの装置のものとして扱う (design.md §6)。E8000h 以上は本体の ROM なので渡す。
+ * ただし EMM ドライバが別のメモリを写しているページは、書けるならホストの RAM: MS-DOS 6.2 の EMM386.EXE は
+ * /HIGHSCAN で BASIC ROM の領域も UMB にし、そこに常駐物が入る (design.md §12)。ゲストにはそのページの実物が見える。
+ * 書けなければ ROM の写しとみなして渡す (guest_memory が起動時に知らせる)
  */
 static int in_rom(u16 seg, u16 off)
 {
     u32 l = lin(seg, off);
-    u8 __far *p = MK_FP(seg, off);
-    u8 b, got;
 
-    if (l < RAM_TOP || l >= 0x100000UL)
+    if (l < 0xE8000UL || l >= 0x100000UL)
         return 0;
-    if (l >= 0xE8000UL && monmem_host_same(l))
-        return 1;
-    _disable();
-    b = *p;
-    *p = (u8)~b;
-    got = *p;
-    *p = b;
-    _enable();
-    return got == b;
+    return monmem_host_same(l) || !rom_writable(seg, off);
 }
 
 static int guest_memory(int first)
@@ -940,12 +933,35 @@ static int guest_memory(int first)
                     rom_traced[i] == 0x18 ? " (the BIOS for the keyboard and the screen)" :
                     rom_traced[i] == 0x09 ? " (the keyboard interrupt)" : "");
         }
+        /*
+         * E8000h 以上で、EMM ドライバが写し替えたページを指しているのに、書けないので ROM の写しとみなして渡した
+         * ベクタ (in_rom)。本体の ROM の写しを同じ番地に置いているだけなら害はない。そうでなければ、ゲストには
+         * その番地の実物が見えるので、呼ばれると無関係な所へ飛ぶ。どちらなのかは見分けていない (design.md §6)
+         * ので、実機の報告で分かるように出す
+         */
+        {
+            u8 any = 0;
+
+            for (i = 0; i < HOOK_VEC_MAX; i++) {
+                const u8 *e = ivtbuf + i * 4;
+                u16 vseg = (u16)(e[2] | (e[3] << 8)), voff = (u16)(e[0] | (e[1] << 8));
+
+                if (i == 0x1B || monmem_host_same(lin(vseg, voff)) || !in_rom(vseg, voff))
+                    continue;
+                say("%s %02X=%04X:%04X", any ? "" : "VBM98: note: vectors into read-only memory the EMM driver "
+                    "remapped, passed to the guest unchanged:", i, vseg, voff);
+                any = 1;
+            }
+            if (any)
+                say("\n");
+        }
     }
 
     /*
-     * 20h 以上のベクタ。ホストの DOS や常駐物、以前に動いたソフトの残り物が入っている。ROM を指すもの (サウンド BIOS
-     * など) と 0000:0000 (未設定) はそのまま渡し、ホストの RAM を指すものは IRET 1 バイトへ向ける (規則 3)。
-     * そのまま渡すと、ゲストがその割り込みを出したときに、中身のないゲストの RAM へ飛ぶ
+     * 20h 以上のベクタ。ホストの DOS や常駐物、以前に動いたソフトの残り物が入っている。本体の ROM を指すものと
+     * 0000:0000 (未設定) はそのまま渡し、ほか (ホストの RAM、拡張 ROM。in_rom) は IRET 1 バイトへ向ける (規則 3)。
+     * RAM を指すものをそのまま渡すと、ゲストがその割り込みを出したときに、中身のないゲストの RAM へ飛ぶ。
+     * 拡張 ROM (サウンド BIOS など) を指すものも渡していない (design.md §6)
      */
     ent[0] = (u8)HOOK_IRET_OFF;
     ent[1] = (u8)(HOOK_IRET_OFF >> 8);

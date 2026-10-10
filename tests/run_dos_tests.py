@@ -899,9 +899,11 @@ def remapped_ranges(lines):
 
 
 def msdos_umb(work, ipl, pattern):
-    """MS-DOS 6.2 の EMM386.EXE に /UMB /HIGHSCAN /DPMI を付けた構成 (利用者向けの文書の例と同じ)。/HIGHSCAN は
+    """MS-DOS 6.2 の EMM386.EXE に /UMB /HIGHSCAN /MOVEHDBIOS /DPMI を付けた構成 (実機の報告にあった書き方)。/HIGHSCAN は
     BASIC ROM の領域 (E8000h〜) にも UMB を作り、LH で読み込んだ常駐物はそこに入る。ゲストにはその番地の実物
     (ROM) が見えるので、そこの常駐物を指すベクタをホストの RAM として扱うこと (ROM の入口まで追う、印へ向ける) を見る。
+    /MOVEHDBIOS はディスク BIOS の ROM を別の番地 (A5000h〜) へ移す。そこは EMM ドライバが写し替えた、書けないメモリ。
+    E8000h 未満なので、そこを指すベクタはホストのものとして印へ向けることも見る (ゲストにはその番地の実物が見える)。
     呼ぶのは起動ディスクが MS-DOS 6 のときだけ (それより前の版の EMM386.EXE は VCPI を提供しない)"""
     img = bytearray(77 * 2 * 8 * 1024)
     img[0:1024] = ipl
@@ -912,10 +914,12 @@ def msdos_umb(work, ipl, pattern):
     out = os.path.join(work, 'MSDOS.OUT')
     if os.path.exists(out):
         os.remove(out)
-    finished = dosenv.run_batch(['VER > MSDOS.OUT', 'LH HOSTTSR.COM >> MSDOS.OUT',
+    # HOSTTSR.COM M は、常駐せずに INT 0Bh のベクタを A500:0000 (移されたディスク BIOS の先頭) に向ける
+    finished = dosenv.run_batch(['VER > MSDOS.OUT', 'LH HOSTTSR.COM >> MSDOS.OUT', 'HOSTTSR.COM M',
                                  'VBM98.EXE -fdd0 E.IMG -trace -menukeys 04,15 >> MSDOS.OUT'],
                                 180, core='normal', emm=True, msdos=True,
-                                msdos_config=['DEVICE=EMM386.EXE /UMB /HIGHSCAN /DPMI', 'DOS=HIGH,UMB'])
+                                msdos_config=['DEVICE=EMM386.EXE /E=DC00-DFFF /P=512 /UMB /HIGHSCAN /MOVEHDBIOS /DPMI',
+                                              'DOS=HIGH,UMB'])
     lines = imgtests.read_lines(work, 'MSDOS.OUT') or []
     for line in lines:
         if 'tvram row' not in line:
@@ -946,6 +950,11 @@ def msdos_umb(work, ipl, pattern):
         ('IRQ9 (vector 11h) taken from that UMB is masked for the guest', (r['imr_s'] & 0x02) == 0x02),
         ('the IPL ran to its end (it calls INT 1Ah once) and VBM98 returned to DOS',
          r['ran'] and any('back to DOS' in l for l in lines)),
+        ('EMM386 moved the disk BIOS: a remapped range below C0000h is shown', any(b < 0xC0000 for a, b in ranges)),
+        ('a vector into that moved ROM (INT 0Bh, set to A500:0000; read-only memory below E8000h) is treated as '
+         'the host\'s: redirected, and no note about read-only remapped memory is shown',
+         any('redirected:' in l and ' 0B' in l.split('redirected:')[1] for l in lines) and
+         not any('note: vectors into read-only memory' in l for l in lines)),
     )
     ok = True
     for name, c in checks:

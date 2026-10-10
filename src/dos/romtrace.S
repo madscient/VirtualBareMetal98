@@ -64,6 +64,37 @@ rom_trace_moved:
         ret
 
 /*
+ * int rom_writable(u16 seg, u16 off)
+ * seg:off の 1 バイトが書けるか (反転した値を書いて、その値が読めるか)。値は戻す。その間は割り込みを禁止する。
+ * C で書くと、書いてすぐ読む並びをコンパイラが「書いた値が読める」と決めて消してしまう (gcc-ia16 6.3 の -Os で、
+ * 書き込みが 1 つも残らなかった) ので、ここに置く。
+ * 出口: AX = 書ければ 1、書けなければ 0。
+ * 保存: SI, DI, BP, ES, DS。壊す: AX, BX。割り込みフラグは入口と同じ
+ */
+        .global rom_writable
+rom_writable:
+        push    bp
+        mov     bp, sp
+        push    ds
+        pushf
+        cli
+        mov     bx, [bp + 6]
+        mov     ds, [bp + 4]
+        mov     al, [bx]
+        mov     ah, al
+        not     al
+        mov     [bx], al
+        cmp     [bx], al
+        mov     [bx], ah
+        mov     ax, 0                   /* フラグを変えない */
+        jne     1f
+        inc     ax
+1:      popf
+        pop     ds
+        pop     bp
+        ret
+
+/*
  * u32 rom_trace(u16 vec, u16 ax, u16 *info)
  * 入口: vec = 割り込みベクタの番号、ax = ハンドラに渡す AX (機能番号で分かれる BIOS では、どの機能でもない値)、
  *       info = 4 語の置き場 (DS 相対)。
