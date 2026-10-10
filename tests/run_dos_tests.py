@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DOS 向けにビルドした試験プログラムを DOS 上で走らせる。
 
-    python tests/run_dos_tests.py [img] [fdb] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [shot] [con] [menu] [v86]
+    python tests/run_dos_tests.py [img] [fdb] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [shot] [con] [isr] [menu] [v86]
 
     img      ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
     fdb      INT 1Bh の意味論 (fdbios)。同上
@@ -13,6 +13,7 @@
     boot2dd  2DD のイメージからの起動
     shot     スクリーンショット。試験用の IPL が書いた文字と色の帯が、-shotat で撮った PNG に写るか
     con      出力をファイルに向けずに走らせたとき、DOS に戻ったあとの画面に残る表示
+    isr      ゲストが割り込みの処理の途中のまま離れたとき、割り込みコントローラを片付けて DOS に戻るか
     menu     VM メニュー。-menuat で開き -menukeys で操作して、画面の復元とゲストの再開を見る
     v86      EMM386 (VCPI) の下での起動 (NP21/W だけ)
 
@@ -536,6 +537,37 @@ def test_con(work):
     return ok
 
 
+def test_isr(work):
+    """ゲストが割り込みの処理の途中 (EOI を出す前) のまま離れたとき、割り込みコントローラを片付けて DOS に戻るか。
+    試験用の IPL (tests/boot/isripl.S) は VSYNC 割り込みのハンドラに入ったまま回り続ける。-stopafter がタイマ割り込みで
+    止めるので、IRQ2 (マスタの bit 2) が処理中のまま残る"""
+    with open(os.path.join(BUILT, 'ISRIPL.BIN'), 'rb') as f:
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = f.read()
+    with open(os.path.join(work, 'I.IMG'), 'wb') as f:
+        f.write(img)
+    out = os.path.join(work, 'ISR.OUT')
+    if os.path.exists(out):
+        os.remove(out)
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 I.IMG -tick -stopafter 100 > ISR.OUT'], 180, core='normal')
+    lines = imgtests.read_lines(work, 'ISR.OUT') or []
+    for line in lines:
+        if 'PIC master' in line or 'in service' in line or 'stopped after' in line or 'back to DOS' in line:
+            print('  ' + line)
+    ok = True
+    for name, c in (
+        ('batch finished', finished),
+        ('the guest was left inside its VSYNC handler: the stop report shows IRQ2 in service (master ISR=04)',
+         any('PIC master' in l and 'ISR=04,' in l for l in lines)),
+        ('on the way back to DOS the interrupt controller is cleared (master 04 -> 00)',
+         any('in service when the guest was left (master 04, slave 00); cleared, now 00 00' in l for l in lines)),
+    ):
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('処理中の割り込みの後始末: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
 def test_menu(work):
     """VM メニュー: -menuat で開き、開発用のキー列で「3 (スクリーンショット)、ESC (知らせを閉じる)、ESC (閉じる)」を
     押したことにする。撮れた PNG にはメニューではなく IPL の画面が写り (開く前の画面を戻してから撮る)、
@@ -849,7 +881,7 @@ def test_nfdid(work):
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
          ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos), ('nfdid', 'VBM98.EXE', test_nfdid),
          ('boot2dd', 'VBM98.EXE', test_boot2dd),
-         ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('menu', 'VBM98.EXE', test_menu), ('v86', 'VBM98.EXE', test_v86))
+         ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('isr', 'VBM98.EXE', test_isr), ('menu', 'VBM98.EXE', test_menu), ('v86', 'VBM98.EXE', test_v86))
 
 
 def main(argv):

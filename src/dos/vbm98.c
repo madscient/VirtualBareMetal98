@@ -1428,6 +1428,42 @@ static u8 pic_read(u8 cmd_port, u8 ocw3)
     return v;
 }
 
+/*
+ * ゲストを離れて DOS に戻るとき、割り込みコントローラに処理中の割り込みが残っていれば片付ける。ホットキーは
+ * キーボード割り込みで拾うので、ゲストがほかの割り込みの処理の途中 (EOI を出す前) だったときは、その割り込みが
+ * 処理中のまま残る。残ると、それ以下の優先順位の割り込みがホストに届かない (スレーブ側の割り込みの処理中なら、
+ * スレーブ側の全部。ディスクの割り込みもそこにある)。ゲストはもう続きを実行しないので、EOI を出して片付けてよい。
+ * EOI (20h) は、処理中のもののうち優先順位のいちばん高い 1 つを片付ける
+ */
+static void pic_settle(void)
+{
+    u8 m, s, i;
+
+    _disable();
+    m = pic_read(0x00, 0x0B);
+    s = pic_read(0x08, 0x0B);
+    for (i = 0; i < 8 && pic_read(0x08, 0x0B); i++)
+        pio_out8(0x08, 0x20);
+    for (i = 0; i < 8 && pic_read(0x00, 0x0B); i++)
+        pio_out8(0x00, 0x20);
+    _enable();
+    if (m | s)
+        say("VBM98: interrupts were in service when the guest was left (master %02X, slave %02X); cleared, now %02X %02X\n",
+            m, s, pic_read(0x00, 0x0B), pic_read(0x08, 0x0B));
+}
+
+/*
+ * メニューを開くときは、ゲストがあとで続きを実行するので片付けられない。処理中の割り込みが残っていたことだけを
+ * ログに残す (メニューの中でディスクが動かない、という報告が来たときの手がかり)
+ */
+static void isr_note(const char *what)
+{
+    u8 m = pic_read(0x00, 0x0B), s = pic_read(0x08, 0x0B);
+
+    if (m | s)
+        log_line("VBM98: %s while interrupts were in service (master %02X, slave %02X)\n", what, m, s);
+}
+
 /* 開発用: 止めたときのゲストの様子 */
 static const char *const ev_kinds[] = { "irq", "int", "wake", "stub", "fault" };
 
@@ -1856,6 +1892,7 @@ int main(int argc, char **argv)
             }
             break;
         case X_HOTKEY_MENU:
+            isr_note("the VM menu was opened");
             mrc = menu_main();
             note_menu("hotkey", mrc);
             if (mrc == MENU_EXIT)
@@ -1866,10 +1903,12 @@ int main(int argc, char **argv)
                 resume_keys(&g);
             break;
         case X_HOTKEY_FDD0:
+            isr_note("the disk selection was opened");
             menu_disk(0);
             resume_keys(&g);
             break;
         case X_HOTKEY_FDD1:
+            isr_note("the disk selection was opened");
             menu_disk(1);
             resume_keys(&g);
             break;
@@ -1897,6 +1936,7 @@ int main(int argc, char **argv)
         }
     }
 
+    pic_settle();
     video_host();
     screen_host();
     say_again();
