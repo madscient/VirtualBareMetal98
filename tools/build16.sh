@@ -86,6 +86,7 @@ cc src/dos/xmsasm.S ""
 cc tests/monprobe/monprobe.c "$loose"
 cc_r0 tests/monprobe/probe_r0.c
 cc tests/monprobe/guest.S ""
+cc tests/monprobe/hosthelp.S ""
 link MONPROBE.EXE
 
 cc src/core/dimg.c "$strict"

@@ -212,6 +212,10 @@ static int parse_args(int argc, char **argv, struct opts *o)
             dev_tick = 1;
         } else if (eq(a, "-progress")) {
             prog_on = 1;
+        } else if (eq(a, "-rmfix") && v) {
+            /* 開発用: リアルモードへ戻るときに元へ戻すもの (mon.h の MON_RMFIX_*) を 16 進で選ぶ。00 で何も戻さない */
+            mon_rmfix = (u8)strtol(v, 0, 16);
+            i++;
         } else if (eq(a, "-ss") && v) {
             o->ss = v;
             i++;
@@ -1703,6 +1707,18 @@ int main(int argc, char **argv)
         say("VBM98: log: %s (heartbeat %u s)\n", o.log, o.log_sec);
     if (check_v86())
         return 1;
+    if (!v86) {
+        /*
+         * リアルモードから動かすときの、ホストの CPU の状態。ゲストから戻るたびにこの状態へ戻す (monasm.S)。
+         * 常駐物がセグメントの限界を広げたままにしているか、FS・GS を使っているかが、実機の報告で分かるように出す
+         */
+        u16 st[3];
+
+        mon_rm_state(st);
+        say("VBM98: real mode; segment limits above 64KB:%s%s%s%s%s, FS=%04X GS=%04X, rmfix %02X\n",
+            (st[0] & 1) ? " DS" : "", (st[0] & 2) ? " ES" : "", (st[0] & 4) ? " FS" : "", (st[0] & 8) ? " GS" : "",
+            st[0] ? "" : " none", st[1], st[2], mon_rmfix);
+    }
     v30_on = (u8)o.v30;
     if (o.have_dipsw) {
         u8 hsw[3];

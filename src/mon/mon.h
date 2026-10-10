@@ -9,7 +9,20 @@
 #define MON_SEL_DATA_LOW  0x30
 /* VCPI (EMM の下で動くとき): サーバのコードセグメントと、サーバ用の 2 項 (INT 67h AX=DE01h が埋める) */
 #define MON_SEL_VCPI      0x38
-#define MON_GDT_SIZE      0x50
+/* データセグメントと同じ基底で、限界が 4GB。リアルモードへ戻るとき、入る前の限界が 64KB を越えていたレジスタに入れる */
+#define MON_SEL_BIG_LOW   0x50
+#define MON_GDT_SIZE      0x58
+
+/*
+ * リアルモードへ戻るときに、入る前の状態へ戻すもの (mon_rmfix のビット。monasm.S の leave_low / rm_back)。
+ * 既定は全部。開発用に 1 つずつ外せるようにしてある (実機で、どれが効くかを切り分けるため。design.md §4)
+ */
+#define MON_RMFIX_JMP     0x01  /* Intel の手順どおり、LIDT を先に行い、PE を落とした直後に far JMP する (外すと RETF) */
+#define MON_RMFIX_FSGS    0x02  /* FS・GS の値 (外すと 0) */
+#define MON_RMFIX_LIMITS  0x04  /* DS・ES・FS・GS の限界 (外すと 64KB) */
+#define MON_RMFIX_REGS    0x08  /* 32 ビットのレジスタと EFLAGS・ESP の上位 16 ビット */
+#define MON_RMFIX_TABLES  0x10  /* GDTR と CR3 */
+#define MON_RMFIX_ALL     0x1F
 
 #define MON_STACK_SIZE  1024
 #define MON_TSS_BASE    104
@@ -108,6 +121,14 @@ void mon_init(const struct mon_paging *pg);
  * 保護モード側の入口) になる。0 で成功
  */
 int mon_vcpi_setup(u32 pt0_phys);
+
+extern u8 mon_rmfix;
+/*
+ * リアルモード専用 (仮想86モードでは呼ばない: 限界を越える読み出しで確かめるので、EMM の下では例外が EMM に届く)。
+ * out[0] = DS・ES・FS・GS のうち限界が 64KB を越えているもの (bit 0〜3)、out[1] = FS、out[2] = GS。
+ * 実機の報告で、ホストがこれらをどう使っているかを知るための材料
+ */
+void mon_rm_state(u16 *out);
 
 /*
  * 例外のエラーコード (32 ビットで積まれる) の上位 16 ビット。

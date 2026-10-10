@@ -21,6 +21,8 @@ static int no_tr;   /* 引数 notr: 0F 26 (386 の MOV TR) を実行すると止
 extern void g_v30_ins(void), g_v30_insi(void), g_v30_ext(void), g_v30_exti(void);
 extern u8 probe_v30;
 extern void g_bios(void), g_bios_end(void);
+extern void probe_mark(void), probe_unmark(void), probe_sgdt(u8 *out), probe_lgdt(const u8 *in);
+extern u16 probe_marks(void);
 extern u8 rm_inb(u16 port);
 extern void rm_isr08(void), rm_isr17(void);
 extern u8 rm_old08[], rm_old17[], rm_cnt08[], rm_cnt17[];
@@ -301,6 +303,70 @@ static void survey_bios_workarea(u16 handle, u32 guest_off, u32 phys)
         printf("# bios work area: no change observed on either side\n");
 }
 
+/*
+ * リアルモードへ戻ったときの CPU の状態 (design.md §4)。16 ビットのソフトが触らないもの (FS・GS、32 ビットの
+ * レジスタの上位 16 ビット、GDTR) が、ゲストを動かす前後で変わらないこと。印は hosthelp.S が入れて読む。
+ * セグメントの限界と、PE を落とした直後の far JMP は、エミュレータでは違いが見えないので、ここでは見ていない
+ * (限界を調べた結果は参考に出す)
+ */
+static void test_rm_state(void)
+{
+    u8 gdt0[6], gdt1[6];
+    u16 st[3], rc, m;
+
+    mon_rm_state(st);
+    printf("# real mode: segment limits above 64KB mask=%X (bit 0 DS, 1 ES, 2 FS, 3 GS), FS=%04X GS=%04X\n",
+           st[0], st[1], st[2]);
+    probe_sgdt(gdt0);
+    probe_mark();
+    rc = run(g_exit, 0);
+    m = probe_marks();
+    probe_sgdt(gdt1);
+    probe_unmark();
+    printf("# real mode: marks kept=%02X, GDTR before %02X%02X %02X%02X%02X%02X after %02X%02X %02X%02X%02X%02X\n", m,
+           gdt0[1], gdt0[0], gdt0[5], gdt0[4], gdt0[3], gdt0[2], gdt1[1], gdt1[0], gdt1[5], gdt1[4], gdt1[3], gdt1[2]);
+    check("real mode state: the guest ran and returned", rc == X_DONE);
+    check("real mode state: FS and GS keep their values across a guest run", (m & 0x03) == 0x03);
+    check("real mode state: the upper halves of EBX, ECX, EDX, ESI, EDI and EBP are kept", (m & 0xFC) == 0xFC);
+    check("real mode state: GDTR is put back", memcmp(gdt0, gdt1, 6) == 0);
+
+    /*
+     * 開発用の -rmfix で 1 つずつ外した組み合わせ (実機での切り分けに使う) でも、ゲストへ出入りできること。
+     * 00 はこの手当てを入れる前の戻り方で、FS・GS は 0 になり、GDTR はモニタのものを指したままになる
+     */
+    {
+        static const u8 fixes[] = { 0x00, MON_RMFIX_JMP, MON_RMFIX_FSGS, MON_RMFIX_LIMITS, MON_RMFIX_REGS, MON_RMFIX_TABLES };
+        u8 i, ok = 1;
+
+        for (i = 0; i < sizeof fixes; i++) {
+            mon_rmfix = fixes[i];
+            /* 前の回が GDTR をモニタのものにしたままなので、最初の値に戻してから始める */
+            probe_lgdt(gdt0);
+            probe_mark();
+            rc = run(g_exit, 0);
+            m = probe_marks();
+            probe_sgdt(gdt1);
+            probe_unmark();
+            printf("# real mode: rmfix %02X -> rc=%04X, marks kept=%02X, GDTR %s\n", fixes[i], rc, m,
+                   memcmp(gdt0, gdt1, 6) == 0 ? "put back" : "left");
+            if (rc != X_DONE)
+                ok = 0;
+            if (fixes[i] == 0)
+                check("real mode state: with every fix off, FS and GS come back as 0 and GDTR is left (the old way)",
+                      (m & 0x03) == 0 && memcmp(gdt0, gdt1, 6) != 0);
+            else if (fixes[i] == MON_RMFIX_FSGS)
+                check("real mode state: with only the FS/GS fix on, FS and GS are kept and GDTR is left",
+                      (m & 0x03) == 0x03 && memcmp(gdt0, gdt1, 6) != 0);
+            else if (fixes[i] == MON_RMFIX_TABLES)
+                check("real mode state: with only the GDTR/CR3 fix on, GDTR is put back and FS and GS come back as 0",
+                      (m & 0x03) == 0 && memcmp(gdt0, gdt1, 6) == 0);
+        }
+        mon_rmfix = MON_RMFIX_ALL;
+        probe_lgdt(gdt0);
+        check("real mode state: the guest runs and returns with each single fix, and with none", ok);
+    }
+}
+
 static void test_separation(void)
 {
     u8 __far *host500 = MK_FP(0, 0x500);
@@ -538,6 +604,7 @@ int main(int argc, char **argv)
     check("irq: hardware interrupts are reflected to the guest's handler", rep[0] >= 2 && count(8, EV_INT) >= 2);
 
     test_separation();
+    test_rm_state();
 
     check("error code: the tests above ran with a non-zero upper half (A5A5)", mon_errhi_seen == 0xA5A5);
 

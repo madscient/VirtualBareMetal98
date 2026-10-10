@@ -34,7 +34,20 @@ mon_pd_lin:     .skip   4
 mon_pde0_host:  .skip   4
 mon_pde0_guest: .skip   4
 rm_cr0:         .skip   4
+/*
+ * リアルモードから入るときに控えて、戻るときに元へ戻すもの (mon.h の MON_RMFIX_*)。
+ * rm_regs は EBX・ECX・EDX・ESI・EDI・EBP の順。rm_big は、入る前に限界が 64KB を越えていたセグメントレジスタ
+ * (bit 0 = DS、1 = ES、2 = FS、3 = GS)
+ */
+rm_cr3:         .skip   4
+rm_regs:        .skip   24
+rm_esp:         .skip   4
+rm_eflags:      .skip   4
 mon_panic_stack: .skip  16
+rm_gdt_ptr:     .skip   6
+rm_fs:          .skip   2
+rm_gs:          .skip   2
+rm_big:         .skip   2
 mon_gdt_ptr:    .skip   6
 mon_idt_ptr:    .skip   6
 rm_idt_ptr:     .skip   6
@@ -79,9 +92,107 @@ mon_vcpi_entry: .skip   6
 mon_data_seg:
         mov     ax, cs
         mov     [mon_rm_cs], ax
-        mov     ax, ds
+        /* leave_low の far JMP の飛び先のセグメント (コードの中の 1 語)。値が違うとき (最初の 1 回) だけ書く */
+        cmp     word ptr cs:[rm_far_seg], ax
+        je      1f
+        mov     word ptr cs:[rm_far_seg], ax
+1:      mov     ax, ds
         mov     [rm_ds], ax
         data32  sidt [rm_idt_ptr]
+        ret
+
+/*
+ * リアルモードの DS・ES・FS・GS のうち、限界が 64KB を越えているものを調べる。
+ * 入口: リアルモード、割り込み禁止。出口: AL = bit 0 DS、1 ES、2 FS、3 GS。ほかのレジスタとセグメントの値は保存する。
+ *
+ * リアルモードでも、セグメントの限界は CPU の中に残っている値が使われる。常駐物 (XMS ドライバなど) が限界を
+ * 4GB に広げたままにしていることがあり、こちらが保護モードから戻るときに 64KB に戻すと、その常駐物が次に
+ * 64KB を越えて読み書きしたところで例外になる。入る前の状態を調べておき、戻るときに同じにする (leave_low)。
+ *
+ * 調べ方: 4 つとも値を 0 にして (限界は値を入れ直しても変わらない)、番地 10000h を 32 ビットの番地指定で読む。
+ * 限界が 64KB なら一般保護例外 (INT 0Dh) になる。その間だけ INT 0Dh をここのハンドラに向ける。割り込み禁止なので、
+ * 同じベクタの IRQ5 は入ってこない。読む命令は 4 つとも 4 バイトで、ハンドラは戻り番地を 4 進めて CF を立てる
+ */
+rm_limits:
+        push    ds
+        push    es
+        push    fs
+        push    gs
+        push    esi
+        push    bx
+        push    cx
+        push    dx
+        xor     ax, ax
+        mov     ds, ax
+        mov     es, ax
+        mov     fs, ax
+        mov     gs, ax
+        mov     bx, ds:[0x0D * 4]
+        mov     cx, ds:[0x0D * 4 + 2]
+        mov     word ptr ds:[0x0D * 4], offset rm_limits_gp
+        mov     ds:[0x0D * 4 + 2], cs
+        mov     esi, 0x00010000
+        xor     dx, dx
+        clc
+        .byte   0x3E, 0x67, 0x8A, 0x06          /* mov al, ds:[esi] */
+        jc      1f
+        or      dl, 1
+1:      clc
+        .byte   0x26, 0x67, 0x8A, 0x06          /* mov al, es:[esi] */
+        jc      1f
+        or      dl, 2
+1:      clc
+        .byte   0x64, 0x67, 0x8A, 0x06          /* mov al, fs:[esi] */
+        jc      1f
+        or      dl, 4
+1:      clc
+        .byte   0x65, 0x67, 0x8A, 0x06          /* mov al, gs:[esi] */
+        jc      1f
+        or      dl, 8
+1:      mov     ds:[0x0D * 4], bx
+        mov     ds:[0x0D * 4 + 2], cx
+        mov     al, dl
+        pop     dx
+        pop     cx
+        pop     bx
+        pop     esi
+        pop     gs
+        pop     fs
+        pop     es
+        pop     ds
+        ret
+
+/* rm_limits の間の INT 0Dh。積まれているのは IP・CS・FLAGS (リアルモードの例外にエラーコードはない) */
+rm_limits_gp:
+        push    bp
+        mov     bp, sp
+        add     word ptr [bp + 2], 4
+        or      byte ptr [bp + 6], 1
+        pop     bp
+        iret
+
+/*
+ * void mon_rm_state(u16 *out)   リアルモード専用 (mon.h)
+ * 出口: out[0] = rm_limits の結果、out[1] = FS、out[2] = GS。保存: SI, DI, BP, ES。壊す: AX
+ */
+        .global mon_rm_state
+mon_rm_state:
+        push    bp
+        mov     bp, sp
+        push    bx
+        pushf
+        cli
+        call    rm_limits
+        xor     ah, ah
+        mov     bx, [bp + 4]
+        mov     [bx], ax
+        mov     ax, fs
+        mov     [bx + 2], ax
+        mov     ax, gs
+        mov     [bx + 4], ax
+        popf
+        pop     bx
+        pop     bp
         ret
 
 /*
@@ -89,9 +200,11 @@ mon_data_seg:
  * 入口: リアルモード。mon_vframe にゲストの開始フレーム、mon_gregs_entry に汎用レジスタ像が
  *       作ってあること。
  * 出口: リアルモード。AX = 終了コード。割り込みフラグは入口と同じ。
- * 保存: SI, DI, BP, ES, DS, SS, SP。壊す: AX, BX, CX, DX, FS, GS と各レジスタの上位 16 ビット。
+ * 保存: AX 以外の全部 (32 ビットのレジスタの上位 16 ビットと FS・GS を含む。mon_rmfix で外していなければ)。
  * ES を保存するのは、gcc-ia16 が ES を「呼ばれる側が保存するレジスタ」として扱い、
  * 呼び出しをまたいで値を置くことがあるため。
+ * 32 ビットのレジスタの上位や FS・GS は、16 ビットのソフトは触らないので、常駐物が呼び出しをまたいで当てにして
+ * いることがある。リアルモードへ戻るときは、CPU の状態をできるだけ入る前と同じにする (leave_low、rm_back)
  */
         .global mon_enter
 mon_enter:
@@ -102,12 +215,32 @@ mon_enter:
         pushf
         cli
         mov     [rm_sp], sp
+        mov     [rm_regs], ebx
+        mov     [rm_regs + 4], ecx
+        mov     [rm_regs + 8], edx
+        mov     [rm_regs + 12], esi
+        mov     [rm_regs + 16], edi
+        mov     [rm_regs + 20], ebp
+        mov     [rm_esp], esp
+        mov     word ptr [rm_fs], fs
+        mov     word ptr [rm_gs], gs
 
         /* TSS は一度 LTR すると busy になり、そのままでは次回の LTR が例外になる */
         mov     byte ptr [mon_gdt + MON_SEL_TSS + 5], 0x89
         cmp     word ptr [mon_vcpi_on], 0
         jne     enter_vcpi
-        lgdtd   [mon_gdt_ptr]
+        /* リアルモードから入る。戻るときに元へ戻すものを控える: EFLAGS の上位、GDTR、CR3、セグメントの限界 */
+        pushfd
+        pop     dword ptr [rm_eflags]
+        data32  sgdt [rm_gdt_ptr]
+        mov     eax, cr3
+        mov     [rm_cr3], eax
+        mov     byte ptr [rm_big], 0
+        test    byte ptr [mon_rmfix], MON_RMFIX_LIMITS
+        jz      1f
+        call    rm_limits
+        mov     [rm_big], al
+1:      lgdtd   [mon_gdt_ptr]
         lidtd   [mon_idt_ptr]
         mov     eax, [mon_pd_phys]
         mov     cr3, eax
@@ -246,8 +379,10 @@ trap_in_monitor:
 /*
  * 入口: ring 0、DS = MON_SEL_DATA。AX = 終了コード。
  * 下位 4MB を恒等写像に戻し、低位のセレクタへ移ってから、ページングと保護モードを抜ける。
- * セグメントレジスタには 64KB 限界のディスクリプタを入れておく (リアルモードに戻っても
- * キャッシュされた限界が残るため)。
+ * リアルモードに戻っても、セグメントレジスタの限界と属性は保護モードで入れたものが残る。SS には 64KB 限界の
+ * ディスクリプタを入れ、DS・ES・FS・GS には、入る前の限界 (rm_big) に合わせて 64KB か 4GB のものを入れる。
+ * 手順は Intel の資料の「リアルアドレスモードへ戻る」の順 (ページングを切る、セグメントを入れる、LIDT、PE を落とす、
+ * far JMP)。出典と確度は design.md §12
  */
 leave_pm:
         mov     [exit_code], ax
@@ -297,13 +432,40 @@ leave_low:
         mov     ss, ax
         mov     fs, ax
         mov     gs, ax
-        mov     eax, cr0
+        /* 基底はリアルモードで値を入れ直すと決まるので、ここで意味を持つのは限界だけ (DS は基底も同じ) */
+        mov     bl, [rm_big]
+        mov     ax, MON_SEL_BIG_LOW
+        test    bl, 2
+        jz      1f
+        mov     es, ax
+1:      test    bl, 4
+        jz      1f
+        mov     fs, ax
+1:      test    bl, 8
+        jz      1f
+        mov     gs, ax
+1:      test    bl, 1
+        jz      1f
+        mov     ds, ax
+1:      mov     eax, cr0
         and     eax, 0x7FFFFFFF
         mov     cr0, eax
         xor     eax, eax
-        mov     cr3, eax
+        test    byte ptr [mon_rmfix], MON_RMFIX_TABLES
+        jz      1f
+        mov     eax, [rm_cr3]
+1:      mov     cr3, eax
         mov     eax, [rm_cr0]
+        test    byte ptr [mon_rmfix], MON_RMFIX_JMP
+        jz      1f
+        data32  lidt [rm_idt_ptr]
         mov     cr0, eax
+        /* jmp far <リアルモードのコードセグメント>:rm_back。セグメントの語は mon_data_seg が書き込む */
+        .byte   0xEA
+        .word   rm_back
+rm_far_seg:
+        .word   0
+1:      mov     cr0, eax
         push    word ptr [mon_rm_cs]
         push    offset rm_back
         retf
@@ -316,14 +478,37 @@ rm_back:
         mov     ss, ax
         mov     sp, [rm_sp]
         xor     ax, ax
-        mov     fs, ax
-        mov     gs, ax
-        /* EMM の下では IDT はサーバが戻していて、LIDT は特権命令で実行できない */
+        xor     bx, bx
+        test    byte ptr [mon_rmfix], MON_RMFIX_FSGS
+        jz      1f
+        mov     ax, [rm_fs]
+        mov     bx, [rm_gs]
+1:      mov     fs, ax
+        mov     gs, bx
+        /* EMM の下では IDT と GDT はサーバが戻していて、LIDT・LGDT は特権命令で実行できない */
         cmp     word ptr [mon_vcpi_on], 0
-        jne     1f
+        jne     2f
         data32  lidt [rm_idt_ptr]
-1:      mov     ax, [exit_code]
-        popf
+        test    byte ptr [mon_rmfix], MON_RMFIX_TABLES
+        jz      1f
+        data32  lgdt [rm_gdt_ptr]
+1:      test    byte ptr [mon_rmfix], MON_RMFIX_REGS
+        jz      2f
+        push    dword ptr [rm_eflags]
+        popfd
+        mov     esp, [rm_esp]
+2:      test    byte ptr [mon_rmfix], MON_RMFIX_REGS
+        jz      3f
+        mov     ebx, [rm_regs]
+        mov     ecx, [rm_regs + 4]
+        mov     edx, [rm_regs + 8]
+        mov     esi, [rm_regs + 12]
+        mov     edi, [rm_regs + 16]
+        mov     ebp, [rm_regs + 20]
+        movzx   eax, word ptr [exit_code]
+        jmp     4f
+3:      mov     ax, [exit_code]
+4:      popf
         pop     es
         pop     di
         pop     si

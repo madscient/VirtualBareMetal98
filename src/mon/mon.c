@@ -17,6 +17,8 @@ extern u8 mon_vcpi_sw[22], mon_vcpi_entry[6], mon_pm_start[];
 u16 mon_enter(void);
 u16 mon_vcpi_de01(u16 pt_seg, u16 gdt_off, u32 *entry);
 
+u8 mon_rmfix = MON_RMFIX_ALL;
+
 static u16 off(const void *p)
 {
     return (u16)(unsigned)p;
@@ -62,6 +64,7 @@ void mon_init(const struct mon_paging *pg)
     set_desc(mon_gdt + MON_SEL_TSS, ds_hi + off(mon_tss), MON_TSS_SIZE - 1, 0x89, 0);
     set_desc(mon_gdt + MON_SEL_CODE_LOW, cs_lo, 0xFFFF, 0x9A, 0);
     set_desc(mon_gdt + MON_SEL_DATA_LOW, ds_lo, 0xFFFF, 0x92, 0);
+    set_desc(mon_gdt + MON_SEL_BIG_LOW, ds_lo, 0xFFFFFUL, 0x92, 0x80);
 
     /*
      * 全ベクタを 32 ビット割り込みゲートにする。仮想86モードからの進入には 32 ビットのゲートが要る。
