@@ -484,6 +484,9 @@ def test_shot(work):
         ('text: underlined "U" at row 3 has a yellow bottom line', t is not None and all(t[3 * 16 + 15][x] == 6 for x in range(8))),
         ('text: secret "S" at row 4 is transparent', t is not None and cell(t, 4, 0) == set()),
         ('text: an empty cell is transparent', t is not None and cell(t, 10, 40) == set()),
+        ('the log records the attribute counts of the text shot: 1 reversed cell ("R"), 1 hidden ("S"), cell 0 attr E1',
+         any('text attributes: 1 of 2000 cells reversed, 1 hidden, cell 0 attr E1' in l
+             for l in imgtests.read_lines(work, 'S.LOG') or [])),
     )
     ok = True
     for name, c in checks:

@@ -179,6 +179,8 @@ static int save_graphics(struct sink_ctx *s, const struct shot_info *si)
 /* ---------------------------------------------------------------- テキスト */
 
 static u8 tcode[COLS * 2], tattr[COLS * 2];     /* 1 行ぶんの文字コードと属性 (偶数バイトが有効) */
+u16 shot_rev_cells, shot_hidden_cells;
+u8 shot_attr0;
 static u8 cellpat[COLS][CELL_H];                /* 1 行ぶんの、桁ごとの 8 ドット × 16 ラインのパターン */
 static u8 spill[CELL_H];                        /* 右端の桁にある漢字の右半分 (描く場所がない) */
 
@@ -257,10 +259,21 @@ static int save_text(struct sink_ctx *s)
     text_palette(rgb, alpha);
     if (png_begin(&w, sink, s, WIDTH, HEIGHT, rgb, 9, alpha))
         return 1;
+    shot_rev_cells = shot_hidden_cells = 0;
     for (r = 0; r < ROWS; r++) {
+        u16 c;
+
         off = (u16)(r * COLS * 2);
         _fmemcpy(tcode, MK_FP(TVRAM_SEG, off), COLS * 2);
         _fmemcpy(tattr, MK_FP(TVRAM_SEG, TVRAM_ATTR + off), COLS * 2);
+        if (r == 0)
+            shot_attr0 = tattr[0];
+        for (c = 0; c < COLS; c++) {
+            if (tattr[c * 2] & ATTR_REV)
+                shot_rev_cells++;
+            if (!(tattr[c * 2] & ATTR_SHOW))
+                shot_hidden_cells++;
+        }
         gather_patterns();
         for (line = 0; line < CELL_H; line++) {
             pack_text_line(line);

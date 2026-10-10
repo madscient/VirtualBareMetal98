@@ -1534,6 +1534,13 @@ static int shot_take(char *gname, u8 how)
             log_line("VBM98: screenshot: all bit planes read the same. If the picture is wrong, "
                      "the guest had its graphic charger on\n");
         rc = shot_save(&si, gname);
+        /*
+         * テキスト側の属性の内訳。実機の報告で、画面は普通に見えているのにテキストの絵が反転だらけになったことが
+         * あり (design.md §17)、属性の読み出しがどうなっていたかを知る材料にする
+         */
+        if (!rc)
+            log_line("VBM98: screenshot: text attributes: %u of %u cells reversed, %u hidden, cell 0 attr %02X\n",
+                     shot_rev_cells, (unsigned)(80 * 25), shot_hidden_cells, shot_attr0);
     }
     if (disp != acc)
         pio_out8(0xA6, acc);
