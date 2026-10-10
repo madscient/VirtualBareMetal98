@@ -231,6 +231,10 @@ def test_boot(work):
     hdip = host_bytes(lines, 'host dipsw ports 31h 33h 42h') or b'\0\0\0'
     hmsw = host_bytes(lines, 'host memsw 1-8') or b'\0' * 8
     h33, h42 = hdip[1], hdip[2]
+    # ゲストが割り込み禁止のまま止まったときにログへ残す内容 (最初に止まった所のぶん)
+    halt_at = next((i for i, l in enumerate(loglines) if 'guest halted with interrupts disabled' in l), len(loglines))
+    halted = loglines[halt_at + 1:halt_at + 60]
+    halted = halted[:next((i for i, l in enumerate(halted) if l.startswith('VBM98: stack at SS:SP:')), -1) + 1]
     checks = (
         ('batch finished', finished),
         ('guest halted and VBM98 returned to DOS', any('halted' in l for l in lines) and any('back to DOS' in l for l in lines)),
@@ -275,6 +279,13 @@ def test_boot(work):
         ('-log: the log file holds the same lines as the console (boot, INT 1Bh trace, resets, exit)',
          any('booting from drive' in l for l in loglines) and any(l.startswith('1B 5690') for l in loglines) and
          any('reset (menu)' in l for l in loglines) and any('back to DOS' in l for l in loglines)),
+        ('-log: a halt with interrupts disabled leaves the registers, the code around CS:IP (CLI before, HLT at) '
+         'and the stack in the log, and none of it on the console',
+         bool(halted) and halted[0].startswith('VBM98: guest CS:IP=') and
+         any(l.startswith('VBM98: code before CS:IP:') and l.rstrip().endswith(' FA') for l in halted) and
+         any(l.startswith('VBM98: code at CS:IP: F4') for l in halted) and
+         any('last events' in l for l in halted) and
+         not any('stack at SS:SP' in l or 'code at CS:IP' in l for l in lines)),
     )
     ok = True
     for name, c in checks:
@@ -772,6 +783,7 @@ def test_msdos(work):
     pattern = bytes((i * 13 + 7) & 0xFF for i in range(1024))
     want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 1024, 2)) & 0xFFFF
     ok = True
+    ver6 = False
     for emm in (False, True):
         tag = 'EMM386' if emm else 'HIMEM'
         img = bytearray(77 * 2 * 8 * 1024)
@@ -791,6 +803,7 @@ def test_msdos(work):
         for line in lines:
             if 'tvram row' not in line:
                 print('  ' + line)
+        ver6 = ver6 or any('MS-DOS' in l and ' 6.' in l for l in lines)
         with open(os.path.join(work, 'E.IMG'), 'rb') as f:
             rec = f.read()[2048:3072]
         if emm:
@@ -822,7 +835,78 @@ def test_msdos(work):
         for name, c in checks:
             print('%s MS-DOS + %s: %s' % ('ok  ' if c else 'FAIL', tag, name))
             ok = ok and c
+    # EMM386.EXE が /DPMI で VCPI を提供するのは MS-DOS 6 から。版は VER の出力で決める (VBM98 が VCPI を見つけたかで
+    # 決めると、見つけられなくなる不具合が「走らせなかった」に化ける)
+    if ver6:
+        ok = msdos_umb(work, ipl, pattern) and ok
+    else:
+        print('MS-DOS + EMM386 の UMB: 見ていない (起動ディスクが MS-DOS 6 ではない。この版の EMM386.EXE は VCPI を提供しない)')
     print('MS-DOS: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
+def remapped_ranges(lines):
+    """VBM98 が出した 'upper memory remapped by the EMM driver:' の行の範囲 (先頭と末尾の番地の組)。行がなければ None"""
+    for line in lines:
+        if 'remapped by the EMM driver:' in line:
+            return [tuple(int(h, 16) for h in part.split('-'))
+                    for part in line.split('driver:')[1].split() if '-' in part]
+    return None
+
+
+def msdos_umb(work, ipl, pattern):
+    """MS-DOS 6.2 の EMM386.EXE に /UMB /HIGHSCAN /DPMI を付けた構成 (利用者向けの文書の例と同じ)。/HIGHSCAN は
+    BASIC ROM の領域 (E8000h〜) にも UMB を作り、LH で読み込んだ常駐物はそこに入る。ゲストにはその番地の実物
+    (ROM) が見えるので、そこの常駐物を指すベクタをホストの RAM として扱うこと (ROM の入口まで追う、印へ向ける) を見る。
+    呼ぶのは起動ディスクが MS-DOS 6 のときだけ (それより前の版の EMM386.EXE は VCPI を提供しない)"""
+    img = bytearray(77 * 2 * 8 * 1024)
+    img[0:1024] = ipl
+    img[1024:2048] = pattern
+    with open(os.path.join(work, 'E.IMG'), 'wb') as f:
+        f.write(img)
+    shutil.copy2(os.path.join(BUILT, 'HOSTTSR.COM'), os.path.join(work, 'HOSTTSR.COM'))
+    out = os.path.join(work, 'MSDOS.OUT')
+    if os.path.exists(out):
+        os.remove(out)
+    finished = dosenv.run_batch(['VER > MSDOS.OUT', 'LH HOSTTSR.COM >> MSDOS.OUT',
+                                 'VBM98.EXE -fdd0 E.IMG -trace -menukeys 04,15 >> MSDOS.OUT'],
+                                180, core='normal', emm=True, msdos=True,
+                                msdos_config=['DEVICE=EMM386.EXE /UMB /HIGHSCAN /DPMI', 'DOS=HIGH,UMB'])
+    lines = imgtests.read_lines(work, 'MSDOS.OUT') or []
+    for line in lines:
+        if 'tvram row' not in line:
+            print('  ' + line)
+    r = boot_rec(os.path.join(work, 'E.IMG'))
+    ranges = remapped_ranges(lines) or []
+    high = [x for x in ranges if x[0] >= 0xE8000]
+    tsr = [int(l.split()[2], 16) << 4 for l in lines if l.startswith('HOSTTSR at ')]
+    traced = ' '.join(l for l in lines if 'traced to their ROM entries' in l)
+    hook = hook_page(lines)
+
+    def in_rom(v):
+        seg, off = (int(h, 16) for h in v.split(':'))
+        at = seg * 16 + off
+        return 0xE8000 <= at < 0x100000 and not any(a <= at <= b for a, b in ranges)
+
+    checks = (
+        ('batch finished', finished),
+        ('VBM98 runs under the V86 monitor with VCPI', any('V86 monitor (VCPI' in l for l in lines)),
+        ('EMM386 made a UMB at or above E8000h, and VBM98 shows that range as remapped', bool(high)),
+        ('the TSR was loaded into that UMB', bool(tsr) and any(a <= tsr[0] <= b for a, b in high)),
+        ('INT 09h and INT 1Ah hooked from that UMB are traced on to their ROM entries (b) (c)',
+         ('09=%s(b)' % r['v09']) in traced and ('1A=%s(c)' % r['v1a']) in traced),
+        ('the guest vectors for INT 09h and INT 1Ah are in the ROM, outside the remapped ranges',
+         in_rom(r['v09']) and in_rom(r['v1a'])),
+        ('INT 89h pointing into that UMB: the guest gets the IRET in the hook page',
+         hook is not None and r['v89'] == '%04X:0300' % hook),
+        ('IRQ9 (vector 11h) taken from that UMB is masked for the guest', (r['imr_s'] & 0x02) == 0x02),
+        ('the IPL ran to its end (it calls INT 1Ah once) and VBM98 returned to DOS',
+         r['ran'] and any('back to DOS' in l for l in lines)),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s MS-DOS + EMM386 UMB: %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
     return ok
 
 

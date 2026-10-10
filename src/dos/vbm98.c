@@ -784,6 +784,7 @@ static int sbrom_setup(const char *path, u32 lin)
  * 残りの RAM には触らない (実機のリセットでも RAM は残る)
  */
 u32 rom_trace(u16 vec, u16 ax, u16 *info);  /* romtrace.S */
+void rom_trace_moved(u16 lo, u16 hi);
 
 /*
  * ROM の入口を突き止める割り込み: タイマ・キーボード・VSYNC (ROM の BIOS が自分でハンドラを持つハードウェア割り込み) と、
@@ -804,7 +805,9 @@ static u8 rom_form[HOOK_VEC_MAX];   /* その入り方: 'a' far jmp の鎖、'b'
 
 /*
  * seg:off がゲストからも同じ中身で見える ROM か。A0000h 未満と 100000h 以上 (HMA) はホストの RAM。E8000h 以上は ROM。
- * その間 (VRAM、UMB、拡張 ROM) は 1 バイト書いてみて、書ければ RAM とみなす (値は戻す。romtrace.S と同じ基準)
+ * その間 (VRAM、UMB、拡張 ROM) は 1 バイト書いてみて、書ければ RAM とみなす (値は戻す。romtrace.S と同じ基準)。
+ * E8000h 以上でも、EMM ドライバが別のメモリを写しているページは同じく書いてみて決める: MS-DOS 6.2 の EMM386.EXE は
+ * /HIGHSCAN で BASIC ROM の領域も UMB にし、そこに常駐物が入る (design.md §12)。ゲストにはそのページの実物が見える
  */
 static int in_rom(u16 seg, u16 off)
 {
@@ -814,7 +817,7 @@ static int in_rom(u16 seg, u16 off)
 
     if (l < RAM_TOP || l >= 0x100000UL)
         return 0;
-    if (l >= 0xE8000UL)
+    if (l >= 0xE8000UL && monmem_host_same(l))
         return 1;
     _disable();
     b = *p;
@@ -859,6 +862,12 @@ static int guest_memory(int first)
     if (xms_move(0, xms_far(mon_data_seg(), (u16)(unsigned)ivtbuf), 0, xms_far(0, 0), HOOK_VEC_MAX * 4))
         return 1;
     if (first) {
+        u32 moved = 0;
+
+        for (i = 0; i < 24; i++)
+            if (!monmem_host_same(0xE8000UL + (u32)i * 0x1000UL))
+                moved |= 1UL << i;
+        rom_trace_moved((u16)moved, (u16)(moved >> 16));
         for (i = 0; i < sizeof rom_traced; i++) {
             const u8 *e = ivtbuf + rom_traced[i] * 4;
             u16 rej[4];
@@ -994,6 +1003,29 @@ static u16 pick_hook_seg(void)
 }
 
 /*
+ * EMM の下で、上位メモリ (A0000h〜FFFFFh) のうちサーバが別のメモリを写している範囲を表示する (動作報告の材料)。
+ * そこでホストに見えているのはホストの RAM (UMB や EMS のページ枠) で、ゲストには実物 (ROM か空き) が見える
+ */
+static void show_remapped(void)
+{
+    u32 l, from = 0;
+    u8 any = 0;
+
+    say("VBM98: upper memory remapped by the EMM driver:");
+    for (l = RAM_TOP; l <= 0x100000UL; l += 0x1000UL) {
+        if (l < 0x100000UL && !monmem_host_same(l)) {
+            if (!from)
+                from = l;
+        } else if (from) {
+            say(" %05lX-%05lX", (unsigned long)from, (unsigned long)(l - 1));
+            from = 0;
+            any = 1;
+        }
+    }
+    say("%s\n", any ? "" : " none");
+}
+
+/*
  * ゲストの器を作る (一度だけ): ゲスト用メモリの確保、横取り印とリセットベクタのページ、メモリスイッチの
  * ページの写し、サウンド BIOS、ページ表、モニタの初期化。中身は guest_memory が入れる
  */
@@ -1067,6 +1099,8 @@ static int setup_guest(u32 tables)
         say("VBM98: VCPI setup (AX=DE01h) failed\n");
         return 1;
     }
+    if (v86)
+        show_remapped();
     mon_hook_add(HOOK_PAGE_LIN, HOOK_INT1B);
     mon_hook_add(RESET_LIN, HOOK_RESET);
     mon_hook_add(HOOK_PAGE_LIN + HOOK_KBD_OFF, HOOK_KBD);
@@ -1500,28 +1534,33 @@ static void log_heartbeat(const struct mon_guest *g)
 static void dump_guest(const struct mon_guest *g, int fault)
 {
     const char *const *kinds = ev_kinds;
-    u8 code[16];
+    u8 code[FAULT_BYTES];
+    u32 at = lin(g->cs, g->ip);
     u16 i, n;
+    u8 before = 1;
 
     say("VBM98: guest CS:IP=%04X:%04X SS:SP=%04X:%04X DS=%04X ES=%04X FL=%04X IMR=%02X %02X\n",
            g->cs, g->ip, g->ss, (u16)g->esp, g->ds, g->es, (u16)g->eflags, guest_imr_m, guest_imr_s);
     say("VBM98: AX=%04X BX=%04X CX=%04X DX=%04X SI=%04X DI=%04X BP=%04X\n",
            (u16)g->eax, (u16)g->ebx, (u16)g->ecx, (u16)g->edx, (u16)g->esi, (u16)g->edi, (u16)g->ebp);
     if (fault) {
-        say("VBM98: code before CS:IP:");
-        for (i = 0; i < FAULT_BEFORE; i++)
-            say(" %02X", fault_code[i]);
-        say("\n");
-        memcpy(code, fault_code + FAULT_BEFORE, 16);
-    } else if (lin(g->cs, g->ip) + 16 <= GUEST_KB * 1024UL) {
-        g_read(lin(g->cs, g->ip), mon_data_seg(), (u16)(unsigned)code, 16);
+        memcpy(code, fault_code, FAULT_BYTES);
+    } else if (at >= FAULT_BEFORE && at + 16 <= GUEST_KB * 1024UL) {
+        g_read(at - FAULT_BEFORE, mon_data_seg(), (u16)(unsigned)code, FAULT_BYTES);
     } else {
         /* ゲストの RAM の外 (ROM など)。ホストから見える内容で代える (ゲストにだけ別のものを見せているページでは違う) */
-        _fmemcpy(code, MK_FP(g->cs, g->ip), 16);
+        _fmemcpy(code + FAULT_BEFORE, MK_FP(g->cs, g->ip), 16);
+        before = 0;
+    }
+    if (before) {
+        say("VBM98: code before CS:IP:");
+        for (i = 0; i < FAULT_BEFORE; i++)
+            say(" %02X", code[i]);
+        say("\n");
     }
     say("VBM98: code at CS:IP:");
     for (i = 0; i < 16; i++)
-        say(" %02X", code[i]);
+        say(" %02X", code[FAULT_BEFORE + i]);
     say("\nVBM98: guest IVT 08-0F:");
     for (i = 0x08; i <= 0x0F; i++) {
         g_read((u32)i * 4, mon_data_seg(), (u16)(unsigned)code, 4);
@@ -1657,6 +1696,33 @@ static void put_nowhere(const char *s, unsigned len)
 {
     (void)s;
     (void)len;
+}
+
+/*
+ * ゲストが割り込み禁止のまま止まったときの様子 (レジスタ、止まった所の前後の命令、スタック、直前の割り込み) を
+ * ログに残す。ソフトが自分で終了したのか、おかしくなって止まったのかは、止まった番地だけでは見分けられない。
+ * 画面はこのあとメニューが使うので出さない
+ */
+static void halt_note(const struct mon_guest *g)
+{
+    u32 sp = lin(g->ss, (u16)g->esp);
+    u16 w[8];
+    u8 i;
+
+    if (!log_is_open())
+        return;
+    log_hold(xfer_seg(), 0x8000);
+    say_sink(put_nowhere);
+    dump_guest(g, 0);
+    if (sp + sizeof w <= GUEST_KB * 1024UL) {
+        g_read(sp, mon_data_seg(), (u16)(unsigned)w, sizeof w);
+        say("VBM98: stack at SS:SP:");
+        for (i = 0; i < 8; i++)
+            say(" %04X", w[i]);
+        say("\n");
+    }
+    say_sink(0);
+    log_release();
 }
 
 /*
@@ -1880,6 +1946,7 @@ int main(int argc, char **argv)
                 say("VBM98: guest halted with interrupts disabled at %04X:%04X\n", g.cs, g.ip);
             else
                 log_line("VBM98: guest halted with interrupts disabled at %04X:%04X\n", g.cs, g.ip);
+            halt_note(&g);
             mrc = menu_main();
             note_menu("guest halted", mrc);
             if (mrc == MENU_EXIT)

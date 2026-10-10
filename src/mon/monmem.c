@@ -52,3 +52,10 @@ void monmem_map(u32 lin, u32 phys)
 
     pt_guest[(u16)(lin >> 12)] = (phys & ~0xFFFUL) | PTE_FLAGS;
 }
+
+int monmem_host_same(u32 lin)
+{
+    u32 __far *pt_host = table(T_HOST);
+
+    return (pt_host[(u16)(lin >> 12)] & ~0xFFFUL) == (lin & ~0xFFFUL);
+}

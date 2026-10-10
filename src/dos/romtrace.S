@@ -20,7 +20,9 @@
  * 別の割り込みの ROM の入口を取り違えない。
  *
  * ROM かどうか: 番地が A0000h 未満か 100000h 以上 (HMA) なら RAM。E8000h 以上は ROM。その間 (VRAM、UMB、拡張 ROM)
- * は 1 バイト書いてみて、書ければ RAM とみなす (値は戻す)。
+ * は 1 バイト書いてみて、書ければ RAM とみなす (値は戻す)。E8000h 以上でも、EMM ドライバが別のメモリを写している
+ * ページ (tr_moved) は同じく書いてみて決める: EMM ドライバは BASIC ROM の領域も UMB にすることがあり、そこに
+ * 常駐物が入る。ゲストには実物の ROM が見えるので、その番地を入口として渡すと ROM の無関係な所へ飛ぶ。
  *
  * 変数はコードセグメントに置く (割り込みハンドラの中では DS がどこを指しているか分からない)
  */
@@ -42,6 +44,24 @@ tr_depth:       .word   0               /* ハンドラに入ってから積ま�
 tr_rej:         .word   0, 0, 0         /* 入口と認めなかった最初の番地 (オフセット、セグメント) と、そのときの tr_depth */
 tr_inrom:       .byte   0               /* 入口と認めなかった ROM のコードを実行している間 1 */
 tr_form:        .byte   0               /* 入口と認めた入り方: 'a'・'b'・'c' (冒頭の説明)。未発見なら 0 */
+tr_moved:       .word   0, 0            /* E8000h からの 4KB ページごとの印 (24 ビット)。rom_trace_moved の説明 */
+
+/*
+ * void rom_trace_moved(u16 lo, u16 hi)
+ * 入口: lo・hi = E8000h〜FFFFFh の 4KB ページごとの印 (bit n が E8000h + n × 1000h。24 ビット)。1 は、ホストに実物と違う
+ *       メモリが写っているページ。rom_trace より前に呼ぶ (呼ばなければ全部 0 = どのページも実物)
+ * 壊す: AX
+ */
+        .global rom_trace_moved
+rom_trace_moved:
+        push    bp
+        mov     bp, sp
+        mov     ax, [bp + 4]
+        mov     cs:[tr_moved], ax
+        mov     ax, [bp + 6]
+        mov     cs:[tr_moved + 2], ax
+        pop     bp
+        ret
 
 /*
  * u32 rom_trace(u16 vec, u16 ax, u16 *info)
@@ -159,8 +179,12 @@ tr_isr:
         cmp     ax, 0xA000
         jb      tr_ram
         cmp     ax, 0xE800
-        jae     tr_rom
-        mov     ds, [bp + 4]
+        jb      1f
+        movzx   bx, ah                  /* AX は線形番地 / 16 なので、AH がページの番号 (E8h〜FFh) */
+        sub     bx, 0xE8
+        bt      word ptr cs:[tr_moved], bx
+        jnc     tr_rom
+1:      mov     ds, [bp + 4]
         mov     bx, [bp + 2]
         mov     al, [bx]
         mov     ah, al

@@ -111,12 +111,13 @@ def msdos_image():
     return os.environ.get('VBM_MSDOS') or None
 
 
-def _msdos_floppy(src_image, share, dst, emm):
+def _msdos_floppy(src_image, share, dst, emm, config_tail=None):
     """MS-DOS の起動ディスクの写しを作り、試験のバッチを流す形に書き換えて、その場所を返す。
 
     元は MS-DOS 5.0 以降のシステムディスク (ヘッダなしの生イメージ、FAT12。IO.SYS・MSDOS.SYS・COMMAND.COM と、
     圧縮された HIMEM.SY_・EMM386.EX_ が入っているもの)。写しに HIMEM.SYS (と EMM386.EXE) を展開して置き、
-    CONFIG.SYS と AUTOEXEC.BAT を書く。ホストのフォルダは NP21/W の HOSTDRV で Z: に見せる。元のイメージには書かない
+    CONFIG.SYS と AUTOEXEC.BAT を書く。ホストのフォルダは NP21/W の HOSTDRV で Z: に見せる。元のイメージには書かない。
+    config_tail があれば、CONFIG.SYS の HIMEM.SYS の行のあとを、既定の行の代わりにその行の並びにする
     """
     import fat12
     with open(src_image, 'rb') as f:
@@ -133,7 +134,8 @@ def _msdos_floppy(src_image, share, dst, emm):
             fs.write(tool, f.read())
     # NEC 版の EMM386.EXE (MS-DOS 5.0A) は、引数なしだと EMS だけを提供し、VCPI は提供しない (INT 67h AX=DE00h が
     # 84h を返す)。引数の解析には VCPI という語があるが、/VCPI も VCPI も組み込みに失敗し、書き方は分かっていない
-    config = ['FILES=20', 'BUFFERS=10', 'LASTDRIVE=Z', 'DEVICE=HIMEM.SYS'] + (['DEVICE=EMM386.EXE'] if emm else [])
+    tail = list(config_tail) if config_tail is not None else (['DEVICE=EMM386.EXE'] if emm else [])
+    config = ['FILES=20', 'BUFFERS=10', 'LASTDRIVE=Z', 'DEVICE=HIMEM.SYS'] + tail
     fs.write('CONFIG.SYS', ('\r\n'.join(config) + '\r\n').encode('ascii'))
     autoexec = ['@ECHO OFF', 'HOSTDRV Z', 'Z:', 'CALL %s' % BATCH, 'A:\\PWOFF']
     fs.write('AUTOEXEC.BAT', ('\r\n'.join(autoexec) + '\r\n').encode('ascii'))
@@ -143,14 +145,14 @@ def _msdos_floppy(src_image, share, dst, emm):
     return path
 
 
-def _np21w(src, share, timeout, core, emm=False, msdos=False):
+def _np21w(src, share, timeout, core, emm=False, msdos=False, msdos_config=None):
     """スターターセット一式を build/np2 に複製し、その share をバッチの置き場にして走らせる。
 
     利用者の一式には書き込まない。起動イメージと設定ファイルは実行のたびに複製し直す
     (エミュレータが終了時に設定を書き戻し、DOS が起動イメージに書くことがあるため)。
     emm なら複製した起動イメージの FDCONFIG.SYS を HIMEMX + EMM386 (NOEMS) を読む形に書き換える。
     msdos なら、FreeDOS の起動イメージではなく実物の MS-DOS の起動ディスク (VBM_MSDOS) の写しをドライブに入れて
-    起動する (emm なら MS-DOS の EMM386.EXE も読み込む)。
+    起動する (emm なら MS-DOS の EMM386.EXE も読み込む。msdos_config は _msdos_floppy の config_tail)。
     窓は出るが操作は要らない。core は使わない。
     """
     dst = os.path.dirname(share)
@@ -171,16 +173,17 @@ def _np21w(src, share, timeout, core, emm=False, msdos=False):
     args = [os.path.join(dst, exe)]
     if msdos:
         # 実行ファイルにイメージを渡すと、ドライブ 1 に入れて起動する (フロッピーが先に起動される)
-        args.append(_msdos_floppy(msdos_image(), share, dst, emm))
+        args.append(_msdos_floppy(msdos_image(), share, dst, emm, msdos_config))
     subprocess.run(args, cwd=dst, stdin=subprocess.DEVNULL, timeout=timeout)
 
 
-def run_batch(commands, timeout, core='auto', emm=False, msdos=False):
+def run_batch(commands, timeout, core='auto', emm=False, msdos=False, msdos_config=None):
     """commands を順に実行する。最後まで走ったら True。
 
     core は DOSBox-X の CPU の再現方式 ('auto' なら 'normal' = 命令を逐次解釈する方式にする。NP21/W では使わない)。
     emm は NP21/W だけ: EMM386 (VCPI あり) を読み込んだ DOS で走らせる。
     msdos は NP21/W だけ: 実物の MS-DOS の起動ディスク (VBM_MSDOS) から起動した DOS で走らせる。
+    msdos_config は msdos のときだけ: CONFIG.SYS の HIMEM.SYS の行のあとに置く行の並び (EMM386.EXE のオプションや DOS=)。
     """
     env, target = _select()
     if not env:
@@ -200,7 +203,7 @@ def run_batch(commands, timeout, core='auto', emm=False, msdos=False):
         if env == 'dosboxx':
             _dosboxx(target, wd, timeout, core)
         else:
-            _np21w(target, wd, timeout, core, emm, msdos)
+            _np21w(target, wd, timeout, core, emm, msdos, msdos_config)
     except subprocess.TimeoutExpired:
         pass
     return os.path.exists(done)

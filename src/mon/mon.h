@@ -111,6 +111,13 @@ void mon_hook_clear(void);
 void monmem_build(struct mon_paging *pg, u32 tables_phys, u32 guest_phys);
 /* ゲスト向けの写像で、線形 lin (4MB 未満) のページの先を phys に差し替える */
 void monmem_map(u32 lin, u32 phys);
+/*
+ * ホスト向けの写像で、線形 lin (4MB 未満) のページが、番地どおりの物理メモリを指しているか。
+ * リアルモードでは常に 1。EMM の下では mon_vcpi_setup のあとで意味を持つ: サーバが別のメモリ (UMB、EMS のページ枠)
+ * を写しているページは 0 になる。ゲスト向けの写像は A0000h 以上を番地どおりにするので、そのページでは
+ * ホストとゲストで見える中身が違う
+ */
+int monmem_host_same(u32 lin);
 
 void mon_init(const struct mon_paging *pg);
 

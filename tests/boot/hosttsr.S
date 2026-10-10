@@ -15,6 +15,7 @@
  * 引数に K を付けて実行すると、上の横取りは入れず、INT 09h を「元のハンドラへ渡さず自分で片付ける」形で横取りする
  * (ROM の入口を追えない横取り。キーボードの IRQ が印で受けられる状態でも、ゲストの割り込みマスクで閉じられない
  * ことを見る。閉じるとホットキーが効かなくなる)。
+ * 引数なしのときは、常駐する前に「HOSTTSR at <セグメント>」を標準出力へ出す。
  * COM 形式 (100h から)。常駐部分は new09k の終わりまで
  */
         .arch   i386
@@ -129,5 +130,36 @@ install:
         mov     es:[0x19 * 4 + 2], cs
 2:
         sti
+        /* 常駐した番地 (セグメント) を表示する。試験が、下位メモリと UMB のどちらに入ったかを確かめるのに使う */
+        mov     dx, offset msg_at
+        mov     ah, 0x09
+        int     0x21
+        mov     bx, cs
+        mov     cx, 4
+3:      rol     bx, 4
+        mov     dl, bl
+        and     dl, 0x0F
+        add     dl, 0x30
+        cmp     dl, 0x3A
+        jb      4f
+        add     dl, 7
+4:      mov     ah, 0x02
+        int     0x21
+        loop    3b
+        mov     dx, offset msg_nl
+        mov     ah, 0x09
+        int     0x21
+        /*
+         * 標準のハンドル (0〜4) を閉じてから常駐する。DOS は常駐するプログラムのハンドルを閉じないので、標準出力が
+         * ファイルに向けられていると、そのファイルが開いたままになり、あとのコマンドが同じファイルへ追記できない
+         */
+        mov     bx, 4
+5:      mov     ah, 0x3E
+        int     0x21
+        dec     bx
+        jns     5b
         mov     dx, offset resident_end
         int     0x27
+
+msg_at: .ascii  "HOSTTSR at $"
+msg_nl: .byte   0x0D, 0x0A, 0x24
