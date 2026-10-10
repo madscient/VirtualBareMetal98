@@ -92,6 +92,7 @@ u8 vid_pal[4];
 u8 vid_color16, vid_anapal[16 * 3];
 u8 vid_gdisp, vid_tdisp;
 u8 vid_glr = VID_GLR_NONE;
+u8 vid_mode68;
 static u8 glr_wait;             /* グラフィック GDC に CSRFORM が書かれ、最初のパラメータを待っている */
 static u8 glr_was;              /* 待つ前に、ポート A0h をトラップしていたか */
 u8 shot_wait, shot_max, shot_clean;
@@ -504,6 +505,12 @@ u16 mon_on_out(u16 port, u8 size, u32 val)
         vid_glr = (u8)(v & 0x1F);
         glr_wait = 0;
         mon_trap_port_r0(0xA0, glr_was);
+    }
+    /* モードフリップフロップ (68h)。上位 4 ビットが 0 の値だけが項目の設定 (参考実装の gdc_o68。design.md §12) */
+    if (port == 0x68 && size == 1 && !(v & 0xF0)) {
+        u8 bit = (u8)(1 << ((v >> 1) & 7));
+
+        vid_mode68 = (u8)((v & 1) ? (vid_mode68 | bit) : (vid_mode68 & ~bit));
     }
     if ((port == 0xA2 || port == 0x62) && size == 1) {
         u8 *disp = port == 0xA2 ? &vid_gdisp : &vid_tdisp;

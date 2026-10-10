@@ -3,7 +3,7 @@
  * グラフィック VRAM を消して色の帯を書き、テキスト VRAM に ANK・漢字・反転・下線・非表示の文字を
  * 書いてから、割り込みを許可したまま HLT で待つ。VBM98 の -shotat がその間に撮り、-stopafter が止める。
  * 何をどこに書くかは tests/run_dos_tests.py の期待値と対で変える。
- * -D で作り分ける変種 (DIRECT400、PAGE1、MONO、TCR、TCRKEEP) は、それぞれの #ifdef の所に書いてある
+ * -D で作り分ける変種 (DIRECT400、PAGE1、MONO、TCR、TCRKEEP、KAC) は、それぞれの #ifdef の所に書いてある
  */
         .arch   i386
         .intel_syntax noprefix
@@ -167,6 +167,14 @@ start:
         out     0x7C, al
 #endif
         jmp     9b
+#endif
+#ifdef KAC
+        /*
+         * SHOTKAC.BIN: モードフリップフロップの KAC (コードアクセス) モードを ON にしたまま待つ。このままでは漢字が
+         * 1 バイトの文字として描かれる。VBM98 がメニューの間だけ OFF にすることを見る (run_dos_tests.py の menu)
+         */
+        mov     al, 0x0B
+        out     0x68, al
 #endif
         /*
          * 1 枚目 (8 色) を撮る時間を置いてから 16 色モードへ移る。VSYNC (A0h の bit 5) の立ち上がりを

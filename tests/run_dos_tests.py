@@ -635,15 +635,25 @@ def test_menu(work):
     img[0:1024] = ipl
     with open(os.path.join(work, 'M.IMG'), 'wb') as f:
         f.write(img)
-    for name in ('MENU.OUT', 'M001G.PNG', 'M001T.PNG', 'M.LOG'):
+    # KAC (コードアクセス) モードを ON にしたまま待つ IPL (SHOTKAC.BIN)。メニューの間だけ OFF にすることを、ログの行で見る
+    # (描かれ方そのものは自動試験では見えない。手作業で NP21/W の窓を撮って確かめた。design.md §12)
+    with open(os.path.join(BUILT, 'SHOTKAC.BIN'), 'rb') as f:
+        imgk = bytearray(77 * 2 * 8 * 1024)
+        imgk[0:1024] = f.read()
+    with open(os.path.join(work, 'K.IMG'), 'wb') as f:
+        f.write(imgk)
+    for name in ('MENU.OUT', 'M001G.PNG', 'M001T.PNG', 'M.LOG', 'MENUK.OUT', 'K.LOG'):
         if os.path.exists(os.path.join(work, name)):
             os.remove(os.path.join(work, name))
     # -log の心拍 (1 秒 = 100 刻み) は、150 刻みで止める前に 1 回入る
-    finished = dosenv.run_batch(['VBM98.EXE -fdd0 M.IMG -tick -menuat 50 -menukeys 03,00,00 -stopafter 150 -log M.LOG,1 > MENU.OUT'], 180, core='normal')
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 M.IMG -tick -menuat 50 -menukeys 03,00,00 -stopafter 150 -log M.LOG,1 > MENU.OUT',
+                                 'VBM98.EXE -fdd0 K.IMG -tick -menuat 50 -menukeys 00 -stopafter 100 -log K.LOG > MENUK.OUT'],
+                                240, core='normal')
     lines = imgtests.read_lines(work, 'MENU.OUT') or []
     for line in lines:
         print('  ' + line)
     loglines = imgtests.read_lines(work, 'M.LOG') or []
+    klog = imgtests.read_lines(work, 'K.LOG') or []
     g = read_png4(os.path.join(work, 'M001G.PNG'))
     t = read_png4(os.path.join(work, 'M001T.PNG'))
 
@@ -666,6 +676,9 @@ def test_menu(work):
          bool(lines) and any('stopped after 150' in l for l in lines) and
          [l for l in lines[next(i for i, l in enumerate(lines) if 'stopped after 150' in l):] if 'tvram row' not in l] ==
          [l for l in loglines[next((i for i, l in enumerate(loglines) if 'stopped after 150' in l), len(loglines)):] if 'tvram row' not in l]),
+        ('guest with the code access mode (port 68h) on: the menu turned it off for its stay, and the guest resumed and stopped',
+         any('code access mode (port 68h) on; turned off' in l for l in klog) and any('stopped after 100' in l for l in klog)),
+        ('guest that leaves the code access mode alone: no such note', not any('code access mode' in l for l in loglines)),
     )
     ok = True
     for name, c in checks:

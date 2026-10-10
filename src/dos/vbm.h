@@ -62,6 +62,13 @@ extern u8 vid_tdisp;
  */
 #define VID_GLR_NONE 0xFF
 extern u8 vid_glr;
+/*
+ * ゲストがポート 68h (モードフリップフロップ) に書いた値の写し。bit n が項目 n (書いた値の bit 3〜1)、値は bit 0。
+ * bit 5 (項目 5、0Ah / 0Bh) が KAC (コードアクセス) モード。ON のままだとテキスト画面の 2 バイトの文字 (漢字) が
+ * 1 バイトの文字として描かれるので、メニューの間は OFF にして閉じるときに戻す (design.md §9・§12)。起動時の初期化で
+ * BIOS が設定する値を vbm98.c が入れ、以後の書き込みを ring 0 が追う
+ */
+extern u8 vid_mode68;
 /* 開発用: COPY の代わりにスクリーンショットにするスキャンコード (0 なら無し)。-stopkey と同じ事情 */
 extern u8 kbd_shot_alt;
 /*

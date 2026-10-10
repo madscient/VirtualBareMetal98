@@ -679,6 +679,9 @@ static void video_guest(void)
     int18(0x42, 0, 0x80);
     vid_glr = VID_GLR_NONE;
     int18(0x0A, (u8)(0x04 | crt_lo), 0);
+    /* BIOS が 68h に書く項目のうち、モードの値から決まるもの (参考実装の bios0x18_0a): 項目 0 (簡易グラフィック属性) = ON、
+       項目 2 (40 桁) = モードの bit 1、項目 5 (KAC) = モードの bit 3 (OFF)。項目 3 はディスプレイの設定で決まり、ここでは追わない */
+    vid_mode68 = (u8)(0x01 | ((crt_lo & 0x02) ? 0x04 : 0));
     int18(0x0C, 0, 0);
     vid_tdisp = 1;
     int18(0x12, 0, 0);
@@ -1450,13 +1453,23 @@ void vm_prog(char phase)
  * 閉じるときは、ゲストが表示 ON にしていた (vid_gdisp) なら BCTRL の START で戻す。テキスト表示はメニューが
  * INT 18h で ON にするので、ゲストが消していた (vid_tdisp = 0) なら閉じるときに STOP で消し直す
  */
+/*
+ * KAC (コードアクセス) モード (vbm.h の vid_mode68) も同じ時機で扱う。ON のままメニューを描くと、漢字が 1 バイトの
+ * 文字として描かれて読めない (実機の報告: PC-9821Ap2 で、終了の確認が読めない画面になった。design.md §12)
+ */
 void vm_gdisp_pause(void)
 {
     gdc_cmd(0xA0, 0x0C);
+    if (vid_mode68 & 0x20) {
+        pio_out8(0x68, 0x0A);
+        log_line("VBM98: the guest had the code access mode (port 68h) on; turned off while the menu is shown\n");
+    }
 }
 
 void vm_gdisp_resume(void)
 {
+    if (vid_mode68 & 0x20)
+        pio_out8(0x68, 0x0B);
     if (vid_gdisp)
         gdc_cmd(0xA0, 0x0D);
     if (!vid_tdisp)
@@ -1948,6 +1961,8 @@ int main(int argc, char **argv)
     /* GDC のコマンド (テキスト 62h、グラフィック A2h)。表示の ON/OFF を追い、メニューのあとに戻すのに使う (vbm_r0.c、§9) */
     mon_trap_port(0x62, 1);
     mon_trap_port(0xA2, 1);
+    /* モードフリップフロップ (68h)。KAC モードを追い、メニューの間だけ OFF にする (vbm.h の vid_mode68) */
+    mon_trap_port(0x68, 1);
     /* DIP スイッチの読み出しポート。-dipsw があればゲストの値に差し替える (vbm_r0.c)。なければ素通し */
     if (dip_on) {
         mon_trap_port(0x31, 1);
@@ -2072,6 +2087,7 @@ int main(int argc, char **argv)
             running = 0;
             break;
         case X_HOTKEY_STOP:
+            isr_note("the exit confirmation was opened");
             if (menu_confirm_exit()) {
                 keep_on();
                 say("VBM98: exit by the hotkey (CTRL+GRPH+STOP)\n");
