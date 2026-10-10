@@ -15,8 +15,9 @@ mkdir -p "$out"
 # 64KB で、本体はその近くまで使っている
 model="-mcmodel=small -march=i80286 -Os -std=gnu99 -ffunction-sections -fdata-sections"
 ldflags="-Wl,--gc-sections"
-# スタックに残っていなければならない量 (link の検査)。本体が試験の環境で使うのは 0.8KB ほど (docs/worklog.md の残作業 9)
-min_stack=2048
+# スタックに残っていなければならない量 (link の検査)。本体が試験の環境で使うのは 0.8KB ほど。ホスト側の割り込みも
+# このスタックで処理されるので、余裕を大きく取る (docs/worklog.md の残作業 9)
+min_stack=16384
 strict="-Wall -Wextra -Wconversion -Wshadow -Werror"
 loose="-Wall -Wextra -Werror"
 inc="-I $root/src/core -I $root/src/dos -I $root/src/mon -I $root/tests/imgdump -I $root/tests/monprobe -I $out"

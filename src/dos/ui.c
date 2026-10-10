@@ -24,7 +24,7 @@
 #define BOX_BR 0x2508
 #define BOX_BL 0x2608
 
-static u8 save_code[SHOWN], save_attr[SHOWN];
+static u8 saved;            /* ゲストの画面を XMS の控え (vbm.h の STASH_MENU) に写してある */
 static const u8 *dev_keys;
 static int dev_nkeys, dev_keyi;
 
@@ -56,8 +56,8 @@ static void put_wide(u8 row, u8 col, u16 code, u8 attr)
 void ui_open(void)
 {
     vm_gdisp_pause();   /* グラフィック表示を消す (閉じるときにゲストの状態へ戻す。design.md §9) */
-    _fmemcpy(save_code, MK_FP(TVRAM_SEG, 0), SHOWN);
-    _fmemcpy(save_attr, MK_FP(TVRAM_SEG, TVRAM_ATTR), SHOWN);
+    saved = (u8)(stash_write(STASH_MENU, TVRAM_SEG, 0, SHOWN) == 0 &&
+                 stash_write(STASH_MENU + SHOWN, TVRAM_SEG, TVRAM_ATTR, SHOWN) == 0);
     ui_fill(0, 0, UI_COLS, UI_ROWS, UI_WHITE);
     int18(0x0C);    /* テキスト表示 ON。ゲストが消していても見えるように (戻すときは触らない。design.md §9) */
     int18(0x12);    /* カーソルを消す */
@@ -65,8 +65,10 @@ void ui_open(void)
 
 void ui_close(void)
 {
-    _fmemcpy(MK_FP(TVRAM_SEG, 0), save_code, SHOWN);
-    _fmemcpy(MK_FP(TVRAM_SEG, TVRAM_ATTR), save_attr, SHOWN);
+    if (saved) {
+        stash_read(STASH_MENU, TVRAM_SEG, 0, SHOWN);
+        stash_read(STASH_MENU + SHOWN, TVRAM_SEG, TVRAM_ATTR, SHOWN);
+    }
     vm_gdisp_resume();
 }
 

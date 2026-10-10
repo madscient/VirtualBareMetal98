@@ -65,6 +65,16 @@ extern u8 vid_glr;
 /* 開発用: COPY の代わりにスクリーンショットにするスキャンコード (0 なら無し)。-stopkey と同じ事情 */
 extern u8 kbd_shot_alt;
 /*
+ * ホスト側の大きな控えの置き場 (XMS。ゲスト用メモリの後ろに STASH_KB ぶん確保する。design.md §3)。データセグメントは
+ * スタックと同居しているので、まとめて書いてまとめて読み戻すだけの置き場はここに出す。XMS ドライバの転送で、1MB 未満の
+ * 任意の seg:off (VRAM を含む) と直接写せる。長さは偶数であること。0 で成功。ring 0 からは使えない
+ */
+#define STASH_KB     24
+#define STASH_TVRAM  0x0000UL      /* ホストのテキスト画面 (文字 8KB + 属性 8KB。vbm98.c) */
+#define STASH_MENU   0x4000UL      /* メニューのあいだのゲストの画面 (見えている 4000 バイト × 2。ui.c) */
+int stash_write(u32 off, u16 seg, u16 soff, u16 len);
+int stash_read(u32 off, u16 seg, u16 soff, u16 len);
+/*
  * スクリーンショットの持ち越し (design.md §17)。ゲストがグラフィックチャージャーを有効にしている間は、モードによっては
  * VRAM を読んでもプレーンの中身が読めない。ホスト側がそう見て撮るのを見送ったら、shot_wait を SHOT_WAIT、shot_max を
  * SHOT_MAX にして、ポート 7Ch (チャージャーのモード) をトラップする。ring 0 側は次のどれかで X_HOTKEY_SHOT で戻る:

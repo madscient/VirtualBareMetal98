@@ -101,7 +101,7 @@ struct opts {
 #define TVRAM_SHOWN 4000
 #define ATTR_NORMAL 0xE1
 
-static u8 tvram_save[TVRAM_BYTES * 2];
+static u8 tvram_saved;      /* ホストのテキスト画面を XMS の控え (vbm.h の STASH_TVRAM) に写してある */
 static int trace;
 #define PEEK_MAX 4
 static u32 peek_lin[PEEK_MAX];
@@ -348,6 +348,17 @@ static int g_read(u32 glin, u16 seg, u16 off, u16 len)
     return xms_move(0, xms_far(seg, off), xms_handle, guest_off + glin, (u16)((len + 1) & ~1U));
 }
 
+/* ホスト側の控え (vbm.h)。ゲストの 640KB のすぐ後ろに置く。長さは偶数であること (XMS の制約。呼ぶ側が守る) */
+int stash_write(u32 off, u16 seg, u16 soff, u16 len)
+{
+    return xms_move(xms_handle, guest_off + GUEST_KB * 1024UL + off, 0, xms_far(seg, soff), len);
+}
+
+int stash_read(u32 off, u16 seg, u16 soff, u16 len)
+{
+    return xms_move(0, xms_far(seg, soff), xms_handle, guest_off + GUEST_KB * 1024UL + off, len);
+}
+
 static u8 word_buf[2];
 static u8 ivtbuf[HOOK_VEC_MAX * 4];
 
@@ -495,11 +506,17 @@ static void service_int1b(struct mon_guest *g)
     vm_prog('s');
 }
 
-/* ホストのテキスト画面を控える。戻るときに screen_host で元に戻す */
+/*
+ * ホストのテキスト画面を控える。戻るときに screen_host で元に戻す。置き場はデータセグメントでなく XMS (vbm.h の
+ * stash_write): データセグメントはスタックと同居していて、16KB の控えを置くとそのぶんスタックが減る。VRAM と XMS の
+ * あいだを XMS ドライバが直接写すので、手元のバッファは要らない
+ */
 static void screen_save(void)
 {
-    _fmemcpy(tvram_save, MK_FP(TVRAM_SEG, 0), TVRAM_BYTES);
-    _fmemcpy(tvram_save + TVRAM_BYTES, MK_FP(TVRAM_SEG, TVRAM_ATTR), TVRAM_BYTES);
+    tvram_saved = (u8)(stash_write(STASH_TVRAM, TVRAM_SEG, 0, TVRAM_BYTES) == 0 &&
+                       stash_write(STASH_TVRAM + TVRAM_BYTES, TVRAM_SEG, TVRAM_ATTR, TVRAM_BYTES) == 0);
+    if (!tvram_saved)
+        say("VBM98: cannot save the host screen to extended memory; it will not be restored\n");
 }
 
 /* 起動時とリセット時の画面はテキストが消えた状態にする (見えている範囲だけ) */
@@ -519,8 +536,10 @@ static void screen_clear(void)
 
 static void screen_host(void)
 {
-    _fmemcpy(MK_FP(TVRAM_SEG, 0), tvram_save, TVRAM_BYTES);
-    _fmemcpy(MK_FP(TVRAM_SEG, TVRAM_ATTR), tvram_save + TVRAM_BYTES, TVRAM_BYTES);
+    if (!tvram_saved)
+        return;
+    stash_read(STASH_TVRAM, TVRAM_SEG, 0, TVRAM_BYTES);
+    stash_read(STASH_TVRAM + TVRAM_BYTES, TVRAM_SEG, TVRAM_ATTR, TVRAM_BYTES);
 }
 
 /*
@@ -1061,8 +1080,9 @@ static int setup_guest(u32 tables)
         say("VBM98: no XMS driver\n");
         return 1;
     }
-    if (xms_alloc(GUEST_KB + 4, &xms_handle) || xms_lock(xms_handle, &lock)) {
-        say("VBM98: cannot allocate %u KB of extended memory\n", GUEST_KB + 4);
+    /* ゲストの 640KB + 4KB 境界に揃えるぶん + ホスト側の控え (vbm.h の STASH_KB) */
+    if (xms_alloc(GUEST_KB + 4 + STASH_KB, &xms_handle) || xms_lock(xms_handle, &lock)) {
+        say("VBM98: cannot allocate %u KB of extended memory\n", GUEST_KB + 4 + STASH_KB);
         return 1;
     }
     phys = (lock + 0xFFF) & ~0xFFFUL;
