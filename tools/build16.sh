@@ -15,6 +15,8 @@ mkdir -p "$out"
 # 64KB で、本体はその近くまで使っている
 model="-mcmodel=small -march=i80286 -Os -std=gnu99 -ffunction-sections -fdata-sections"
 ldflags="-Wl,--gc-sections"
+# スタックに残っていなければならない量 (link の検査)。本体が試験の環境で使うのは 0.8KB ほど (docs/worklog.md の残作業 9)
+min_stack=2048
 strict="-Wall -Wextra -Wconversion -Wshadow -Werror"
 loose="-Wall -Wextra -Werror"
 inc="-I $root/src/core -I $root/src/dos -I $root/src/mon -I $root/tests/imgdump -I $root/tests/monprobe -I $out"
@@ -60,7 +62,16 @@ link() {
         echo "$1: コードセグメントが 64KB を越えた (__etext = ${etext:-不明})" >&2
         exit 1
     fi
-    ls -l "$out/$1" | awk -v n="$1" -v free=$((0x10000 - etext)) '{print $5, "bytes ", n, " (code segment:", free, "bytes free)"}'
+    # データセグメント (初期値つきのデータ + .bss + スタック) も 64KB。スタックは上端 (SP = 0) から下へ伸び、使えるのは
+    # .bss の終わりまで。静的な置き場を足すと、そのぶんスタックが黙って減る。リンカは残りが 300h バイトを切るまで
+    # 止めないので、ここで見る
+    ebss=$(awk '$2 == "__ebss" {print $1; exit}' "$map")
+    if [ -z "$ebss" ] || [ $((0x10000 - ebss)) -lt "$min_stack" ]; then
+        echo "$1: スタックに残る量が $min_stack バイトを切った (__ebss = ${ebss:-不明})" >&2
+        exit 1
+    fi
+    ls -l "$out/$1" | awk -v n="$1" -v free=$((0x10000 - etext)) -v stack=$((0x10000 - ebss)) \
+        '{print $5, "bytes ", n, " (code segment:", free, "bytes free, stack:", stack, "bytes)"}'
     objs=""
 }
 
