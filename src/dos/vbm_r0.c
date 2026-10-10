@@ -94,6 +94,7 @@ u8 vid_gdisp, vid_tdisp;
 u8 vid_glr = VID_GLR_NONE;
 static u8 glr_wait;             /* グラフィック GDC に CSRFORM が書かれ、最初のパラメータを待っている */
 static u8 glr_was;              /* 待つ前に、ポート A0h をトラップしていたか */
+u8 shot_wait, shot_max, shot_clean;
 static u8 vid_anaidx;           /* アナログパレットで次に書かれる番号 (A8h) */
 u8 dip_on, dip_sw[3];
 u8 dip_gdc25;
@@ -215,6 +216,18 @@ static u32 dev_now(void)
     return dev_tick ? tick_count : irq_count;
 }
 
+/* 持ち越したスクリーンショットを待つ間、ゲストへ渡した割り込みを数える。待ちきったら 1 (vbm.h の shot_wait) */
+static u8 shot_tick(void)
+{
+    if (!shot_wait)
+        return 0;
+    shot_max--;
+    if (--shot_wait && shot_max)
+        return 0;
+    shot_wait = 0;
+    return 1;
+}
+
 u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
 {
     u16 x;
@@ -255,12 +268,17 @@ u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
                 log_count = 0;
                 return X_LOGTICK;
             }
+            if (shot_tick())
+                return X_HOTKEY_SHOT;
             return 0;
         }
     } else {
         log_ev(vec, EV_SOFT, f, (u16)r->eax);
     }
     mon_reflect(vec, f);
+    /* 持ち越したスクリーンショットを待ちきった。反射は済んでいるので、戻ればハンドラが動く */
+    if (shot_tick())
+        return X_HOTKEY_SHOT;
     if (dev_menu_at && vec >= IRQ_FIRST + 2 && vec <= IRQ_LAST && dev_now() >= dev_menu_at) {
         /*
          * 開発用: ゲストのハンドラに入る形 (反射済み) にしてからメニューへ抜ける。戻ればハンドラが動くので
@@ -501,6 +519,21 @@ u16 mon_on_out(u16 port, u8 size, u32 val)
     /* 開発用: 割り込みマスクへの書き込みは直後に読み返して記録する (書いた値が残るかを見る) */
     if (port == 0x02 || port == 0x0A)
         log_io(2, port, 1, mon_in8(port));
+    /*
+     * 持ち越したスクリーンショット (vbm.h の shot_wait)。モードの bit 7 が 0 ならチャージャーは止まっていて、
+     * プレーンの中身が読める。bit 7 が 1 で bit 6 も 1 (RMW) のときも GRCG だけなら読めるが、EGC の拡張モードでは
+     * 読めないので、止まるまで待つ (design.md §12)。0 以外を返すと IP が進まず、ゲストは再開後に同じ OUT を
+     * もう一度実行するが、止める値の書き直しなので害がない
+     */
+    if (port == 0x7C && shot_wait) {
+        if (v & 0x80) {
+            shot_wait = SHOT_WAIT;
+        } else {
+            shot_wait = 0;
+            shot_clean = 1;
+            return X_HOTKEY_SHOT;
+        }
+    }
     return 0;
 }
 

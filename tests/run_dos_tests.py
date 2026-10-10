@@ -370,13 +370,31 @@ def test_shot(work):
     for name in ('SHOT.OUT', 'S.LOG', 'S001G.PNG', 'S001T.PNG', 'S002G.PNG', 'S002T.PNG'):
         if os.path.exists(os.path.join(work, name)):
             os.remove(os.path.join(work, name))
+    # グラフィックチャージャーを比較読み出しのモードにして回り続ける IPL。その間は、どのプレーンの番地を読んでも
+    # 「色 0 の画素が 1」の同じ値が返る。SHOTTCR.BIN は 1 周ごとに一瞬だけ止める (撮るのはその瞬間まで待つ)。
+    # SHOTTCRK.BIN は止めない (待ちきって、読めたままを撮る)。SHOTMONO.BIN はチャージャーを使わずに、プレーンが
+    # どれも同じ内容の絵 (白い帯) を出す。PLANERD.COM は、DOS に戻ったあとのプレーンの読め方を見る
+    shutil.copy2(os.path.join(BUILT, 'PLANERD.COM'), os.path.join(work, 'PLANERD.COM'))
+    for tag, binname in (('S7', 'SHOTTCR.BIN'), ('S8', 'SHOTTCRK.BIN'), ('S9', 'SHOTMONO.BIN')):
+        with open(os.path.join(BUILT, binname), 'rb') as f:
+            imgc = bytearray(77 * 2 * 8 * 1024)
+            imgc[0:1024] = f.read()
+        with open(os.path.join(work, tag + '.IMG'), 'wb') as f:
+            f.write(imgc)
+        for name in (tag + '001G.PNG', tag + '001T.PNG', tag + '.LOG', 'SHOT%s.OUT' % tag[1], 'PLANE.OUT'):
+            if os.path.exists(os.path.join(work, name)):
+                os.remove(os.path.join(work, name))
     # 1 枚目は 8 色モード。IPL が約 1 秒後に 16 色モードへ移るので、2 枚目は 16 色モード
     finished = dosenv.run_batch(['VBM98.EXE -fdd0 S.IMG -tick -shotat 50,150 -stopafter 200 -log S.LOG,1 > SHOT.OUT',
                                  'VBM98.EXE -fdd0 S4.IMG -tick -shotat 50 -stopafter 100 -ss S4A -dipsw *0**** > SHOT4A.OUT',
                                  'VBM98.EXE -fdd0 S4.IMG -tick -shotat 50 -stopafter 100 -ss S4B -dipsw *1**** > SHOT4B.OUT',
                                  'PAGESET.COM',
                                  'VBM98.EXE -fdd0 S.IMG -tick -shotat 50 -stopafter 100 -ss S6 > SHOT6.OUT',
-                                 'VBM98.EXE -fdd0 S5.IMG -tick -shotat 50 -stopafter 100 -ss S5 > SHOT5.OUT'],
+                                 'VBM98.EXE -fdd0 S5.IMG -tick -shotat 50 -stopafter 100 -ss S5 > SHOT5.OUT',
+                                 'VBM98.EXE -fdd0 S7.IMG -tick -shotat 50 -stopafter 100 -ss S7 -log S7.LOG > SHOT7.OUT',
+                                 'VBM98.EXE -fdd0 S8.IMG -tick -shotat 50 -stopafter 150 -ss S8 -log S8.LOG > SHOT8.OUT',
+                                 'PLANERD.COM > PLANE.OUT',
+                                 'VBM98.EXE -fdd0 S9.IMG -tick -shotat 50 -stopafter 100 -ss S9 -log S9.LOG > SHOT9.OUT'],
                                 300, core='normal')
     for line in imgtests.read_lines(work, 'SHOT.OUT') or []:
         print('  ' + line)
@@ -416,6 +434,19 @@ def test_shot(work):
     def bars_ok(rows):
         return all(rows[y][x] == c for x0, c in bars for x in range(x0, x0 + 8) for y in range(20, 40))
 
+    g7 = read_png4(os.path.join(work, 'S7001G.PNG'))
+    g8 = read_png4(os.path.join(work, 'S8001G.PNG'))
+    g9 = read_png4(os.path.join(work, 'S9001G.PNG'))
+    log7, log8, log9 = (imgtests.read_lines(work, n) or [] for n in ('S7.LOG', 'S8.LOG', 'S9.LOG'))
+    plane = ' '.join(imgtests.read_lines(work, 'PLANE.OUT') or []).strip()
+    print('  planes after the run that leaves the charger on: %s' % plane)
+
+    def put_off(log):
+        return any('screenshot put off' in l for l in log)
+
+    def alike(log):
+        return any('all bit planes read the same. If' in l for l in log)
+
     checks = (
         ('batch finished', finished),
         ('four PNG files, 640x400, 4-bit indexed, CRCs good',
@@ -429,6 +460,19 @@ def test_shot(work):
          bars_at(g5, 20, 40)),
         ('started while the host shows page 1: the guest gets page 0 for both display and drawing (the bars are in the picture)',
          bars_at(g6, 20, 40)),
+        ('graphic charger in compare mode, switched off for an instant in each loop: the screenshot shows the bars',
+         bars_at(g7, 20, 40)),
+        ('that screenshot was put off until the charger went off, and taken without the warning',
+         put_off(log7) and not alike(log7)),
+        ('charger never switched off: a screenshot is still taken, of what can be read (white, the bars black), '
+         'and the log says so',
+         g8 is not None and g8['rows'][100][100] == 7 and all(g8['rows'][30][x] == 0 for x in range(32)) and
+         put_off(log8) and alike(log8)),
+        ('after that run VBM98 is back in DOS with the charger off: the blue bar reads FF in plane B and 00 in plane R',
+         plane == 'PLANE FF00'),
+        ('planes all alike without the charger (white bars): put off, then taken as it is',
+         g9 is not None and all(g9['rows'][y][x] == 7 for x in range(32) for y in range(20, 40)) and
+         g9['rows'][100][100] == 0 and put_off(log9)),
         ('16-colour: palette has 16 entries, entry 8 is the red the IPL set, entry 1 is the power-on half blue',
          g2 is not None and len(g2['plte']) == 16 and g2['plte'][8] == (255, 0, 0) and g2['plte'][1] == (0, 0, 119)),
         ('16-colour: the bars keep indices 1/2/4/7 and the E-plane bar at x 32-39 is index 8',

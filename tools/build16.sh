@@ -147,5 +147,17 @@ ls -l "$out/SHOT400.BIN" | awk '{print $5, "bytes  SHOT400.BIN"}'
 ia16-elf-gcc -c -DPAGE1 "$root/tests/boot/shotipl.S" -o "$out/shotpg1.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTPG1.BIN" "$out/shotpg1.o"
 ls -l "$out/SHOTPG1.BIN" | awk '{print $5, "bytes  SHOTPG1.BIN"}'
+ia16-elf-gcc -c -DTCR "$root/tests/boot/shotipl.S" -o "$out/shottcr.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTTCR.BIN" "$out/shottcr.o"
+ls -l "$out/SHOTTCR.BIN" | awk '{print $5, "bytes  SHOTTCR.BIN"}'
+ia16-elf-gcc -c -DTCR -DTCRKEEP "$root/tests/boot/shotipl.S" -o "$out/shottcrk.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTTCRK.BIN" "$out/shottcrk.o"
+ls -l "$out/SHOTTCRK.BIN" | awk '{print $5, "bytes  SHOTTCRK.BIN"}'
+ia16-elf-gcc -c -DMONO "$root/tests/boot/shotipl.S" -o "$out/shotmono.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTMONO.BIN" "$out/shotmono.o"
+ls -l "$out/SHOTMONO.BIN" | awk '{print $5, "bytes  SHOTMONO.BIN"}'
+ia16-elf-gcc -c "$root/tests/boot/planerd.S" -o "$out/planerd.o"
+ia16-elf-ld -Ttext=0x100 --oformat=binary -o "$out/PLANERD.COM" "$out/planerd.o"
+ls -l "$out/PLANERD.COM" | awk '{print $5, "bytes  PLANERD.COM"}'
 python3 "$root/tools/mkdoc.py" "$root/README.md" "$root/src/dos/vbm98.c" "$out/VBM98.DOC"
 ls -l "$out/VBM98.DOC" | awk '{print $5, "bytes  VBM98.DOC"}'

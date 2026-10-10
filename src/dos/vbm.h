@@ -65,6 +65,18 @@ extern u8 vid_glr;
 /* 開発用: COPY の代わりにスクリーンショットにするスキャンコード (0 なら無し)。-stopkey と同じ事情 */
 extern u8 kbd_shot_alt;
 /*
+ * スクリーンショットの持ち越し (design.md §17)。ゲストがグラフィックチャージャーを有効にしている間は、モードによっては
+ * VRAM を読んでもプレーンの中身が読めない。ホスト側がそう見て撮るのを見送ったら、shot_wait を SHOT_WAIT、shot_max を
+ * SHOT_MAX にして、ポート 7Ch (チャージャーのモード) をトラップする。ring 0 側は次のどれかで X_HOTKEY_SHOT で戻る:
+ *   ゲストが 7Ch に、チャージャーを止める値を書いた (shot_clean を 1 にする)
+ *   7Ch に書かれないまま、割り込みを shot_wait 回ゲストへ渡した (チャージャーを使っていないゲスト)
+ *   見送ってから割り込みを shot_max 回渡した (有効にする値を書き続けて、止めないゲスト)
+ * ゲストが 7Ch に有効にする値を書いたら、shot_wait を数え直す
+ */
+#define SHOT_WAIT 8
+#define SHOT_MAX  40
+extern u8 shot_wait, shot_max, shot_clean;
+/*
  * -dipsw (design.md §15)。dip_on が 0 でなければ、ゲストが DIP スイッチを読むポート (31h・33h・42h) で
  * dip_sw (SW1・SW2・SW3。bit n-1 が SW n、1 = OFF) から作った値を返す。ホストのスイッチは読むだけ
  */

@@ -3,6 +3,7 @@
  * グラフィック VRAM を消して色の帯を書き、テキスト VRAM に ANK・漢字・反転・下線・非表示の文字を
  * 書いてから、割り込みを許可したまま HLT で待つ。VBM98 の -shotat がその間に撮り、-stopafter が止める。
  * 何をどこに書くかは tests/run_dos_tests.py の期待値と対で変える。
+ * -D で作り分ける変種 (DIRECT400、PAGE1、MONO、TCR、TCRKEEP) は、それぞれの #ifdef の所に書いてある
  */
         .arch   i386
         .intel_syntax noprefix
@@ -76,6 +77,23 @@ start:
         xor     al, al
         out     0xA6, al
 #endif
+#ifdef MONO
+        /*
+         * SHOTMONO.BIN: 4 本の帯を全部色 7 にする (B・R・G のどのプレーンも同じ内容)。グラフィックチャージャーは
+         * 使わない。プレーンが同じに読めても、チャージャーのせいではない絵
+         */
+        mov     bx, 0xA800
+11:     mov     es, bx
+        mov     cx, 10
+        mov     di, 10 * 80
+12:     mov     word ptr es:[di], 0xFFFF
+        mov     word ptr es:[di + 2], 0xFFFF
+        add     di, 80
+        loop    12b
+        add     bx, 0x0800
+        cmp     bx, 0xB800
+        jbe     11b
+#endif
         /* テキスト。文字は A000:0000、属性は A000:2000。1 桁 2 バイト、1 行 160 バイト */
         mov     ax, 0xA000
         mov     es, ax
@@ -127,6 +145,28 @@ start:
         xor     al, al
         out     0xA0, al
         out     0xA0, al
+#endif
+#ifdef TCR
+        /*
+         * SHOTTCR.BIN / SHOTTCRK.BIN: グラフィックチャージャーを比較読み出しのモード (7Ch ← 80h。全プレーン、タイルは
+         * 色 0) にして回り続ける。この間に VRAM を読むと、どのプレーンの番地でも「色 0 の画素が 1」の同じ値が返り、
+         * 帯は読めない。SHOTTCR.BIN は 1 周ごとにチャージャーを止めて (7Ch ← 00h) すぐ有効に戻す。
+         * SHOTTCRK.BIN (-DTCRKEEP) は止めずに、同じモードを書き直し続ける
+         */
+9:      mov     al, 0x80
+        out     0x7C, al
+        xor     al, al
+        out     0x7E, al
+        out     0x7E, al
+        out     0x7E, al
+        out     0x7E, al
+        xor     cx, cx
+10:     loop    10b
+#ifndef TCRKEEP
+        xor     al, al
+        out     0x7C, al
+#endif
+        jmp     9b
 #endif
         /*
          * 1 枚目 (8 色) を撮る時間を置いてから 16 色モードへ移る。VSYNC (A0h の bit 5) の立ち上がりを

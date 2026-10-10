@@ -723,6 +723,11 @@ static void set_shot_base(const char *path)
  */
 static void video_host(void)
 {
+    /*
+     * グラフィックチャージャーを止める。ゲストが描画の途中で離れると、有効なまま DOS に戻る。そのままだと、
+     * チャージャーを使わないソフトが VRAM を読み書きしても、プレーンの中身に届かない (design.md §12)
+     */
+    pio_out8(0x7C, 0x00);
     int18(0x0A, (u8)(host_crt_mode & 0x0F), 0);
     int18(0x42, 0, (u8)((host_prxdupd & 0x04) ? 0xC0 : 0x80));
     int18((u8)((host_prxcrt & 0x80) ? 0x40 : 0x41), 0, 0);
@@ -1312,8 +1317,14 @@ static u8 init_imr_m, init_imr_s;   /* ゲストの割り込みマスクの起�
  * 戻し、IPL を読み直す。ゲストの RAM の残りは消さない (実機のリセットでも残る)。ドライブ 0 が空なら選ばせる。
  * 0 で再開、1 で失敗、2 で取り消し
  */
+/* 見送ったスクリーンショットがある (vbm.h の shot_wait。ring 0 側が数えているか、数え終えて戻ってきた) */
+static u8 shot_held;
+
 static int vm_reset(struct mon_guest *g)
 {
+    shot_held = 0;
+    shot_wait = 0;
+    mon_trap_port(0x7C, 0);
     video_guest();
     _fmemcpy(page_ptr(mswpage), MK_FP(MEMSW_PAGE_SEG, 0), 0x1000);
     if (have_memsw)
@@ -1416,11 +1427,28 @@ void vm_gdisp_resume(void)
         gdc_cmd(0x60, 0x0C);
 }
 
-int vm_shot(char *gname)
+/*
+ * グラフィックのプレーンが、どれも同じ内容に読めるか (16 色モードでなければ B・R・G の 3 つ)。ゲストがグラフィック
+ * チャージャーを有効にしている間は、モードによっては、どのプレーンの番地を読んでも同じ値 (色との比較の結果など) が
+ * 返るので、こうなる (design.md §12)。そのまま撮ると 2 色の模様になる。白黒 2 色の絵や、何も描かれていない画面でも
+ * こうなる
+ */
+static int planes_same(void)
+{
+    return _fmemcmp(MK_FP(0xA800, 0), MK_FP(0xB000, 0), 0x7D00) == 0 &&
+           _fmemcmp(MK_FP(0xA800, 0), MK_FP(0xB800, 0), 0x7D00) == 0 &&
+           (!vid_color16 || _fmemcmp(MK_FP(0xA800, 0), MK_FP(0xE000, 0), 0x7D00) == 0);
+}
+
+/* shot_take の how: そのまま撮る / プレーンが同じに読めたら撮らずに SHOT_HELD を返す / 同じに読めたらログに残して撮る */
+enum { SHOT_PLAIN, SHOT_OR_HOLD, SHOT_AND_NOTE };
+#define SHOT_HELD 2
+
+static int shot_take(char *gname, u8 how)
 {
     struct shot_info si;
     u8 disp, acc;
-    int rc;
+    int rc, same;
 
     /*
      * グラフィックが 400 ラインか (design.md §17)。ゲストが GDC に CSRFORM を書いていれば、その L/R が 0 のとき。
@@ -1449,10 +1477,53 @@ int vm_shot(char *gname)
         disp = acc;
     if (disp != acc)
         pio_out8(0xA6, disp);
-    rc = shot_save(&si, gname);
+    same = how != SHOT_PLAIN && planes_same();
+    if (same && how == SHOT_OR_HOLD) {
+        rc = SHOT_HELD;
+    } else {
+        if (same)
+            log_line("VBM98: screenshot: all bit planes read the same. If the picture is wrong, "
+                     "the guest had its graphic charger on\n");
+        rc = shot_save(&si, gname);
+    }
     if (disp != acc)
         pio_out8(0xA6, acc);
     return rc;
+}
+
+/* メニューから。ゲストは止まったままなので、見送って待つことはできない */
+int vm_shot(char *gname)
+{
+    return shot_take(gname, SHOT_AND_NOTE);
+}
+
+/*
+ * ホットキーから。プレーンが同じに読めたら撮るのを見送り、ゲストがチャージャーを止めるのを待つ (vbm.h の shot_wait)。
+ * 見送ったあとでここへ来るのは、チャージャーが止まったとき、待ちきったとき、ホットキーがもう一度押されたとき
+ */
+static void shot_hotkey(void)
+{
+    int rc;
+
+    if (shot_held) {
+        shot_held = 0;
+        shot_wait = 0;
+        mon_trap_port(0x7C, 0);
+        rc = shot_take(0, (u8)(shot_clean ? SHOT_PLAIN : SHOT_AND_NOTE));
+    } else {
+        rc = shot_take(0, SHOT_OR_HOLD);
+        if (rc == SHOT_HELD) {
+            shot_held = 1;
+            shot_clean = 0;
+            shot_wait = SHOT_WAIT;
+            shot_max = SHOT_MAX;
+            mon_trap_port(0x7C, 1);
+            log_line("VBM98: screenshot put off: all bit planes read the same (graphic charger on, or a blank screen)\n");
+            return;
+        }
+    }
+    if (rc)
+        say("VBM98: screenshot failed\n");
 }
 
 /* 8259 の IRR (ocw3 = 0Ah) / ISR (0Bh) を読む。読み出し選択は初期値の IRR に戻しておく */
@@ -1996,8 +2067,7 @@ int main(int argc, char **argv)
             resume_keys(&g);
             break;
         case X_HOTKEY_SHOT:
-            if (vm_shot(0))
-                say("VBM98: screenshot failed\n");
+            shot_hotkey();
             /* 実物のホットキーなら、離した符号はモニタが読み捨てている。ゲストには押した符号しか届いていない */
             if (kbd_hot)
                 resume_keys(&g);
