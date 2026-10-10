@@ -46,7 +46,7 @@ void pio_out8(u16 port, u8 val);
  * ANK なら 0)、A3h に偶数バイト (ANK のコード、または JIS 第 1 バイト − 20h)、A5h にライン番号
  * (bit 5 を立てると左半分)、A9h からパターン (bit 7 が左端)。right が 0 なら左半分 (8 ドット幅) だけ読む
  */
-static void cg_read(u8 odd, u8 even, u8 *left, u8 *right)
+static FARTEXT void __far cg_read(u8 odd, u8 even, u8 *left, u8 *right)
 {
     u8 line;
 
@@ -67,7 +67,7 @@ struct sink_ctx {
     u16 fill;
 };
 
-static int sink_flush(struct sink_ctx *s)
+static FARTEXT int __far sink_flush(struct sink_ctx *s)
 {
     unsigned put;
 
@@ -104,7 +104,7 @@ static u8 pl_b[PLANE_ROW], pl_r[PLANE_ROW], pl_g[PLANE_ROW], pl_e[PLANE_ROW];
 static u8 packed[WIDTH / 2];
 
 /* プレーンの 1 ラインを、1 バイト 2 画素 (上位が左) の色番号 (E=8, G=4, R=2, B=1) に。8 色モードでは E = 0 */
-static void pack_planes(int color16)
+static FARTEXT void __far pack_planes(int color16)
 {
     u16 i;
     u8 x, b, r, g, e, hi, lo;
@@ -125,7 +125,7 @@ static void pack_planes(int color16)
 }
 
 /* 色 n を表示する色。レジスタの対応は A8h = #3/#7、AAh = #1/#5、ACh = #2/#6、AEh = #0/#4 (design.md §12) */
-static void graphics_palette(const u8 *pal, u8 *rgb)
+static FARTEXT void __far graphics_palette(const u8 *pal, u8 *rgb)
 {
     static const u8 reg_of[4] = { 3, 1, 2, 0 };
     u8 n, nib;
@@ -140,7 +140,7 @@ static void graphics_palette(const u8 *pal, u8 *rgb)
 }
 
 /* アナログパレット: 16 色 × (R, G, B) 各 4 ビットを 8 ビットに (0Fh → FFh) */
-static void analog_palette(const u8 *ana, u8 *rgb)
+static FARTEXT void __far analog_palette(const u8 *ana, u8 *rgb)
 {
     u8 i;
 
@@ -148,7 +148,7 @@ static void analog_palette(const u8 *ana, u8 *rgb)
         rgb[i] = (u8)(ana[i] * 17);
 }
 
-static int save_graphics(struct sink_ctx *s, const struct shot_info *si)
+static FARTEXT int __far save_graphics(struct sink_ctx *s, const struct shot_info *si)
 {
     struct png_writer w;
     u8 rgb[16 * 3];
@@ -190,7 +190,7 @@ static u8 spill[CELL_H];                        /* 右端の桁にある漢字�
  * 漢字なら JIS 第 2 バイト (jis.h)。偶数バイトが 09h〜0Bh なら 8 ドット幅の文字 (JIS の 29h〜2Bh 区)、
  * それ以外の漢字は 16 ドット幅で右半分は次の桁に入れる
  */
-static void gather_patterns(void)
+static FARTEXT void __far gather_patterns(void)
 {
     u16 c;
     u8 i, even, odd;
@@ -213,7 +213,7 @@ static void gather_patterns(void)
 }
 
 /* テキストの色は属性の bit 7・6・5 (G・R・B) で決まる 8 色。番号 8 を透明にする */
-static void text_palette(u8 *rgb, u8 *alpha)
+static FARTEXT void __far text_palette(u8 *rgb, u8 *alpha)
 {
     u8 n;
 
@@ -227,7 +227,7 @@ static void text_palette(u8 *rgb, u8 *alpha)
     alpha[8] = 0;
 }
 
-static void pack_text_line(u8 line)
+static FARTEXT void __far pack_text_line(u8 line)
 {
     u16 c;
     u8 a, color, pat, x, k, px[8];
@@ -249,7 +249,7 @@ static void pack_text_line(u8 line)
     }
 }
 
-static int save_text(struct sink_ctx *s)
+static FARTEXT int __far save_text(struct sink_ctx *s)
 {
     struct png_writer w;
     u8 rgb[9 * 3], alpha[9];
@@ -286,7 +286,7 @@ static int save_text(struct sink_ctx *s)
 
 /* ---------------------------------------------------------------- ファイル */
 
-static void make_name(char *name, const char *base, u16 n, char kind)
+static FARTEXT void __far make_name(char *name, const char *base, u16 n, char kind)
 {
     u8 i = 0, k;
     char ch;
@@ -308,7 +308,7 @@ static void make_name(char *name, const char *base, u16 n, char kind)
     name[i] = 0;
 }
 
-static int exists(const char *name)
+static FARTEXT int __far exists(const char *name)
 {
     int h;
 
@@ -318,7 +318,7 @@ static int exists(const char *name)
     return 1;
 }
 
-static int write_file(const char *name, const struct shot_info *si, int graphics)
+static FARTEXT int __far write_file(const char *name, const struct shot_info *si, int graphics)
 {
     struct sink_ctx s;
     int rc;
@@ -333,7 +333,7 @@ static int write_file(const char *name, const struct shot_info *si, int graphics
     return rc;
 }
 
-int shot_save(const struct shot_info *si, char *gname)
+FARTEXT int __far shot_save(const struct shot_info *si, char *gname)
 {
     char g[13], t[13];
     u16 n;

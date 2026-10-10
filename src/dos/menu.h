@@ -11,13 +11,13 @@
 #define MENU_RESET  2
 
 /* CTRL+GRPH+HELP と、ゲストが割り込み禁止で HLT したとき。終了が選ばれたら MENU_EXIT、リセットなら MENU_RESET */
-int menu_main(void);
+FARTEXT int __far menu_main(void);
 /* CTRL+GRPH+テンキー 0 / 1: ドライブ unit のイメージ選択だけ */
-void menu_disk(int unit);
+FARTEXT void __far menu_disk(int unit);
 /* CTRL+GRPH+STOP: 終了の問い合わせ。終了なら 1 */
-int menu_confirm_exit(void);
+FARTEXT int __far menu_confirm_exit(void);
 /* 起動時に -fdd0 がないとき: ドライブ 0 のイメージを選ばせる。入ったら 1、取り消しなら 0 */
-int menu_pick_boot(void);
+FARTEXT int __far menu_pick_boot(void);
 
 /* 開発用 (-trace): メニューを描いたあとにテキスト VRAM の中身を標準出力へ出す (表示の確認用) */
 extern int menu_debug;

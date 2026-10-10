@@ -18,7 +18,7 @@
 static u32 crc_table[256];
 static int crc_ready;
 
-static void crc_init(void)
+static FARTEXT void __far crc_init(void)
 {
     u32 c;
     unsigned n, k;
@@ -32,7 +32,7 @@ static void crc_init(void)
     crc_ready = 1;
 }
 
-static void be32(u8 *b, u32 v)
+static FARTEXT void __far be32(u8 *b, u32 v)
 {
     b[0] = (u8)(v >> 24);
     b[1] = (u8)(v >> 16);
@@ -41,7 +41,7 @@ static void be32(u8 *b, u32 v)
 }
 
 /* シンクへそのまま。チャンクの長さと CRC 自身はこれで書く */
-static int raw(struct png_writer *w, const u8 *p, u16 len)
+static FARTEXT int __far raw(struct png_writer *w, const u8 *p, u16 len)
 {
     if (w->err)
         return w->err;
@@ -50,7 +50,7 @@ static int raw(struct png_writer *w, const u8 *p, u16 len)
 }
 
 /* チャンクの中身 (型名とデータ)。CRC を更新する */
-static int emit(struct png_writer *w, const u8 *p, u16 len)
+static FARTEXT int __far emit(struct png_writer *w, const u8 *p, u16 len)
 {
     u32 c = w->crc;
     u16 i;
@@ -61,7 +61,7 @@ static int emit(struct png_writer *w, const u8 *p, u16 len)
     return raw(w, p, len);
 }
 
-static int chunk_begin(struct png_writer *w, const char *type, u32 len)
+static FARTEXT int __far chunk_begin(struct png_writer *w, const char *type, u32 len)
 {
     u8 b[4];
 
@@ -76,7 +76,7 @@ static int chunk_begin(struct png_writer *w, const char *type, u32 len)
     return emit(w, b, 4);
 }
 
-static int chunk_end(struct png_writer *w)
+static FARTEXT int __far chunk_end(struct png_writer *w)
 {
     u8 b[4];
 
@@ -85,7 +85,7 @@ static int chunk_end(struct png_writer *w)
 }
 
 /* zlib の生データ。Adler-32 を更新しつつ、stored ブロックの区切りを入れて IDAT へ流す */
-static int zdata(struct png_writer *w, const u8 *p, u16 len)
+static FARTEXT int __far zdata(struct png_writer *w, const u8 *p, u16 len)
 {
     u32 a = w->adler_a, b = w->adler_b;
     u16 i, n;
@@ -133,7 +133,7 @@ static int zdata(struct png_writer *w, const u8 *p, u16 len)
     return 0;
 }
 
-int png_begin(struct png_writer *w, png_sink sink, void *ctx, u16 width, u16 height,
+FARTEXT int __far png_begin(struct png_writer *w, png_sink sink, void *ctx, u16 width, u16 height,
               const u8 *palette_rgb, u8 ncolors, const u8 *alpha)
 {
     static const u8 sig[8] = { 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
@@ -177,7 +177,7 @@ int png_begin(struct png_writer *w, png_sink sink, void *ctx, u16 width, u16 hei
     return emit(w, b, 2);
 }
 
-int png_row(struct png_writer *w, const u8 *packed)
+FARTEXT int __far png_row(struct png_writer *w, const u8 *packed)
 {
     static const u8 filter_none = 0;
 
@@ -192,7 +192,7 @@ int png_row(struct png_writer *w, const u8 *packed)
     return zdata(w, packed, (u16)(w->row_bytes - 1));
 }
 
-int png_end(struct png_writer *w)
+FARTEXT int __far png_end(struct png_writer *w)
 {
     u8 b[4];
 

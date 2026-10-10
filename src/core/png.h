@@ -27,11 +27,11 @@ struct png_writer {
  * 書き出しを始める。palette_rgb は ncolors × 3 バイト (R, G, B)。alpha は ncolors バイト
  * (0 なら tRNS チャンクを書かない)。width は偶数であること
  */
-int png_begin(struct png_writer *w, png_sink sink, void *ctx, u16 width, u16 height,
+FARTEXT int __far png_begin(struct png_writer *w, png_sink sink, void *ctx, u16 width, u16 height,
               const u8 *palette_rgb, u8 ncolors, const u8 *alpha);
 /* 1 行ぶんの画素。1 バイトに 2 画素 (上位ニブルが左)、width / 2 バイト */
-int png_row(struct png_writer *w, const u8 *packed);
+FARTEXT int __far png_row(struct png_writer *w, const u8 *packed);
 /* height 行を渡したあとに呼ぶ */
-int png_end(struct png_writer *w);
+FARTEXT int __far png_end(struct png_writer *w);
 
 #endif

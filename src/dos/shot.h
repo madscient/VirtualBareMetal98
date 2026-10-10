@@ -16,7 +16,7 @@ struct shot_info {
 };
 
 /* 0 で成功。gname が 0 でなければ、そこに G 側のファイル名 (13 バイト以内) を入れる */
-int shot_save(const struct shot_info *si, char *gname);
+FARTEXT int __far shot_save(const struct shot_info *si, char *gname);
 /* 直前のテキストの撮影で見た属性の内訳 (反転のセルの数、非表示のセルの数、0 行 0 桁の属性)。ログに残す材料 */
 extern u16 shot_rev_cells, shot_hidden_cells;
 extern u8 shot_attr0;

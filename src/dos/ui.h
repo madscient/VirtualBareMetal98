@@ -40,28 +40,28 @@
 #define UI_SC_DOWN     0x3D
 
 /* ゲストのテキスト画面 (見えている 80 × 25 の 2 面) を控え、画面を消し、テキスト表示を ON にする */
-void ui_open(void);
+FARTEXT void __far ui_open(void);
 /* 控えた画面を戻す */
-void ui_close(void);
+FARTEXT void __far ui_close(void);
 /* 範囲を空白と属性で埋める */
-void ui_fill(u8 row, u8 col, u8 w, u8 h, u8 attr);
+FARTEXT void __far ui_fill(u8 row, u8 col, u8 w, u8 h, u8 attr);
 /* Shift-JIS の文字列を書く。書いた桁数を返す。右端で止める */
-u8 ui_puts(u8 row, u8 col, u8 attr, const char *s);
+FARTEXT u8 __far ui_puts(u8 row, u8 col, u8 attr, const char *s);
 /* 罫線の枠。w は偶数 (罫線は全角) */
-void ui_box(u8 row, u8 col, u8 w, u8 h, u8 attr);
+FARTEXT void __far ui_box(u8 row, u8 col, u8 w, u8 h, u8 attr);
 /* キーを 1 つ待つ */
-u16 ui_getkey(void);
+FARTEXT u16 __far ui_getkey(void);
 /* 溜まっているキーを捨てる */
-void ui_flush_keys(void);
+FARTEXT void __far ui_flush_keys(void);
 /* 開発用: キー入力の代わりに使うスキャンコードの列。尽きたら ESC を返し続ける */
-void ui_set_keys(const u8 *scancodes, int n);
+FARTEXT void __far ui_set_keys(const u8 *scancodes, int n);
 /* 開発用: テキスト VRAM の行 row の文字コードを標準出力に 16 進で出す (表示の確認用) */
-void ui_debug_dump(u8 row, u8 cols);
+FARTEXT void __far ui_debug_dump(u8 row, u8 cols);
 /*
  * 文字列をテキスト VRAM に直接、端末のように書く (改行で次の行の左端へ、右端で折り返し、画面の下端を越えたぶんは
  * 捨てる)。DOS も BIOS も呼ばず、割り込み禁止のままでも使える。ui_tty_begin で書き始める行を決める
  */
-void ui_tty_begin(u8 row);
+FARTEXT void __far ui_tty_begin(u8 row);
 void ui_tty_put(const char *s, unsigned len);
 
 #endif

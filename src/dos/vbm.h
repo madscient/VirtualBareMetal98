@@ -176,12 +176,12 @@ extern u32 dev_log_every;
 extern u8 kbd_pending, kbd_code;
 
 /* ---- ホスト世界の仮想マシン操作 (vbm98.c)。メニュー (menu.c) から呼ぶ ---- */
-int vm_mount(int unit, const char *path, int quiet);   /* 0 で成功。前に入っていたイメージは閉じる */
-void vm_eject(int unit);
-const char *vm_drive_name(int unit);                   /* 入っているイメージのパス。空なら "" */
-int vm_shot(char *gname);                              /* スクリーンショット。gname (13 バイト以上) に G 側のファイル名。0 なら名前はいらない */
-void vm_gdisp_pause(void);                             /* メニューを開く: グラフィック表示を GDC のコマンドで消す (VRAM には触らない) */
-void vm_gdisp_resume(void);                            /* メニューを閉じる: ゲストの状態 (vid_gdisp) が ON なら表示を戻す */
+FARTEXT int __far vm_mount(int unit, const char *path, int quiet);   /* 0 で成功。前に入っていたイメージは閉じる */
+FARTEXT void __far vm_eject(int unit);
+FARTEXT const char * __far vm_drive_name(int unit);                   /* 入っているイメージのパス。空なら "" */
+FARTEXT int __far vm_shot(char *gname);                              /* スクリーンショット。gname (13 バイト以上) に G 側のファイル名。0 なら名前はいらない */
+FARTEXT void __far vm_gdisp_pause(void);                             /* メニューを開く: グラフィック表示を GDC のコマンドで消す (VRAM には触らない) */
+FARTEXT void __far vm_gdisp_resume(void);                            /* メニューを閉じる: ゲストの状態 (vid_gdisp) が ON なら表示を戻す */
 
 /* 開発用: モニタに届いたものの記録 (ring 0 側が書き、ホストが止めたときに表示する) */
 #define EVLOG_SIZE 32

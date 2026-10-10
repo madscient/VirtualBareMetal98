@@ -30,7 +30,7 @@ static char cwd[80];
 /* 一覧に出す拡張子 (spec.md)。MS-DOS のファイル名は大文字 */
 static const char *const image_ext[] = { ".FDI", ".NFD", ".FDD", ".HDM", ".IMG" };
 
-static int is_image(const char *name)
+static FARTEXT int __far is_image(const char *name)
 {
     const char *dot = strrchr(name, '.');
     unsigned i;
@@ -52,7 +52,7 @@ static int cmp_entry(const void *a, const void *b)
     return strcmp(x->name, y->name);
 }
 
-static void scan_dir(int all)
+static FARTEXT void __far scan_dir(int all)
 {
     struct find_t ft;
     unsigned rc;
@@ -78,7 +78,7 @@ static void scan_dir(int all)
 }
 
 /* 下 2 行に知らせを出してキーを待つ */
-static void notice(const char *s)
+static FARTEXT void __far notice(const char *s)
 {
     ui_fill(22, 0, UI_COLS, 2, UI_WHITE);
     ui_puts(22, 2, UI_YELLOW, s);
@@ -88,7 +88,7 @@ static void notice(const char *s)
 }
 
 /* 一覧の項目 0 は「取り出す」、1 以降が entries */
-static void draw_list(int unit, int all, int cur, int top)
+static FARTEXT void __far draw_list(int unit, int all, int cur, int top)
 {
     const char *name = vm_drive_name(unit);
     int i;
@@ -117,7 +117,7 @@ static void draw_list(int unit, int all, int cur, int top)
 }
 
 /* ドライブ unit のイメージを選ばせる。入れ替えか取り出しをしたら 1 */
-static int disk_select(int unit)
+static FARTEXT int __far disk_select(int unit)
 {
     int all = 0, cur = 0, top = 0, rescan = 1;
     u16 k;
@@ -181,7 +181,7 @@ static int disk_select(int unit)
 
 int menu_debug;
 
-static void draw_main(void)
+static FARTEXT void __far draw_main(void)
 {
     ui_fill(0, 0, UI_COLS, UI_ROWS, UI_WHITE);
     ui_box(6, 18, 44, 12, UI_CYAN);
@@ -200,7 +200,7 @@ static void draw_main(void)
 }
 
 /* Y / N の問い合わせ。Y なら 1 */
-static int confirm(const char *question)
+static FARTEXT int __far confirm(const char *question)
 {
     u16 k;
     u8 sc, ch;
@@ -219,7 +219,7 @@ static int confirm(const char *question)
 }
 
 /* 撮るのはゲストの画面なので、いったん戻してから撮る */
-static void do_shot(void)
+static FARTEXT void __far do_shot(void)
 {
     char name[13];
     int rc;
@@ -236,7 +236,7 @@ static void do_shot(void)
     }
 }
 
-int menu_main(void)
+FARTEXT int __far menu_main(void)
 {
     int rc = MENU_RESUME;
     u16 k;
@@ -269,7 +269,7 @@ int menu_main(void)
     return rc;
 }
 
-void menu_disk(int unit)
+FARTEXT void __far menu_disk(int unit)
 {
     ui_open();
     ui_flush_keys();
@@ -277,7 +277,7 @@ void menu_disk(int unit)
     ui_close();
 }
 
-int menu_confirm_exit(void)
+FARTEXT int __far menu_confirm_exit(void)
 {
     int r;
 
@@ -288,7 +288,7 @@ int menu_confirm_exit(void)
     return r;
 }
 
-int menu_pick_boot(void)
+FARTEXT int __far menu_pick_boot(void)
 {
     int r;
 

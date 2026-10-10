@@ -52,7 +52,7 @@ static int v86;     /* EMM などの仮想86モニタの下で動いている (V
  * 仮想86モード。VCPI (INT 67h AX=DE00h。ベクタが空なら EMS 自体がない) があればそれを使い、なければ止める。
  * 1 本のバイナリで起動時に判定する (spec.md 2026-10-07)。0 で続行、1 で止める
  */
-static int check_v86(void)
+static FARTEXT int __far check_v86(void)
 {
     union REGS r;
     u32 vec67 = *(u32 __far *)MK_FP(0, 0x67 * 4);
@@ -129,7 +129,7 @@ static u16 imrlog_n;
 
 /* ---------------------------------------------------------------- 引数 */
 
-static int eq(const char *a, const char *b)
+static FARTEXT int __far eq(const char *a, const char *b)
 {
     for (; *a && *b; a++, b++) {
         char x = *a, y = *b;
@@ -145,7 +145,7 @@ static int eq(const char *a, const char *b)
 }
 
 /* 16 進 2 桁 × n バイト (開発用のオプション向け。'*' の印は捨てる)。成功で 0 */
-static int hexbytes(const char *s, u8 *out, int n)
+static FARTEXT int __far hexbytes(const char *s, u8 *out, int n)
 {
     u8 mask[8];
 
@@ -155,7 +155,7 @@ static int hexbytes(const char *s, u8 *out, int n)
 /* -sbrom <ファイル名>[,C8|CC]。アドレスは C8000h か CC000h (省略時)。ファイル名はコンマの前まで */
 static char sbrom_name[80];
 
-static int parse_sbrom(const char *v, struct opts *o)
+static FARTEXT int __far parse_sbrom(const char *v, struct opts *o)
 {
     const char *c = strchr(v, ',');
     size_t len = c ? (size_t)(c - v) : strlen(v);
@@ -174,7 +174,7 @@ static int parse_sbrom(const char *v, struct opts *o)
     return 0;
 }
 
-static int parse_args(int argc, char **argv, struct opts *o)
+static FARTEXT int __far parse_args(int argc, char **argv, struct opts *o)
 {
     int i;
 
@@ -292,7 +292,7 @@ static int parse_args(int argc, char **argv, struct opts *o)
  */
 static char iotrap_buf[2048];   /* 定義ファイルの中身 (64 個の表なら十分。stdio の fopen を使わないのはコードの大きさのため) */
 
-static int iotrap_setup(const char *v)
+static FARTEXT int __far iotrap_setup(const char *v)
 {
     int handle, lineno = 0;
     unsigned got;
@@ -392,7 +392,7 @@ static char drive_name[DRIVES][64];
 
 /* ---- メニューから呼ぶ仮想マシンの操作 (vbm.h) ---- */
 
-void vm_eject(int unit)
+FARTEXT void __far vm_eject(int unit)
 {
     if (fb.img[unit]) {
         dosio_close(&files[unit]);
@@ -402,7 +402,7 @@ void vm_eject(int unit)
 }
 
 /* 新しいイメージが開けてから前のを閉じる (開けなければ前のが残る) */
-int vm_mount(int unit, const char *path, int quiet)
+FARTEXT int __far vm_mount(int unit, const char *path, int quiet)
 {
     /* メニューから入れるとき (quiet) は、メニューの画面に重ならないようログにだけ書く */
     void (*note)(const char *, ...) = quiet ? log_line : say;
@@ -433,7 +433,7 @@ int vm_mount(int unit, const char *path, int quiet)
     return 0;
 }
 
-const char *vm_drive_name(int unit)
+FARTEXT const char * __far vm_drive_name(int unit)
 {
     return drive_name[unit];
 }
@@ -443,7 +443,7 @@ const char *vm_drive_name(int unit)
  * 1MB インタフェース (下位バイトの bit 0〜1 = ドライブ 0・1)、2DD と 2D は 640KB インタフェース (上位バイトの bit 4〜5)
  * として起動する。両方のインタフェースを同時に見せることはしない (参考実装も起動時に片方だけにする)
  */
-static u8 boot_dua(void)
+static FARTEXT u8 __far boot_dua(void)
 {
     switch (imgs[0].media) {
     case DIMG_MEDIA_144: return 0x30;
@@ -453,7 +453,7 @@ static u8 boot_dua(void)
     }
 }
 
-static void boot_equip(u8 *equip)
+static FARTEXT void __far boot_equip(u8 *equip)
 {
     int if640 = imgs[0].media == DIMG_MEDIA_2DD || imgs[0].media == DIMG_MEDIA_2D;
 
@@ -511,7 +511,7 @@ static void service_int1b(struct mon_guest *g)
  * stash_write): データセグメントはスタックと同居していて、16KB の控えを置くとそのぶんスタックが減る。VRAM と XMS の
  * あいだを XMS ドライバが直接写すので、手元のバッファは要らない
  */
-static void screen_save(void)
+static FARTEXT void __far screen_save(void)
 {
     tvram_saved = (u8)(stash_write(STASH_TVRAM, TVRAM_SEG, 0, TVRAM_BYTES) == 0 &&
                        stash_write(STASH_TVRAM + TVRAM_BYTES, TVRAM_SEG, TVRAM_ATTR, TVRAM_BYTES) == 0);
@@ -520,7 +520,7 @@ static void screen_save(void)
 }
 
 /* 起動時とリセット時の画面はテキストが消えた状態にする (見えている範囲だけ) */
-static void screen_clear(void)
+static FARTEXT void __far screen_clear(void)
 {
     u8 __far *code = MK_FP(TVRAM_SEG, 0);
     u8 __far *attr = MK_FP(TVRAM_SEG, TVRAM_ATTR);
@@ -534,7 +534,7 @@ static void screen_clear(void)
     }
 }
 
-static void screen_host(void)
+static FARTEXT void __far screen_host(void)
 {
     if (!tvram_saved)
         return;
@@ -554,7 +554,7 @@ static u32 mswpage;         /* ゲストに見せるメモリスイッチのペ�
 static u8 eff_memsw[8];     /* -memsw の値に '*' の桁のホストの値を合わせたもの。リセット時にも書く */
 static int have_memsw;
 
-static void memsw_guest(const u8 *sw)
+static FARTEXT void __far memsw_guest(const u8 *sw)
 {
     u8 __far *base = MK_FP((u16)(mswpage >> 4), 0xFE0);
     u8 buf[32];
@@ -567,7 +567,7 @@ static void memsw_guest(const u8 *sw)
 }
 
 /* base (A3FE0h にあたる 32 バイト) からメモリスイッチ 1〜8 を読む */
-static void read_memsw(const u8 __far *base, u8 *sw)
+static FARTEXT void __far read_memsw(const u8 __far *base, u8 *sw)
 {
     u8 buf[32];
     u8 i;
@@ -578,7 +578,7 @@ static void read_memsw(const u8 __far *base, u8 *sw)
 }
 
 /* メモリスイッチ 1〜8 を表示する。-memsw の値を組むときの元にする */
-static void print_memsw(const char *label, const u8 __far *base)
+static FARTEXT void __far print_memsw(const char *label, const u8 __far *base)
 {
     u8 sw[8];
     u8 i;
@@ -607,7 +607,7 @@ static void print_memsw(const char *label, const u8 __far *base)
 
 static u8 host_crt_mode, host_prxcrt, host_prxdupd;
 
-static u8 wa_peek(u16 off)
+static FARTEXT u8 __far wa_peek(u16 off)
 {
     return *(u8 __far *)MK_FP(0, off);
 }
@@ -617,7 +617,7 @@ static u8 wa_peek(u16 off)
  * 値に直す (式は参考実装 bios_reinitbyswitch から。design.md §15)。桁数・行数 (053Ch) は video_guest が
  * INT 18h で設定するのでここでは触らない。SW3-8 が ON のときの CPU 種別はホストの値のまま (80386 以上)
  */
-static void dipsw_workarea(void)
+static FARTEXT void __far dipsw_workarea(void)
 {
     g_rmw8(WA_PRXCRT, (u8)(((dip_sw[0] & 0x01) ? 0 : 0x40) | ((dip_sw[0] & 0x80) ? 0 : 0x01)), 0x41);
     g_rmw8(WA_PRXDUPD, (u8)((dip_sw[1] & 0x80) ? 0 : 0x20), 0x20);
@@ -631,7 +631,7 @@ static void dipsw_workarea(void)
  * '*' の桁に映す元。SW2 は 31h から全部読めるが、SW1 は 1・3・8、SW3 は 8 しか読めず、他のビットは 0 にする
  * (ゲストが読める値と、ここから導くワークエリアの値には、読めるビットしか関わらない。design.md §15)
  */
-static void host_dipsw(u8 *sw)
+static FARTEXT void __far host_dipsw(u8 *sw)
 {
     u8 p33 = pio_in8(0x33), p42 = pio_in8(0x42);
 
@@ -640,7 +640,7 @@ static void host_dipsw(u8 *sw)
     sw[2] = (u8)((p42 & 0x02) ? 0x80 : 0);
 }
 
-static void int18(u8 ah, u8 al, u8 ch)
+static FARTEXT void __far int18(u8 ah, u8 al, u8 ch)
 {
     union REGS r;
 
@@ -659,14 +659,14 @@ static void int18(u8 ah, u8 al, u8 ch)
  *   グラフィックは 640×200 (上)・カラー・ページ 0・表示 OFF・8 色、デジタルパレットは恒等、GRCG は OFF
  */
 /* ホストの表示状態を控える (一度だけ。リセット時の video_guest では控え直さない)。終了時に video_host が戻す */
-static void video_save(void)
+static FARTEXT void __far video_save(void)
 {
     host_crt_mode = wa_peek(WA_CRT_MODE);
     host_prxcrt = wa_peek(WA_PRXCRT);
     host_prxdupd = wa_peek(WA_PRXDUPD);
 }
 
-static void video_guest(void)
+static FARTEXT void __far video_guest(void)
 {
     u8 crt_lo;
 
@@ -726,7 +726,7 @@ static void video_guest(void)
 /* スクリーンショットのファイル名の先頭。-ss の値か、ドライブ 0 のイメージのファイル名の先頭 4 文字 (spec.md) */
 static char shot_base[5];
 
-static void set_shot_base(const char *path)
+static FARTEXT void __far set_shot_base(const char *path)
 {
     const char *p, *name = path;
     u8 i;
@@ -743,7 +743,7 @@ static void set_shot_base(const char *path)
  * 表示系をホストの状態に戻す。16 色モードとパレットは読み出せないので戻さない (8 色・恒等のまま。
  * MS-DOS のテキスト画面には影響しない)。カーソルは MS-DOS のプロンプトが期待する表示状態にする
  */
-static void video_host(void)
+static FARTEXT void __far video_host(void)
 {
     /*
      * グラフィックチャージャーを止める。ゲストが描画の途中で離れると、有効なまま DOS に戻る。そのままだと、
@@ -767,7 +767,7 @@ static u32 sbrom_lin;
  * 読み、ページに写して、ゲスト向けの写像を差し替える。大きさは 16KB が普通で、32KB まで受け付ける
  * (4KB 単位に切り上げ、余りは FFh)。実物の同じ番地は、差し替えたページのぶんだけ見えなくなる
  */
-static int sbrom_setup(const char *path, u32 lin)
+static FARTEXT int __far sbrom_setup(const char *path, u32 lin)
 {
     dos_file f;
     dimg_io io;
@@ -839,7 +839,7 @@ static u8 rom_form[HOOK_VEC_MAX];   /* その入り方: 'a' far jmp の鎖、'b'
  * /HIGHSCAN で BASIC ROM の領域も UMB にし、そこに常駐物が入る (design.md §12)。ゲストにはそのページの実物が見える。
  * 書けなければ ROM の写しとみなして渡す (guest_memory が起動時に知らせる)
  */
-static int in_rom(u16 seg, u16 off)
+static FARTEXT int __far in_rom(u16 seg, u16 off)
 {
     u32 l = lin(seg, off);
 
@@ -848,7 +848,7 @@ static int in_rom(u16 seg, u16 off)
     return monmem_host_same(l) || !rom_writable(seg, off);
 }
 
-static int guest_memory(int first)
+static FARTEXT int __far guest_memory(int first)
 {
     static const u8 zero2[2] = { 0, 0 };
     u16 i, off;
@@ -1018,7 +1018,7 @@ static int guest_memory(int first)
 #define UPPER_LAST  0xDF00
 static u16 force_hook_seg;      /* 開発用 (-hookseg): 探した結果を使わず、このセグメントに置く (0 なら探す) */
 
-static int page_is_empty(u16 seg)
+static FARTEXT int __far page_is_empty(u16 seg)
 {
     const u8 __far *p = MK_FP(seg, 0);
 
@@ -1026,7 +1026,7 @@ static int page_is_empty(u16 seg)
     return *p == 0xFF && _fmemcmp(MK_FP(seg, 0), MK_FP(seg, 1), 0xFFF) == 0;
 }
 
-static u16 pick_hook_seg(void)
+static FARTEXT u16 __far pick_hook_seg(void)
 {
     char map[33];
     u16 seg, found = 0;
@@ -1049,7 +1049,7 @@ static u16 pick_hook_seg(void)
  * EMM の下で、上位メモリ (A0000h〜FFFFFh) のうちサーバが別のメモリを写している範囲を表示する (動作報告の材料)。
  * そこでホストに見えているのはホストの RAM (UMB や EMS のページ枠) で、ゲストには実物 (ROM か空き) が見える
  */
-static void show_remapped(void)
+static FARTEXT void __far show_remapped(void)
 {
     u32 l, from = 0;
     u8 any = 0;
@@ -1072,7 +1072,7 @@ static void show_remapped(void)
  * ゲストの器を作る (一度だけ): ゲスト用メモリの確保、横取り印とリセットベクタのページ、メモリスイッチの
  * ページの写し、サウンド BIOS、ページ表、モニタの初期化。中身は guest_memory が入れる
  */
-static int setup_guest(u32 tables)
+static FARTEXT int __far setup_guest(u32 tables)
 {
     u32 lock, phys, hookpage, rompage;
     const u8 __far *rom;
@@ -1156,7 +1156,7 @@ static int setup_guest(u32 tables)
  * それ以外 (128 バイト/セクタ、1.44MB) は 1FE0:0000 に 512 バイト (参考実装の起動手順に合わせた)。
  * 進入時のレジスタは AL = 起動装置の DA/UA、ほかは 0、SS:SP = 0000:7C00 (推測)
  */
-static int load_ipl(struct mon_guest *g)
+static FARTEXT int __far load_ipl(struct mon_guest *g)
 {
     const dimg_track *t;
     struct fdb_in in;
@@ -1224,7 +1224,7 @@ static int load_ipl(struct mon_guest *g)
  * (前半分は log_hold が使う)。ゲストが動いている間は転送バッファをディスクの読み書きとスクリーンショットに使うので、
  * 呼ぶのはゲストを動かす前と、終了が決まったあとだけ
  */
-static void keep_on(void)
+static FARTEXT void __far keep_on(void)
 {
     say_keep(xfer_seg(), 0x8000, 0x7FFF);
 }
@@ -1233,7 +1233,7 @@ static void keep_on(void)
  * メニューの結果を残す。終了は表示にも出す (理由の分からない終了を作らない)。再開はゲストの画面を汚さないよう、
  * ログにだけ書く。リセットは reset_vm が表示する
  */
-static void note_menu(const char *why, int mrc)
+static FARTEXT void __far note_menu(const char *why, int mrc)
 {
     if (mrc == MENU_EXIT) {
         keep_on();
@@ -1244,7 +1244,7 @@ static void note_menu(const char *why, int mrc)
 }
 
 /* 仮想の DMA コントローラを電源投入時の状態にする: 全チャネルを閉じ、ほかは 0 */
-static void dma_reset(void)
+static FARTEXT void __far dma_reset(void)
 {
     memset(&vdma, 0, sizeof vdma);
     vdma.mask = 0x0F;
@@ -1258,7 +1258,7 @@ static void dma_reset(void)
  */
 static u16 dma_opens;
 
-static void dma_note(void)
+static FARTEXT void __far dma_note(void)
 {
     u8 ch, opened = vdma_opened;
 
@@ -1272,7 +1272,7 @@ static void dma_note(void)
         }
 }
 
-static void print_hits(void)
+static FARTEXT void __far print_hits(void)
 {
     u16 v;
 
@@ -1359,7 +1359,7 @@ static u8 init_imr_m, init_imr_s;   /* ゲストの割り込みマスクの起�
 /* 見送ったスクリーンショットがある (vbm.h の shot_wait。ring 0 側が数えているか、数え終えて戻ってきた) */
 static u8 shot_held;
 
-static int vm_reset(struct mon_guest *g)
+static FARTEXT int __far vm_reset(struct mon_guest *g)
 {
     shot_held = 0;
     shot_wait = 0;
@@ -1384,7 +1384,7 @@ static int vm_reset(struct mon_guest *g)
 }
 
 /* リセットの入口の共通処理。why は表示用 (guest / hotkey / menu) */
-static void reset_vm(struct mon_guest *g, const char *why, int *running, int *code)
+static FARTEXT void __far reset_vm(struct mon_guest *g, const char *why, int *running, int *code)
 {
     int r;
 
@@ -1457,7 +1457,7 @@ void vm_prog(char phase)
  * KAC (コードアクセス) モード (vbm.h の vid_mode68) も同じ時機で扱う。ON のままメニューを描くと、漢字が 1 バイトの
  * 文字として描かれて読めない (実機の報告: PC-9821Ap2 で、終了の確認が読めない画面になった。design.md §12)
  */
-void vm_gdisp_pause(void)
+FARTEXT void __far vm_gdisp_pause(void)
 {
     gdc_cmd(0xA0, 0x0C);
     if (vid_mode68 & 0x20) {
@@ -1466,7 +1466,7 @@ void vm_gdisp_pause(void)
     }
 }
 
-void vm_gdisp_resume(void)
+FARTEXT void __far vm_gdisp_resume(void)
 {
     if (vid_mode68 & 0x20)
         pio_out8(0x68, 0x0B);
@@ -1482,7 +1482,7 @@ void vm_gdisp_resume(void)
  * 返るので、こうなる (design.md §12)。そのまま撮ると 2 色の模様になる。白黒 2 色の絵や、何も描かれていない画面でも
  * こうなる
  */
-static int planes_same(void)
+static FARTEXT int __far planes_same(void)
 {
     return _fmemcmp(MK_FP(0xA800, 0), MK_FP(0xB000, 0), 0x7D00) == 0 &&
            _fmemcmp(MK_FP(0xA800, 0), MK_FP(0xB800, 0), 0x7D00) == 0 &&
@@ -1493,7 +1493,7 @@ static int planes_same(void)
 enum { SHOT_PLAIN, SHOT_OR_HOLD, SHOT_AND_NOTE };
 #define SHOT_HELD 2
 
-static int shot_take(char *gname, u8 how)
+static FARTEXT int __far shot_take(char *gname, u8 how)
 {
     struct shot_info si;
     u8 disp, acc;
@@ -1548,7 +1548,7 @@ static int shot_take(char *gname, u8 how)
 }
 
 /* メニューから。ゲストは止まったままなので、見送って待つことはできない */
-int vm_shot(char *gname)
+FARTEXT int __far vm_shot(char *gname)
 {
     return shot_take(gname, SHOT_AND_NOTE);
 }
@@ -1557,7 +1557,7 @@ int vm_shot(char *gname)
  * ホットキーから。プレーンが同じに読めたら撮るのを見送り、ゲストがチャージャーを止めるのを待つ (vbm.h の shot_wait)。
  * 見送ったあとでここへ来るのは、チャージャーが止まったとき、待ちきったとき、ホットキーがもう一度押されたとき
  */
-static void shot_hotkey(void)
+static FARTEXT void __far shot_hotkey(void)
 {
     int rc;
 
@@ -1600,7 +1600,7 @@ static u8 pic_read(u8 cmd_port, u8 ocw3)
  * スレーブ側の全部。ディスクの割り込みもそこにある)。ゲストはもう続きを実行しないので、EOI を出して片付けてよい。
  * EOI (20h) は、処理中のもののうち優先順位のいちばん高い 1 つを片付ける
  */
-static void pic_settle(void)
+static FARTEXT void __far pic_settle(void)
 {
     u8 m, s, i;
 
@@ -1621,7 +1621,7 @@ static void pic_settle(void)
  * メニューを開くときは、ゲストがあとで続きを実行するので片付けられない。処理中の割り込みが残っていたことだけを
  * ログに残す (メニューの中でディスクが動かない、という報告が来たときの手がかり)
  */
-static void isr_note(const char *what)
+static FARTEXT void __far isr_note(const char *what)
 {
     u8 m = pic_read(0x00, 0x0B), s = pic_read(0x08, 0x0B);
 
@@ -1638,7 +1638,7 @@ static const char *const ev_kinds[] = { "irq", "int", "wake", "stub", "fault" };
  */
 static u16 log_ev_seen;
 
-static void log_heartbeat(const struct mon_guest *g)
+static FARTEXT void __far log_heartbeat(const struct mon_guest *g)
 {
     u16 n, i;
 
@@ -1658,7 +1658,7 @@ static void log_heartbeat(const struct mon_guest *g)
     log_ev_seen = evlog_n;
 }
 
-static void dump_guest(const struct mon_guest *g, int fault)
+static FARTEXT void __far dump_guest(const struct mon_guest *g, int fault)
 {
     const char *const *kinds = ev_kinds;
     u8 code[FAULT_BYTES];
@@ -1792,7 +1792,7 @@ static int stops(u16 rc)
  * ドライバが割り込みを許すことはありうる (未確認)。
  * 画面は 1 行目から使い、0 行目は stop_wait の案内に空けておく。ログへは溜めておいて stop_wait で書く
  */
-static void stop_report(u16 rc, const struct mon_guest *g)
+static FARTEXT void __far stop_report(u16 rc, const struct mon_guest *g)
 {
     struct mon_panic pn;
 
@@ -1830,7 +1830,7 @@ static void put_nowhere(const char *s, unsigned len)
  * ログに残す。ソフトが自分で終了したのか、おかしくなって止まったのかは、止まった番地だけでは見分けられない。
  * 画面はこのあとメニューが使うので出さない
  */
-static void halt_note(const struct mon_guest *g)
+static FARTEXT void __far halt_note(const struct mon_guest *g)
 {
     u32 sp = lin(g->ss, (u16)g->esp);
     u16 w[8];
@@ -1857,7 +1857,7 @@ static void halt_note(const struct mon_guest *g)
  * キーを待つ。待たずに進むと、ホストの画面を戻すときに内容が消える。標準出力がファイルに向いているとき (画面を
  * 見ていない) と、開発用の停止では待たない
  */
-static void stop_wait(u16 rc)
+static FARTEXT void __far stop_wait(u16 rc)
 {
     log_release();
     if (rc == X_STOP || !say_on_screen())

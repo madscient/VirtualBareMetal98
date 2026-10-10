@@ -28,7 +28,7 @@ static u8 saved;            /* ゲストの画面を XMS の控え (vbm.h の ST
 static const u8 *dev_keys;
 static int dev_nkeys, dev_keyi;
 
-static void int18(u8 ah)
+static FARTEXT void __far int18(u8 ah)
 {
     union REGS r;
 
@@ -37,7 +37,7 @@ static void int18(u8 ah)
     int86(0x18, &r, &r);
 }
 
-static void put_cell(u8 row, u8 col, u16 code, u8 attr)
+static FARTEXT void __far put_cell(u8 row, u8 col, u16 code, u8 attr)
 {
     u16 off = (u16)((row * UI_COLS + col) * 2);
     u16 __far *pc = MK_FP(TVRAM_SEG, off);
@@ -47,13 +47,13 @@ static void put_cell(u8 row, u8 col, u16 code, u8 attr)
     *pa = attr;
 }
 
-static void put_wide(u8 row, u8 col, u16 code, u8 attr)
+static FARTEXT void __far put_wide(u8 row, u8 col, u16 code, u8 attr)
 {
     put_cell(row, col, code, attr);
     put_cell(row, (u8)(col + 1), (u16)(code | VRAM_RIGHT), attr);
 }
 
-void ui_open(void)
+FARTEXT void __far ui_open(void)
 {
     vm_gdisp_pause();   /* グラフィック表示を消す (閉じるときにゲストの状態へ戻す。design.md §9) */
     saved = (u8)(stash_write(STASH_MENU, TVRAM_SEG, 0, SHOWN) == 0 &&
@@ -63,7 +63,7 @@ void ui_open(void)
     int18(0x12);    /* カーソルを消す */
 }
 
-void ui_close(void)
+FARTEXT void __far ui_close(void)
 {
     if (saved) {
         stash_read(STASH_MENU, TVRAM_SEG, 0, SHOWN);
@@ -72,7 +72,7 @@ void ui_close(void)
     vm_gdisp_resume();
 }
 
-void ui_fill(u8 row, u8 col, u8 w, u8 h, u8 attr)
+FARTEXT void __far ui_fill(u8 row, u8 col, u8 w, u8 h, u8 attr)
 {
     u8 r, c;
 
@@ -81,7 +81,7 @@ void ui_fill(u8 row, u8 col, u8 w, u8 h, u8 attr)
             put_cell((u8)(row + r), (u8)(col + c), 0x20, attr);
 }
 
-u8 ui_puts(u8 row, u8 col, u8 attr, const char *s)
+FARTEXT u8 __far ui_puts(u8 row, u8 col, u8 attr, const char *s)
 {
     u8 start = col, c;
     u16 code;
@@ -103,7 +103,7 @@ u8 ui_puts(u8 row, u8 col, u8 attr, const char *s)
     return (u8)(col - start);
 }
 
-void ui_box(u8 row, u8 col, u8 w, u8 h, u8 attr)
+FARTEXT void __far ui_box(u8 row, u8 col, u8 w, u8 h, u8 attr)
 {
     u8 r, c;
 
@@ -122,7 +122,7 @@ void ui_box(u8 row, u8 col, u8 w, u8 h, u8 attr)
 }
 
 /* INT 18h AH=00h: キーを 1 つ読む (AH = スキャンコード、AL = 文字)。AH=01h: 読まずに有無を見る (BH が 0 なら無し) */
-u16 ui_getkey(void)
+FARTEXT u16 __far ui_getkey(void)
 {
     union REGS r;
 
@@ -139,7 +139,7 @@ u16 ui_getkey(void)
     return (u16)((r.h.ah << 8) | r.h.al);
 }
 
-void ui_flush_keys(void)
+FARTEXT void __far ui_flush_keys(void)
 {
     union REGS r;
 
@@ -157,7 +157,7 @@ void ui_flush_keys(void)
     }
 }
 
-void ui_set_keys(const u8 *scancodes, int n)
+FARTEXT void __far ui_set_keys(const u8 *scancodes, int n)
 {
     dev_keys = scancodes;
     dev_nkeys = n;
@@ -166,7 +166,7 @@ void ui_set_keys(const u8 *scancodes, int n)
 
 static u8 tty_row, tty_col;
 
-void ui_tty_begin(u8 row)
+FARTEXT void __far ui_tty_begin(u8 row)
 {
     tty_row = row;
     tty_col = 0;
@@ -192,7 +192,7 @@ void ui_tty_put(const char *s, unsigned len)
     }
 }
 
-void ui_debug_dump(u8 row, u8 cols)
+FARTEXT void __far ui_debug_dump(u8 row, u8 cols)
 {
     static u8 buf[UI_COLS * 2];
     static const char hex[] = "0123456789ABCDEF";
