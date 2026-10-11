@@ -85,6 +85,7 @@ struct opts {
     u8 dipsw_hm[3], memsw_hm[8];    /* '*' の桁 (ホストの値を映す) のニブルの印 (optval.h) */
     const char *iotrap;             /* -iotrap の値: 一覧 ('=' を含む) か定義ファイル名。後のものが有効 */
     const char *sbrom;              /* -sbrom のファイル名 (0 なら無し) */
+    const char *dump;               /* 開発用 (-dump): 終了時にゲストのメモリと VRAM を書き出すファイル (0 なら無し) */
     u32 sbrom_lin;                  /* サウンド BIOS を置く線形番地 (C8000h か CC000h) */
     u16 hookseg;                    /* 開発用 (-hookseg) */
     const char *log;                /* -log のファイル名 (0 なら無し) */
@@ -204,6 +205,9 @@ static FARTEXT int __far parse_args(int argc, char **argv, struct opts *o)
             i++;
         } else if (eq(a, "-trace")) {
             o->trace = 1;
+        } else if (eq(a, "-dump") && v) {
+            o->dump = v;
+            i++;
         } else if (eq(a, "-imr") && v && !hexbytes(v, o->imr, 2)) {
             o->have_imr = 1;
             i++;
@@ -1829,6 +1833,37 @@ static int stops(u16 rc)
  * ドライバが割り込みを許すことはありうる (未確認)。
  * 画面は 1 行目から使い、0 行目は stop_wait の案内に空けておく。ログへは溜めておいて stop_wait で書く
  */
+/*
+ * 開発用 (-dump): ゲストの 640KB と、グラフィック VRAM のページ 0・1 を B R G E の順に 32KB ずつ書き出す。
+ * 止まった場面のコード (実行時に展開されたもの) とデータ、プレーンの中身を外で調べるため。表示系を戻す前に呼ぶ
+ */
+static FARTEXT void __far dump_memory(const char *path)
+{
+    static const u16 plane_seg[4] = { 0xA800, 0xB000, 0xB800, 0xE000 };
+    int h;
+    unsigned put;
+    u32 lin;
+    u8 page, pl;
+
+    if (_dos_creat(path, 0, &h) != 0) {
+        say("VBM98: -dump: cannot create %s\n", path);
+        return;
+    }
+    for (lin = 0; lin < 0xA0000UL; lin += 0x8000UL) {
+        g_read(lin, xfer_seg(), 0, 0x8000);
+        _dos_write(h, MK_FP(xfer_seg(), 0), 0x8000, &put);
+    }
+    pio_out8(0x7C, 0x00);   /* チャージャーが有効だとプレーンの中身が読めない */
+    for (page = 0; page < 2; page++) {
+        pio_out8(0xA6, page);
+        for (pl = 0; pl < 4; pl++)
+            _dos_write(h, MK_FP(plane_seg[pl], 0), 0x8000, &put);
+    }
+    pio_out8(0xA6, 0);
+    _dos_close(h);
+    say("VBM98: -dump: %s (RAM 640KB, then VRAM page 0 and 1 as B R G E, 32KB each)\n", path);
+}
+
 static FARTEXT void __far stop_report(u16 rc, const struct mon_guest *g)
 {
     struct mon_panic pn;
@@ -2186,6 +2221,8 @@ int main(int argc, char **argv)
     }
 
     pic_settle();
+    if (o.dump)
+        dump_memory(o.dump);
     video_host();
     screen_host();
     say_again();
