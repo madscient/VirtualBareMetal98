@@ -90,11 +90,31 @@ after_reset:
 
         xor     ax, ax
         xor     si, si
-        mov     cx, SECT_BYTES / 2
+        mov     cx, (SECT_BYTES >> 1)
 1:      add     ax, es:[si]
         add     si, 2
         loop    1b
         mov     [rec_sum], ax
+
+        /* 同じセクタを、64KB 境界 (30000h) をまたぐ所へ読む。実機の BIOS はこれを断らない */
+        mov     bx, SECT_BYTES
+        mov     cx, SECT_N << 8
+        mov     dx, READ_R
+        mov     ax, 0x2FC0
+        mov     es, ax
+        mov     ah, 0x56
+        mov     al, [rec_al]
+        mov     bp, 0x400 - (SECT_BYTES >> 1)
+        int     0x1B
+        mov     [rec_st2], ah
+
+        xor     ax, ax
+        mov     si, bp
+        mov     cx, (SECT_BYTES >> 1)
+1:      add     ax, es:[si]
+        add     si, 2
+        loop    1b
+        mov     [rec_sum2], ax
 
         xor     ax, ax
         mov     es, ax
@@ -300,4 +320,6 @@ rec_dma:        .skip   4
 rec_equip:      .skip   3
 rec_scsi:       .byte   0
 rec_v18:        .skip   4
+rec_st2:        .byte   0
+rec_sum2:       .word   0
         .org    1024

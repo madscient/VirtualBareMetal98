@@ -146,8 +146,10 @@ static u8 transfer(struct fdb *fb, dimg *img, const struct fdb_in *in, struct fd
     u8 c = in->cl, h = in->dh, r = in->dl, n = in->ch;
     u8 st = FDB_ST_OK, fn = (u8)(in->ah & 0x0F);
 
-    if (op != OP_VERIFY && ((((u32)in->es << 4) + in->bp) & 0xFFFF) + remain > 0x10000UL)
-        return FDB_ST_DMA;
+    /*
+     * 転送先が 64KB 境界をまたいでも断らない (ステータス 20h は返さない)。互換 BIOS の PC98_Open_BIOS は 20h を返すが、
+     * 実機 (PC-9821Ap3) と NP21/W では、境界をまたぐ 1 セクタの読み込みを多用するソフトが正しく動く (design.md §12)
+     */
     if (op == OP_WRITE && img->readonly)
         return FDB_ST_PROTECT;
 

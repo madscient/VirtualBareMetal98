@@ -1559,9 +1559,17 @@ static FARTEXT int __far shot_take(char *gname, u8 how)
          * テキスト側の属性の内訳。実機の報告で、画面は普通に見えているのにテキストの絵が反転だらけになったことが
          * あり (design.md §17)、属性の読み出しがどうなっていたかを知る材料にする
          */
-        if (!rc)
+        if (!rc) {
+            u8 k;
+
             log_line("VBM98: screenshot: text attributes: %u of %u cells reversed, %u hidden, cell 0 attr %02X\n",
                      shot_rev_cells, (unsigned)(80 * 25), shot_hidden_cells, shot_attr0);
+            /* 色の写し (ポート 6Ah・A8h〜AEh への書き込みから)。絵の色が合わないときの切り分けの材料 */
+            log_line("VBM98: screenshot: %s mode, mode flip-flop %02X, palette (GRB):", vid_color16 ? "16-color" : "8-color", vid_mode68);
+            for (k = 0; k < 16; k++)
+                log_line(" %X%X%X", vid_anapal[k * 3], vid_anapal[k * 3 + 1], vid_anapal[k * 3 + 2]);
+            log_line(vid_color16 ? "\n" : "; digital %02X %02X %02X %02X\n", vid_pal[0], vid_pal[1], vid_pal[2], vid_pal[3]);
+        }
     }
     if (disp != acc)
         pio_out8(0xA6, acc);
@@ -1729,6 +1737,14 @@ static FARTEXT void __far dump_guest(const struct mon_guest *g, int fault)
     for (i = 0; i < 16; i++)
         if (irq_hits[i])
             say(" %02X=%u", i + 8, irq_hits[i]);
+    say("\nVBM98: V30 instructions emulated: %u", v30_emul_n);
+    if (v30_emul_n)
+        say(" (first at %04X:%04X: %02X %02X %02X %02X)", (unsigned)(v30_emul_first >> 16), (unsigned)(u16)v30_emul_first,
+            v30_emul_op[0], v30_emul_op[1], v30_emul_op[2], v30_emul_op[3]);
+    say("; exceptions reflected to the guest: INT 0 x%u, INT 6 x%u", fault_refl_n[0], fault_refl_n[1]);
+    for (i = 0; i < 2; i++)
+        if (fault_refl_n[i])
+            say(" (INT %u first at %04X:%04X)", i * 6, (unsigned)(fault_refl_first[i] >> 16), (unsigned)(u16)fault_refl_first[i]);
     say("\nVBM98: PIC master IRR=%02X ISR=%02X, slave IRR=%02X ISR=%02X; GDC status 60=%02X A0=%02X",
            pic_read(0x00, 0x0A), pic_read(0x00, 0x0B), pic_read(0x08, 0x0A), pic_read(0x08, 0x0B),
            pio_in8(0x60), pio_in8(0xA0));

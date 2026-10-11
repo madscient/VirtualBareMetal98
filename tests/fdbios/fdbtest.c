@@ -309,6 +309,19 @@ static void test_raw(void)
     st = call(0x56, 0x90, 3, 0, 7, 3, 3072);
     check("read past the end of track without MT: 30h after two sectors", st == FDB_ST_EOC && out.xfer == 2048);
 
+    /* 転送先が 64KB 境界をまたぐ (1FE00h + 400h)。実機の BIOS は断らないので、こちらも断らない (design.md §12) */
+    n = sector_want(RAW_2HD, 0, 0, 1, 0, 0);
+    memset(&in, 0, sizeof in);
+    in.ah = 0x56;
+    in.al = 0x90;
+    in.dl = 1;
+    in.ch = 3;
+    in.bx = 1024;
+    in.es = 0x1FC0;
+    in.bp = 0x0200;
+    fdb_call(&fb, &in, &out);
+    check("read one sector into a buffer crossing a 64KB boundary: ok, not 20h", out.ah == 0 && out.xfer == 1024 && same(n));
+
     check("missing sector: C0h", call(0x56, 0x90, 0, 0, 30, 3, 1024) == FDB_ST_NODATA);
     check("wrong N: C0h", call(0x56, 0x90, 0, 0, 1, 2, 1024) == FDB_ST_NODATA);
     st = call(0x10, 0x90, 3, 0, 0, 0, 0);
@@ -326,10 +339,6 @@ static void test_raw(void)
     st = call(0x4A, 0x90, 5, 0, 0, 0, 0);
     check("read ID again: next sector", st == 0 && out.dl == (u8)(r1 % 8 + 1));
     check("read ID without the MFM bit: E0h", call(0x1A, 0x90, 5, 0, 0, 0, 0) == FDB_ST_NOAM);
-
-    test_es = 0x2FC0;
-    check("transfer across a 64KB boundary: 20h", call(0x56, 0x90, 0, 0, 1, 3, 2048) == FDB_ST_DMA);
-    test_es = 0x2000;
 
     st = call(0xD1, 0x90, 3, 0, 4, 3, 10240);
     check("verify ten sectors across heads: ok, nothing transferred", st == 0 && out.xfer == 0);

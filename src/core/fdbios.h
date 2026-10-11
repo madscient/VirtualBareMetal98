@@ -30,7 +30,7 @@
 /* ステータス (AH)。20h 以上はエラーで、呼び出し側が CF を立てる */
 #define FDB_ST_OK        0x00
 #define FDB_ST_WP        0x10   /* センスのとき: 書き込み禁止 */
-#define FDB_ST_DMA       0x20   /* 転送が 64KB 境界をまたぐ */
+#define FDB_ST_DMA       0x20   /* 転送が 64KB 境界をまたぐ。本実装は返さない (fdbios.c の transfer) */
 #define FDB_ST_EOC       0x30   /* トラックの終わりを越えた */
 #define FDB_ST_EQUIP     0x40   /* そのデバイスはない */
 #define FDB_ST_NOTREADY  0x60

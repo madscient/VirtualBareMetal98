@@ -144,6 +144,12 @@ extern struct vdma vdma;
 extern u8 vdma_opened;
 /* -v30 (design.md §14): V30 固有の命令を代行し、ゼロ除算の戻り番地を命令の次にする */
 extern u8 v30_on;
+/* 開発用の報告 (vbm_r0.c の mon_on_fault): 代行した V30 の命令の数・最初の CS:IP とその 4 バイト、反射した INT 0 / INT 6 の数と最初の CS:IP */
+extern u16 v30_emul_n;
+extern u32 v30_emul_first;
+extern u8 v30_emul_op[4];
+extern u16 fault_refl_n[2];
+extern u32 fault_refl_first[2];
 /*
  * -iotrap (design.md §15)。ゲストのポート iotrap_guest[i] への I/O を、ホストのポート iotrap_host[i] に
  * 読み替える。表は ring 0 側が持ち、ホスト側が起動時に埋めてそのポートをトラップする

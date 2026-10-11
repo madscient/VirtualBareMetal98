@@ -280,6 +280,11 @@ u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
     /* 持ち越したスクリーンショットを待ちきった。反射は済んでいるので、戻ればハンドラが動く */
     if (shot_tick())
         return X_HOTKEY_SHOT;
+    /* 開発用 (-shotat): ゲストが IRQ0 を開けていて渡す場合も、刻みが達したら撮る (上の渡さない場合と同じ) */
+    if (vec == IRQ_FIRST && dev_shot_i < 2 && dev_shot_at[dev_shot_i] && dev_now() >= dev_shot_at[dev_shot_i]) {
+        dev_shot_i++;
+        return X_HOTKEY_SHOT;
+    }
     if (dev_menu_at && vec >= IRQ_FIRST + 2 && vec <= IRQ_LAST && dev_now() >= dev_menu_at) {
         /*
          * 開発用: ゲストのハンドラに入る形 (反射済み) にしてからメニューへ抜ける。戻ればハンドラが動くので
@@ -308,13 +313,34 @@ u8 fault_vec;
 u16 fault_err;
 u8 fault_code[FAULT_BYTES];
 
+/* 開発用の報告 (vbm98.c の終了時の表示): 代行した V30 の命令と、ゲストへ反射した例外の数と、最初の 1 件の場所 */
+u16 v30_emul_n;
+u32 v30_emul_first;
+u8 v30_emul_op[4];
+u16 fault_refl_n[2];
+u32 fault_refl_first[2];
+
 u16 mon_on_fault(u8 vec, u32 err, struct mon_vframe *f, struct mon_gregs *r)
 {
     u16 len, i;
+    u32 at = mon_lin((u16)f->cs, (u16)f->eip);
+    u32 csip = ((u32)(u16)f->cs << 16) | (u16)f->eip;
 
-    if (v30_on && (vec == 6 || (vec == 13 && err == 0)) && mon_v30_emulate(f, r))
+    if (v30_on && (vec == 6 || (vec == 13 && err == 0)) && mon_v30_emulate(f, r)) {
+        if (!v30_emul_n) {
+            v30_emul_first = csip;
+            for (i = 0; i < 4; i++)
+                v30_emul_op[i] = mon_peek8(at + i);
+        }
+        if (v30_emul_n != 0xFFFF)
+            v30_emul_n++;
         return 0;
+    }
     if ((vec == 0 || vec == 6) && guest_handles(vec)) {
+        if (!fault_refl_n[vec ? 1 : 0])
+            fault_refl_first[vec ? 1 : 0] = csip;
+        if (fault_refl_n[vec ? 1 : 0] != 0xFFFF)
+            fault_refl_n[vec ? 1 : 0]++;
         if (vec == 0 && v30_on && (len = mon_v30_div_len(f)) != 0)
             f->eip = (f->eip & 0xFFFF0000UL) | (u16)((u16)f->eip + len);
         mon_reflect(vec, f);
