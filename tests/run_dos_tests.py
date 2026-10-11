@@ -745,7 +745,8 @@ def boot_rec(path):
     return {'ran': rec[0x300:0x308] == b'VBM98IPL', 'ext': rec[0x32B:0x32E], 'v1b': far(0x32E), 'f7': rec[0x332:0x336],
             'v09': far(0x336), 'v1a': far(0x33A), 'hook': rec[0x33E], 'v19': far(0x33F),
             'v89': far(0x343), 'v8a': far(0x347), 'zsum': int.from_bytes(rec[0x34B:0x34D], 'little'),
-            'p31': rec[0x315], 'prxdupd': rec[0x31C], 'imr_m': rec[0x34D], 'imr_s': rec[0x34E], 'scsi': rec[0x356]}
+            'p31': rec[0x315], 'prxdupd': rec[0x31C], 'imr_m': rec[0x34D], 'imr_s': rec[0x34E], 'scsi': rec[0x356],
+            'v18': far(0x357)}
 
 
 def test_hook(work):
@@ -799,8 +800,10 @@ def test_hook(work):
          b['scsi'] == 0),
         ('INT 09h hooked by the TSR (pushf + call far): the guest still gets the ROM entry it had before', b['v09'] == a['v09']),
         ('INT 1Ah hooked by the TSR (jmp far): the guest still gets the ROM entry it had before', b['v1a'] == a['v1a']),
+        ('INT 18h hooked by a TSR that answers AH=FFh itself (like the 30-line BIOS): the guest still gets the ROM entry, '
+         'found with another function number', b['v18'] == a['v18'] and ('18=%s(a)' % a['v18']) in traced),
         ('INT 19h hooked by the TSR: the ROM address it calls first is reported as not an entry',
-         any('INT 19h enters the ROM at' in l and 'not usable' in l for l in after)),
+         any('INT 19h (AX=' in l and 'enters the ROM at' in l and 'not usable' in l for l in after)),
         ('INT 19h hooked by the TSR (far call into the ROM, then jmp far): the guest still gets the ROM entry it had before',
          b['v19'] == a['v19']),
         ('the way each entry was reached is shown: 09h by pushf + far call (b), 1Ah and 19h by far jmp (a)',

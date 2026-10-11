@@ -822,6 +822,14 @@ int rom_writable(u16 seg, u16 off);
  * ほかのハードウェア割り込みは、使うゲストが自分でハンドラを置く
  */
 static const u8 rom_traced[] = { 0x08, 0x09, 0x0A, 0x18, 0x19, 0x1A, 0x1C };
+/*
+ * 追跡のときにハンドラへ渡す AX。ROM には無い機能番号 FF00h を使うが、INT 18h ではそれでは足りない: 常駐物が AH=FFh を
+ * 自分の拡張機能の番号にしていて、ROM を呼ばずに戻る (30 行 BIOS。AX=FF00h はその機能の 1 つ。design.md §12)。
+ * INT 18h は、ROM では読むだけで害のない機能 (0Bh = CRT モードのセンス、01h = キーバッファのセンス) から順に試し、
+ * 最後に FF00h を試す。常駐物がどの機能を自分で処理するかは常駐物ごとに違うので、1 つに決めない
+ */
+static const u16 probe_ax[] = { 0x0B00, 0x0100, 0xFF00 };
+#define PROBE_AX_N (sizeof probe_ax / sizeof probe_ax[0])
 static u32 rom_ent[HOOK_VEC_MAX];   /* 突き止めた入口 (上位がセグメント)。0 なら無し */
 /*
  * ホストのハンドラが受け持っている IRQ (マスタ・スレーブの割り込みマスクのビット)。ゲストの割り込みマスクの初期値で
@@ -852,7 +860,7 @@ static FARTEXT int __far in_rom(u16 seg, u16 off)
 static FARTEXT int __far guest_memory(int first)
 {
     static const u8 zero2[2] = { 0, 0 };
-    u16 i, off;
+    u16 i, off, k;
     u8 vec[4];
     u8 ent[4];
 
@@ -901,12 +909,18 @@ static FARTEXT int __far guest_memory(int first)
 
             if (in_rom((u16)(e[2] | (e[3] << 8)), (u16)(e[0] | (e[1] << 8))))
                 continue;
-            rom_ent[rom_traced[i]] = rom_trace(rom_traced[i], 0xFF00, rej);
-            rom_form[rom_traced[i]] = (u8)rej[3];
-            /* 入口として使えない入り方で ROM に入った所。実機の報告から、未知の横取りの形を知るための材料 */
-            if (rej[1])
-                say("VBM98: INT %02Xh enters the ROM at %04X:%04X with %u bytes pushed, not usable as its entry\n",
-                    rom_traced[i], rej[1], rej[0], rej[2]);
+            for (k = 0; k < PROBE_AX_N && !rom_ent[rom_traced[i]]; k++) {
+                u16 ax = probe_ax[rom_traced[i] == 0x18 ? k : PROBE_AX_N - 1];
+
+                rom_ent[rom_traced[i]] = rom_trace(rom_traced[i], ax, rej);
+                rom_form[rom_traced[i]] = (u8)rej[3];
+                /* 入口として使えない入り方で ROM に入った所。実機の報告から、未知の横取りの形を知るための材料 */
+                if (rej[1])
+                    say("VBM98: INT %02Xh (AX=%04X) enters the ROM at %04X:%04X with %u bytes pushed, not usable as its entry\n",
+                        rom_traced[i], ax, rej[1], rej[0], rej[2]);
+                if (rom_traced[i] != 0x18)
+                    break;
+            }
         }
         say("VBM98: vectors into host RAM, redirected:");
     }

@@ -172,6 +172,10 @@ after_reset:
         mov     [rec_v1a], ax
         mov     ax, es:[0x1A * 4 + 2]
         mov     [rec_v1a + 2], ax
+        mov     ax, es:[0x18 * 4]
+        mov     [rec_v18], ax
+        mov     ax, es:[0x18 * 4 + 2]
+        mov     [rec_v18 + 2], ax
         mov     ax, es:[0x19 * 4]
         mov     [rec_v19], ax
         mov     ax, es:[0x19 * 4 + 2]
@@ -295,4 +299,5 @@ rec_imr:        .skip   2
 rec_dma:        .skip   4
 rec_equip:      .skip   3
 rec_scsi:       .byte   0
+rec_v18:        .skip   4
         .org    1024

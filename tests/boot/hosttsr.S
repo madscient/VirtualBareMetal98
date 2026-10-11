@@ -8,6 +8,8 @@
  *            F000h のセグメントに CBh のバイトが無ければ、この横取りは入れない
  *   INT 89h: コードではない番地 (この常駐部分のデータ) を指すベクタにする。INT 8Ah は 0000:0000 にする。
  *            20h 以上のベクタのうち、ホストの RAM を指すものがゲストにそのまま渡らないかを見る
+ *   INT 18h: AH = FFh を自分の拡張機能として処理して戻り (ROM を呼ばない)、ほかは元のハンドラへ飛ぶ形 (30 行 BIOS と
+ *            同じ)。追跡が AX = FF00h だけで諦めず、別の機能番号で ROM の入口を見つけるかを見る
  *   INT 11h (スレーブの IR1): 元のハンドラへ飛ぶだけの横取り。ホストのハンドラが受け持つ IRQ を、VBM98 がゲストの
  *            割り込みマスクで閉じるかを見る (入口を追う対象ではない IRQ)
  *   BIOS ワークエリアの拡張メモリ量: 0401h = 68h、0594h = 0010h (ホストの XMS ドライバが 0 にしていても、
@@ -33,6 +35,7 @@ old09:  .word   0, 0
 old1a:  .word   0, 0
 old19:  .word   0, 0
 old11:  .word   0, 0
+old18:  .word   0, 0
 romretf: .word  0, 0xF000
 
 new09:
@@ -49,6 +52,14 @@ new1a:
 
 new11:
         jmp     dword ptr cs:[old11]
+
+/* INT 18h: AH = FFh は自分の拡張機能として処理して戻る (30 行 BIOS と同じ形。ROM は呼ばない)。ほかは元のハンドラへ */
+new18:
+        cmp     ah, 0xFF
+        jne     1f
+        mov     ax, 0x0141
+        iret
+1:      jmp     dword ptr cs:[old18]
 
 new19:
         push    0x8000
@@ -115,6 +126,12 @@ install:
         mov     [old11 + 2], ax
         mov     word ptr es:[0x11 * 4], offset new11
         mov     es:[0x11 * 4 + 2], cs
+        mov     ax, es:[0x18 * 4]
+        mov     [old18], ax
+        mov     ax, es:[0x18 * 4 + 2]
+        mov     [old18 + 2], ax
+        mov     word ptr es:[0x18 * 4], offset new18
+        mov     es:[0x18 * 4 + 2], cs
         mov     word ptr es:[0x89 * 4], offset old09
         mov     es:[0x89 * 4 + 2], cs
         mov     word ptr es:[0x8A * 4], 0
