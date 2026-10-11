@@ -920,15 +920,18 @@ static FARTEXT int __far guest_memory(int first)
     g_rmw8(WA_SCSI_EQUIP, 0, 0xFF);
     if (dip_on)
         dipsw_workarea();
-    else if (dip_gdc25) {
+    else if (dip_gdc25)
         g_rmw8(WA_PRXDUPD, 0, 0x20);    /* 054Dh の bit 5 = SW2-8 ON (5MHz を使う)。dipsw_workarea と同じ式 */
-        /*
-         * ホスト側の同じビットも、ゲストが動いている間だけ 0 にする (video_host が戻す)。エミュレータの内蔵 BIOS
-         * (NP21/W の ROM なし、DOSBox-X) は INT 18h をホストの物理メモリのワークエリアで判断するので、ゲスト側だけ
-         * 変えると、ゲストの INT 18h AH=42h が 5MHz・PITCH 80 へ切り替えてしまい、2.5MHz 前提で動くゲストと食い違う
-         * (design.md §12)。実機の ROM はゲストのメモリを見るので、この書き込みは効かないが害もない
-         */
-        *(u8 __far *)MK_FP(0, WA_PRXDUPD) &= (u8)~0x20;
+    /*
+     * ホスト側の 054Dh の bit 5 も、ゲストに見せる SW2-8 に合わせる (ゲストが動いている間だけ。video_host が戻す)。
+     * エミュレータの内蔵 BIOS (NP21/W の ROM なし、DOSBox-X) は INT 18h をホストの物理メモリのワークエリアで判断する
+     * ので、ゲスト側だけ変えると、ゲストの INT 18h AH=42h が 5MHz・PITCH 80 へ切り替えてしまい、2.5MHz 前提で動く
+     * ゲストと食い違う (design.md §12)。実機の ROM はゲストのメモリを見るので、この書き込みは効かないが害もない
+     */
+    if (dip_on || dip_gdc25) {
+        u8 b5 = (u8)(dip_on && !(dip_sw[1] & 0x80) ? 0x20 : 0);
+
+        *(u8 __far *)MK_FP(0, WA_PRXDUPD) = (u8)((*(u8 __far *)MK_FP(0, WA_PRXDUPD) & ~0x20) | b5);
     }
 
     /*
