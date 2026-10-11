@@ -785,6 +785,8 @@ static FARTEXT void __far video_host(void)
      * チャージャーを使わないソフトが VRAM を読み書きしても、プレーンの中身に届かない (design.md §12)
      */
     pio_out8(0x7C, 0x00);
+    /* 054Dh の bit 5 (5MHz を使う) をゲスト用に落としていたら戻す (guest_memory)。BIOS に戻させる前に */
+    *(u8 __far *)MK_FP(0, WA_PRXDUPD) = (u8)((*(u8 __far *)MK_FP(0, WA_PRXDUPD) & ~0x20) | (host_prxdupd & 0x20));
     int18(0x0A, (u8)(host_crt_mode & 0x0F), 0);
     int18(0x42, 0, (u8)((host_prxdupd & 0x04) ? 0xC0 : 0x80));
     int18((u8)((host_prxcrt & 0x80) ? 0x40 : 0x41), 0, 0);
@@ -918,8 +920,16 @@ static FARTEXT int __far guest_memory(int first)
     g_rmw8(WA_SCSI_EQUIP, 0, 0xFF);
     if (dip_on)
         dipsw_workarea();
-    else if (dip_gdc25)
+    else if (dip_gdc25) {
         g_rmw8(WA_PRXDUPD, 0, 0x20);    /* 054Dh の bit 5 = SW2-8 ON (5MHz を使う)。dipsw_workarea と同じ式 */
+        /*
+         * ホスト側の同じビットも、ゲストが動いている間だけ 0 にする (video_host が戻す)。エミュレータの内蔵 BIOS
+         * (NP21/W の ROM なし、DOSBox-X) は INT 18h をホストの物理メモリのワークエリアで判断するので、ゲスト側だけ
+         * 変えると、ゲストの INT 18h AH=42h が 5MHz・PITCH 80 へ切り替えてしまい、2.5MHz 前提で動くゲストと食い違う
+         * (design.md §12)。実機の ROM はゲストのメモリを見るので、この書き込みは効かないが害もない
+         */
+        *(u8 __far *)MK_FP(0, WA_PRXDUPD) &= (u8)~0x20;
+    }
 
     /*
      * ホストの RAM (MS-DOS や常駐物) を指すベクタは、ゲストのメモリには中身がない (design.md §6)。
