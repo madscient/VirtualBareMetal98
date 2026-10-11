@@ -11,6 +11,28 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 out="$root/build/dos"
 mkdir -p "$out"
 
+# アセンブリの式に / を書くと、この GNU as は / から行末までをコメントとして捨てる (警告は出ない)。
+# C のコメントの外に / がある行があれば止める
+awk 'FNR == 1 { inc = 0 }
+{
+    line = $0; code = ""
+    while (length(line)) {
+        if (inc) {
+            i = index(line, "*/")
+            if (i) { line = substr(line, i + 2); inc = 0 } else line = ""
+        } else {
+            i = index(line, "/*")
+            if (i) { code = code substr(line, 1, i - 1); line = substr(line, i + 2); inc = 1 }
+            else { code = code line; line = "" }
+        }
+    }
+    if (code ~ /\//) { print FILENAME ":" FNR ": " $0; bad = 1 }
+}
+END { exit bad }' "$root"/src/dos/*.S "$root"/src/mon/*.S "$root"/tests/boot/*.S "$root"/tests/monprobe/*.S || {
+    echo "アセンブリの式に / がある (行末までコメントになる。2 のべきで割るなら >> を使う)" >&2
+    exit 1
+}
+
 # 関数とデータを節に分け、リンク時に参照されないものを捨てる (--gc-sections)。small モデルのコードセグメントは
 # 64KB で、本体はその近くまで使っている
 model="-mcmodel=small -march=i80286 -Os -std=gnu99 -ffunction-sections -fdata-sections"

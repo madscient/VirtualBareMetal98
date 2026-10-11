@@ -101,6 +101,15 @@ def hook_page(lines):
     return None
 
 
+def word_sum(pattern):
+    """試験用の IPL が記録する検査和 (16 ビットの語の和) の期待値。和が 0 になるパターンは、何も届いていない
+    メモリ (ゼロ埋め) と区別できないので受け付けない"""
+    s = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, len(pattern), 2)) & 0xFFFF
+    if s == 0:
+        raise ValueError('検査和が 0 になるパターンは使えない')
+    return s
+
+
 def test_boot2dd(work):
     """2DD (640KB、512 バイト/セクタ) の RAW イメージから起動する。IPL は受け取った DA/UA (70h) と N=2 で INT 1Bh を呼ぶ。
     R=3 のパターンを読み、自分を R=5〜6 に書く。装備情報が 640KB インタフェースのドライブになっていることも見る"""
@@ -145,7 +154,7 @@ def test_boot2dd(work):
             print('  PICK: ' + line)
     print('  first boot, work area 055Ch 055Dh 0584h: -fdd0 %s, picked from the menu %s' % (
         rec[0x353:0x356].hex(' '), rec2[0x353:0x356].hex(' ')))
-    want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 512, 2)) & 0xFFFF
+    want_sum = word_sum(pattern)
     h31 = (host_bytes(lines, 'host dipsw ports 31h 33h 42h') or b'\0')[0]
     checks = (
         ('batch finished', finished),
@@ -231,7 +240,7 @@ def test_boot(work):
     loglines = imgtests.read_lines(work, 'B.LOG') or []
     with open(os.path.join(work, 'B.IMG'), 'rb') as f:
         rec = f.read()[2048:3072]
-    want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 1024, 2)) & 0xFFFF
+    want_sum = word_sum(pattern)
     hdip = host_bytes(lines, 'host dipsw ports 31h 33h 42h') or b'\0\0\0'
     hmsw = host_bytes(lines, 'host memsw 1-8') or b'\0' * 8
     h33, h42 = hdip[1], hdip[2]
@@ -723,7 +732,7 @@ def test_v86(work):
         print('  ' + line)
     with open(os.path.join(work, 'E.IMG'), 'rb') as f:
         rec = f.read()[2048:3072]
-    want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 1024, 2)) & 0xFFFF
+    want_sum = word_sum(pattern)
     checks = (
         ('batch finished', finished),
         ('EMM386 is loaded in that DOS', any('EMM386' in l for l in lines)),
@@ -854,7 +863,7 @@ def test_msdos(work):
     with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
         ipl = f.read()
     pattern = bytes((i * 13 + 8) & 0xFF for i in range(1024))
-    want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 1024, 2)) & 0xFFFF
+    want_sum = word_sum(pattern)
     ok = True
     ver6 = False
     for emm in (False, True):
@@ -999,7 +1008,7 @@ def test_nfdid(work):
     with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
         ipl = f.read()
     pattern = bytes((i * 13 + 8) & 0xFF for i in range(1024))
-    want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 1024, 2)) & 0xFFFF
+    want_sum = word_sum(pattern)
     data_at = 0
     for name, c1, status1 in (('N1.NFD', 1, 0), ('N2.NFD', 0, 0xD0)):
         disk = imgtests.mkimg.uniform('nb', 77, 2, 8, 3)
