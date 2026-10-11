@@ -116,6 +116,26 @@ after_reset:
         loop    1b
         mov     [rec_sum2], ax
 
+        /* 同じセクタを VRAM (B プレーン、A800:0000) へ読む。INT 1Bh の転送先に VRAM を使うソフトがある */
+        mov     bx, SECT_BYTES
+        mov     cx, SECT_N << 8
+        mov     dx, READ_R
+        mov     ax, 0xA800
+        mov     es, ax
+        mov     ah, 0x56
+        mov     al, [rec_al]
+        xor     bp, bp
+        int     0x1B
+        mov     [rec_st3], ah
+
+        xor     ax, ax
+        xor     si, si
+        mov     cx, (SECT_BYTES >> 1)
+1:      add     ax, es:[si]
+        add     si, 2
+        loop    1b
+        mov     [rec_sum3], ax
+
         xor     ax, ax
         mov     es, ax
         mov     si, 0x0564
@@ -322,4 +342,6 @@ rec_scsi:       .byte   0
 rec_v18:        .skip   4
 rec_st2:        .byte   0
 rec_sum2:       .word   0
+rec_st3:        .byte   0
+rec_sum3:       .word   0
         .org    1024

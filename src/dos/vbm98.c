@@ -342,15 +342,45 @@ static u32 lin(u16 seg, u16 off)
     return ((u32)seg << 4) + off;
 }
 
-/* 長さは偶数に丸める (XMS の制約)。ゲストの線形番地 = XMS ブロック内の guest_off + 番地 */
+/*
+ * ゲストのメモリとの写し。640KB より下は XMS ブロック内の guest_off + 番地 (長さは偶数に丸める。XMS の制約)。
+ * A0000h 以上 (VRAM・ROM) はゲストにも実物が見えている (design.md §3) ので、同じ番地の実メモリと直接写す。
+ * INT 1Bh の転送先に VRAM を指定するソフトがある (design.md §12)。1MB 以上 (A20 の折り返し) は扱わない
+ */
+static void phys_copy(u32 lin, u16 seg, u16 off, u16 len, int to_phys)
+{
+    u16 n;
+
+    while (len && lin < 0x100000UL) {
+        n = (u16)(len > 0x8000 ? 0x8000 : len);
+        if (to_phys)
+            _fmemcpy(MK_FP((u16)(lin >> 4), (u16)(lin & 15)), MK_FP(seg, off), n);
+        else
+            _fmemcpy(MK_FP(seg, off), MK_FP((u16)(lin >> 4), (u16)(lin & 15)), n);
+        lin += n;
+        off = (u16)(off + n);
+        len = (u16)(len - n);
+    }
+}
+
 static int g_write(u32 glin, u16 seg, u16 off, u16 len)
 {
-    return xms_move(xms_handle, guest_off + glin, 0, xms_far(seg, off), (u16)((len + 1) & ~1U));
+    u16 n = (u16)(glin >= RAM_TOP ? 0 : glin + len > RAM_TOP ? RAM_TOP - glin : len);
+
+    if (n && xms_move(xms_handle, guest_off + glin, 0, xms_far(seg, off), (u16)((n + 1) & ~1U)))
+        return 1;
+    phys_copy(glin + n, seg, (u16)(off + n), (u16)(len - n), 1);
+    return 0;
 }
 
 static int g_read(u32 glin, u16 seg, u16 off, u16 len)
 {
-    return xms_move(0, xms_far(seg, off), xms_handle, guest_off + glin, (u16)((len + 1) & ~1U));
+    u16 n = (u16)(glin >= RAM_TOP ? 0 : glin + len > RAM_TOP ? RAM_TOP - glin : len);
+
+    if (n && xms_move(0, xms_far(seg, off), xms_handle, guest_off + glin, (u16)((n + 1) & ~1U)))
+        return 1;
+    phys_copy(glin + n, seg, (u16)(off + n), (u16)(len - n), 0);
+    return 0;
 }
 
 /* ホスト側の控え (vbm.h)。ゲストの 640KB のすぐ後ろに置く。長さは偶数であること (XMS の制約。呼ぶ側が守る) */

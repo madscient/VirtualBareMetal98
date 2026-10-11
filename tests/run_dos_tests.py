@@ -156,6 +156,8 @@ def test_boot2dd(work):
         ('sector 3 contents arrived in the guest', int.from_bytes(rec[0x30A:0x30C], 'little') == want_sum),
         ('the same sector read into a buffer crossing a 64KB boundary (2FC0:0300): 00h and the same contents',
          rec[0x35B] == 0 and int.from_bytes(rec[0x35C:0x35E], 'little') == want_sum),
+        ('the same sector read into VRAM (A800:0000): 00h and the same contents read back from VRAM',
+         rec[0x35E] == 0 and int.from_bytes(rec[0x35F:0x361], 'little') == want_sum),
         ('result bytes in the work area: ST0=00, next R=4', rec[0x30C] == 0 and rec[0x311] == 4),
         ('with -hookseg F700 the hook page is at F700h (the fallback place) and INT 1Bh goes through it',
          int.from_bytes(rec[0x330:0x332], 'little') == 0xF700 and rec[0x332:0x336] == b'\xF4\xF4\xF4\xF4'),
@@ -187,7 +189,7 @@ def test_boot(work):
     if len(ipl) != 1024:
         print('IPL.BIN が 1024 バイトでない')
         return False
-    pattern = bytes((i * 13 + 7) & 0xFF for i in range(1024))
+    pattern = bytes((i * 13 + 8) & 0xFF for i in range(1024))
     img = bytearray(77 * 2 * 8 * 1024)
     img[0:1024] = ipl
     img[1024:2048] = pattern
@@ -246,6 +248,8 @@ def test_boot(work):
         ('sector 2 contents arrived in the guest', int.from_bytes(rec[0x30A:0x30C], 'little') == want_sum),
         ('the same sector read into a buffer crossing a 64KB boundary (2FC0:0200): 00h and the same contents',
          rec[0x35B] == 0 and int.from_bytes(rec[0x35C:0x35E], 'little') == want_sum),
+        ('the same sector read into VRAM (A800:0000): 00h and the same contents read back from VRAM',
+         rec[0x35E] == 0 and int.from_bytes(rec[0x35F:0x361], 'little') == want_sum),
         ('result bytes in the work area: ST0=00, next R=3', rec[0x30C] == 0 and rec[0x311] == 3),
         ('port 31h returns the guest SW2 (F4h)', rec[0x315] == 0xF4),
         ('port 33h bit 3 follows SW1-1, which is "*" (the host value)', (rec[0x316] & 0x08) == (h33 & 0x08)),
@@ -703,7 +707,7 @@ def test_v86(work):
         return True
     with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
         ipl = f.read()
-    pattern = bytes((i * 13 + 7) & 0xFF for i in range(1024))
+    pattern = bytes((i * 13 + 8) & 0xFF for i in range(1024))
     img = bytearray(77 * 2 * 8 * 1024)
     img[0:1024] = ipl
     img[1024:2048] = pattern
@@ -849,7 +853,7 @@ def test_msdos(work):
         return True
     with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
         ipl = f.read()
-    pattern = bytes((i * 13 + 7) & 0xFF for i in range(1024))
+    pattern = bytes((i * 13 + 8) & 0xFF for i in range(1024))
     want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 1024, 2)) & 0xFFFF
     ok = True
     ver6 = False
@@ -994,7 +998,7 @@ def test_nfdid(work):
     切り分けのためにトラック 0 の R=1 の ID を表示して終わる)"""
     with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
         ipl = f.read()
-    pattern = bytes((i * 13 + 7) & 0xFF for i in range(1024))
+    pattern = bytes((i * 13 + 8) & 0xFF for i in range(1024))
     want_sum = sum(int.from_bytes(pattern[i:i + 2], 'little') for i in range(0, 1024, 2)) & 0xFFFF
     data_at = 0
     for name, c1, status1 in (('N1.NFD', 1, 0), ('N2.NFD', 0, 0xD0)):
