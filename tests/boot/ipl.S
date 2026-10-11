@@ -158,6 +158,8 @@ after_reset:
         mov     [rec_ext], al
         mov     ax, es:[0x0594]
         mov     [rec_ext + 1], ax
+        mov     al, es:[0x0482]         /* SCSI の HDD の接続フラグ。ホストの値がゲストに写っていないか */
+        mov     [rec_scsi], al
         mov     ax, es:[0x1B * 4]
         mov     [rec_v1b], ax
         mov     ax, es:[0x1B * 4 + 2]
@@ -292,4 +294,5 @@ rec_zsum:       .word   0
 rec_imr:        .skip   2
 rec_dma:        .skip   4
 rec_equip:      .skip   3
+rec_scsi:       .byte   0
         .org    1024

@@ -40,6 +40,7 @@
 #define WA_BOOT         0x0584      /* 起動装置の DA/UA */
 #define WA_EXTMEM       0x0401      /* 拡張メモリ量 (16MB 未満、128KB 単位) */
 #define WA_EXTMEM16     0x0594      /* 拡張メモリ量 (16MB 以上、1MB 単位の語) */
+#define WA_SCSI_EQUIP   0x0482      /* SCSI の HDD の接続フラグ (bit n = ID n。実機の報告から。design.md §12) */
 
 u8 pio_in8(u16 port);
 void pio_out8(u16 port, u8 val);
@@ -867,6 +868,12 @@ static FARTEXT int __far guest_memory(int first)
      */
     g_rmw8(WA_EXTMEM, 0, 0xFF);
     g_write(WA_EXTMEM16, mon_data_seg(), (u16)(unsigned)zero2, 2);
+    /*
+     * ゲストには HDD がない (spec.md)。SCSI の HDD の接続フラグ (0482h) はホストのものが写っていて、ゲストの OS が
+     * その HDD を探しに行っていた (実機の報告: SCSI の HDD から起動したホストで、FreeDOS(98) のゲストが進まない。
+     * 報告者が 0482h を 0 にすると進むことを確かめた。design.md §6)。SASI の分は 055Dh の下位ビットで、boot_equip が 0 にする
+     */
+    g_rmw8(WA_SCSI_EQUIP, 0, 0xFF);
     if (dip_on)
         dipsw_workarea();
     else if (dip_gdc25)

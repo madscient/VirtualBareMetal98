@@ -745,7 +745,7 @@ def boot_rec(path):
     return {'ran': rec[0x300:0x308] == b'VBM98IPL', 'ext': rec[0x32B:0x32E], 'v1b': far(0x32E), 'f7': rec[0x332:0x336],
             'v09': far(0x336), 'v1a': far(0x33A), 'hook': rec[0x33E], 'v19': far(0x33F),
             'v89': far(0x343), 'v8a': far(0x347), 'zsum': int.from_bytes(rec[0x34B:0x34D], 'little'),
-            'p31': rec[0x315], 'prxdupd': rec[0x31C], 'imr_m': rec[0x34D], 'imr_s': rec[0x34E]}
+            'p31': rec[0x315], 'prxdupd': rec[0x31C], 'imr_m': rec[0x34D], 'imr_s': rec[0x34E], 'scsi': rec[0x356]}
 
 
 def test_hook(work):
@@ -795,6 +795,8 @@ def test_hook(work):
         ('batch finished', finished),
         ('the IPL ran both before and after the TSR was loaded', a['ran'] and b['ran']),
         ('no extended memory is shown to the guest although the host work area has some', b['ext'] == b'\0\0\0'),
+        ('no SCSI hard disk is shown to the guest although the host work area (0482h) says two are connected',
+         b['scsi'] == 0),
         ('INT 09h hooked by the TSR (pushf + call far): the guest still gets the ROM entry it had before', b['v09'] == a['v09']),
         ('INT 1Ah hooked by the TSR (jmp far): the guest still gets the ROM entry it had before', b['v1a'] == a['v1a']),
         ('INT 19h hooked by the TSR: the ROM address it calls first is reported as not an entry',

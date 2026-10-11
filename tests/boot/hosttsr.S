@@ -121,6 +121,7 @@ install:
         mov     word ptr es:[0x8A * 4 + 2], 0
         mov     byte ptr es:[0x0401], 0x68
         mov     word ptr es:[0x0594], 0x0010
+        mov     byte ptr es:[0x0482], 0x81      /* SCSI の HDD #0 と #7 がつながっている、という印 */
 
         /* F000:0000 から CBh (RETF) を探す。SCASB は ES:DI を見る */
         push    es

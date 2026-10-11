@@ -16,6 +16,7 @@
 #include "shot.h"
 #include "png.h"
 #include "dosio.h"
+#include "vbm.h"
 
 #define WIDTH       640
 #define HEIGHT      400
@@ -259,6 +260,13 @@ static FARTEXT int __far save_text(struct sink_ctx *s)
     text_palette(rgb, alpha);
     if (png_begin(&w, sink, s, WIDTH, HEIGHT, rgb, 9, alpha))
         return 1;
+    /*
+     * CG ROM をポート (A9h) で読むには、KAC をドットアクセスのモード (68h ← 0Bh) にしておく必要がある機種がある
+     * (実機の報告: PC-9801RA2 では、ゲストが KAC を使っていないときのテキストの絵が、全セルが塗りつぶされた形になった。
+     * 文献 (undoc98) にもその旨があるとのこと。design.md §12)。撮る間だけそのモードにし、終わったらゲストの設定
+     * (vid_mode68) へ戻す。エミュレータ (NP2 系) は CG の読み出しを KAC に依らせていないので、違いは試験で見えない
+     */
+    pio_out8(0x68, 0x0B);
     shot_rev_cells = shot_hidden_cells = 0;
     for (r = 0; r < ROWS; r++) {
         u16 c;
@@ -277,10 +285,13 @@ static FARTEXT int __far save_text(struct sink_ctx *s)
         gather_patterns();
         for (line = 0; line < CELL_H; line++) {
             pack_text_line(line);
-            if (png_row(&w, packed))
+            if (png_row(&w, packed)) {
+                pio_out8(0x68, (u8)((vid_mode68 & 0x20) ? 0x0B : 0x0A));
                 return 1;
+            }
         }
     }
+    pio_out8(0x68, (u8)((vid_mode68 & 0x20) ? 0x0B : 0x0A));
     return png_end(&w) != 0;
 }
 
