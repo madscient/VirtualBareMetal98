@@ -18,7 +18,7 @@
     menu     VM メニュー。-menuat で開き -menukeys で操作して、画面の復元とゲストの再開を見る
     page0    ゲストが BIOS のワークエリアに書いたものを BIOS が使うか (ゲストの 0 番ページの置き場)
     kdefer   ゲストが割り込み禁止のままホスト世界へ行った間のキーが、あとで届くか
-    keys     ホスト世界にいる間 (INT 1Bh の処理中) に押されたキーがゲストに届くか (DOSBox-X だけ)
+    keys     ホスト世界にいる間 (INT 1Bh の処理中) に押されたキーがゲストに届くか、VM メニューが実物のキーで閉じるか (DOSBox-X だけ)
     v86      EMM386 (VCPI) の下での起動 (NP21/W だけ)
 
 引数を省くと全部を走らせる。事前に tools/build16.sh でビルドしておく。
@@ -889,7 +889,41 @@ def test_keys(work):
     for name, c in checks:
         print('%s %s' % ('ok  ' if c else 'FAIL', name))
         ok = ok and c
+    ok = menu_real_keys(work) and ok
     print('ホスト世界でのキー: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
+def menu_real_keys(work):
+    """VM メニューのキー待ちに、実物のキー (AUTOTYPE の ESC) で答える。ほかの試験は開発用のキー列 (-menukeys) で
+    答えるので、ホストの BIOS がキーボード割り込みで受け取ったキーを待つ経路を通らない。届かなければメニューが
+    閉じず、時間切れになる。ESC は間を置いて 3 回送る (1 回目がメニューを閉じる。残りはゲストか DOS が捨てる)。
+    待っている間の様子がログに残ることも見る (design.md §19)"""
+    with open(os.path.join(BUILT, 'SHOTIPL.BIN'), 'rb') as f:
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = f.read()
+    with open(os.path.join(work, 'KM.IMG'), 'wb') as f:
+        f.write(img)
+    for name in ('KM.OUT', 'KM.LOG'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    finished = dosenv.run_batch(['AUTOTYPE -w 4 -p 2 esc esc esc',
+                                 'VBM98.EXE -fdd0 KM.IMG -tick -menuat 50 -stopafter 150 -log KM.LOG > KM.OUT'], 60, core='normal')
+    log = imgtests.read_lines(work, 'KM.LOG') or []
+    for line in log:
+        if 'key wait' in line or 'VM menu' in line or 'stopped after' in line:
+            print('  ' + line[:150])
+    checks = (
+        ('VM menu, real keys: batch finished', finished),
+        ('VM menu, real keys: the log has the state at the start of the key wait',
+         any('key wait, 0 polls: PIC ' in l and 'INT 09h ' in l for l in log)),
+        ('VM menu, real keys: ESC from the keyboard closed the menu', any('VM menu (hotkey): resumed' in l for l in log)),
+        ('VM menu, real keys: the guest went on after the menu', any('stopped after 150' in l for l in log)),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
     return ok
 
 

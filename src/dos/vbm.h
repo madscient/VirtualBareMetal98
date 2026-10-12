@@ -221,6 +221,7 @@ FARTEXT const char * __far vm_drive_name(int unit);                   /* 入っ�
 FARTEXT int __far vm_shot(char *gname);                              /* スクリーンショット。gname (13 バイト以上) に G 側のファイル名。0 なら名前はいらない */
 FARTEXT void __far vm_screen_pause(void);                            /* メニューを開く: グラフィック表示を消し、テキストを 25 行・80 桁にする (VRAM には触らない) */
 FARTEXT void __far vm_screen_resume(void);                           /* メニューを閉じる: 表示系をゲストが設定していた状態へ戻す */
+FARTEXT void __far vm_kbd_watch(u32 polls);                          /* キー待ちの間の、キーボードの割り込みまわりの様子をログに残す。polls は待ち始めてから BIOS にキーの有無を聞いた回数 */
 
 /* 開発用: モニタに届いたものの記録 (ring 0 側が書き、ホストが止めたときに表示する) */
 #define EVLOG_SIZE 32

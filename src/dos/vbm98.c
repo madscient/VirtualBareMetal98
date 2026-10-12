@@ -2020,6 +2020,81 @@ static FARTEXT void __far isr_note(const char *what)
         log_line("VBM98: %s while interrupts were in service (master %02X, slave %02X)\n", what, m, s);
 }
 
+/*
+ * メニューのキー待ち (ui.c の ui_getkey) の間の、キーボードの割り込みまわりの様子をログに残す (design.md §19)。
+ * キーを待ったまま固まった、という報告のログから、どこで止まっているかを見分ける: 割り込みが閉じている、処理中の
+ * まま残っている、受信したまま読まれていない、ベクタの先が違う、BIOS は受け取っているのに待ちが終わらない。
+ * 残すのは、待ち始め (polls = 0)、前に残した行から様子が変わったとき、何も変わらないまま回数が 4 倍になるごと
+ * (行が増えていれば、止まっているのは CPU ではない)。1 回の待ちで KBD_WATCH_MAX 行まで。ログを取っていなければ
+ * ポートにも触らない。
+ * ワークエリアは 0524h から 23 バイトをそのまま出す: キーバッファの読み書きの位置と個数 (0524h・0526h・0528h)、
+ * キー状態の表 (052Ah から 16 バイト)。出典は design.md §12。末尾の 053Ah はシフトキーの状態 (未検証: 記憶による)
+ */
+#define KBD_WATCH_MAX 16
+#define KBD_WATCH_WA  0x0524
+#define KBD_WATCH_LEN 23
+
+struct kbd_seen {
+    u8 pic[6];      /* マスタの IMR・IRR・ISR、スレーブの IMR・IRR・ISR */
+    u8 stat;        /* キーボードの 8251 の状態 (ポート 43h。bit 1 が受信あり、bit 3〜5 がエラー) */
+    u8 vec[4];      /* INT 09h のベクタ */
+    u8 wa[KBD_WATCH_LEN];
+};
+
+FARTEXT void __far vm_kbd_watch(u32 polls)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    static struct kbd_seen last;
+    static char wa_hex[KBD_WATCH_LEN * 3 + 1];
+    static u32 next;
+    static u8 lines;
+    struct kbd_seen now, cmp;
+    u8 i;
+
+    if (!log_is_open())
+        return;
+    if (!polls) {
+        lines = 0;
+        next = 0x4000;
+    } else if (lines >= KBD_WATCH_MAX) {
+        return;
+    }
+    /* 読み出し選択 (OCW3) を書いてから読むまでの間に、同じことをするホストのハンドラを挟まない */
+    _disable();
+    now.pic[0] = pio_in8(PIC_M_IMR);
+    now.pic[1] = pic_read(0x00, 0x0A);
+    now.pic[2] = pic_read(0x00, 0x0B);
+    now.pic[3] = pio_in8(PIC_S_IMR);
+    now.pic[4] = pic_read(0x08, 0x0A);
+    now.pic[5] = pic_read(0x08, 0x0B);
+    now.stat = pio_in8(0x43);
+    _fmemcpy(now.vec, MK_FP(0, 0x09 * 4), 4);
+    _fmemcpy(now.wa, MK_FP(0, KBD_WATCH_WA), KBD_WATCH_LEN);
+    _enable();
+    /*
+     * 変わったかどうかは、閉じてある割り込みの要求を除いて比べる。ゲストが動かしたままのタイマや VSYNC の要求は、
+     * ホスト世界では閉じたまま立ったり消えたりし続けるので、そのまま比べると行数を使い切る
+     */
+    cmp = now;
+    cmp.pic[1] &= (u8)~cmp.pic[0];
+    cmp.pic[4] &= (u8)~cmp.pic[3];
+    if (polls && polls < next && memcmp(&cmp, &last, sizeof cmp) == 0)
+        return;
+    while (polls >= next)
+        next <<= 2;
+    last = cmp;
+    lines++;
+    for (i = 0; i < KBD_WATCH_LEN; i++) {
+        wa_hex[i * 3] = ' ';
+        wa_hex[i * 3 + 1] = hex[now.wa[i] >> 4];
+        wa_hex[i * 3 + 2] = hex[now.wa[i] & 15];
+    }
+    log_line("VBM98: key wait, %lu polls: PIC %02X %02X %02X / %02X %02X %02X (IMR IRR ISR, master / slave), 8251 %02X, "
+             "INT 09h %02X%02X:%02X%02X, work %04Xh:%s\n", (unsigned long)polls,
+             now.pic[0], now.pic[1], now.pic[2], now.pic[3], now.pic[4], now.pic[5], now.stat,
+             now.vec[3], now.vec[2], now.vec[1], now.vec[0], KBD_WATCH_WA, wa_hex);
+}
+
 /* 開発用: 止めたときのゲストの様子 */
 static const char *const ev_kinds[] = { "irq", "int", "wake", "stub", "fault" };
 

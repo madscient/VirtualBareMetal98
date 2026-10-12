@@ -138,10 +138,17 @@ static FARTEXT void __far dev_hold(void)
     }
 }
 
-/* INT 18h AH=00h: キーを 1 つ読む (AH = スキャンコード、AL = 文字)。AH=01h: 読まずに有無を見る (BH が 0 なら無し) */
+/* 待っている間の様子 (vm_kbd_watch) を見に行く間隔。BIOS にキーの有無を聞いた回数で数える */
+#define WATCH_EVERY 0x400
+
+/*
+ * INT 18h AH=00h: キーを 1 つ読む (AH = スキャンコード、AL = 文字)。AH=01h: 読まずに有無を見る (BH が 0 なら無し)。
+ * 待つのを BIOS (AH=00h) に任せず、有無を聞きながら待つ。任せると、キーが来ないまま固まったときに何も残せない
+ */
 FARTEXT u16 __far ui_getkey(void)
 {
     union REGS r;
+    u32 polls = 0;
 
     if (dev_keys) {
         /* FFh は「約 1 秒待つ」: 画面を何コマか出したままにする (閉じたあとの表示を外から撮って確かめるため) */
@@ -153,9 +160,19 @@ FARTEXT u16 __far ui_getkey(void)
             return (u16)(dev_keys[dev_keyi++] << 8);
         return (u16)(UI_SC_ESC << 8);
     }
+    vm_prog('K');
+    for (;;) {
+        if (!(polls & (WATCH_EVERY - 1)))
+            vm_kbd_watch(polls);
+        memset(&r, 0, sizeof r);
+        r.h.ah = 0x01;
+        int86(0x18, &r, &r);
+        if (r.h.bh)
+            break;
+        polls++;
+    }
     memset(&r, 0, sizeof r);
     r.h.ah = 0x00;
-    vm_prog('K');
     int86(0x18, &r, &r);
     vm_prog('k');
     return (u16)((r.h.ah << 8) | r.h.al);
