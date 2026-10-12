@@ -175,6 +175,27 @@ static void kbd_wait_release(u8 key)
 }
 
 /*
+ * スキャンコードを 1 つ見て、CTRL と GRPH の押下状態を追う。その 2 つを押したままホットキーのキーが押されたら
+ * X_HOTKEY_* を、そうでなければ 0 を返す。ポートには触らないので、ホスト世界で控えたキー (vbm98.c の feed_keys) に
+ * ついても同じものを呼ぶ (そこで押された修飾キーを見落とすと、ホットキーが効かなくなる)
+ */
+u16 kbd_note(u8 sc)
+{
+    u8 key = (u8)(sc & ~SC_BREAK);
+
+    if (key == SC_CTRL)
+        kbd_ctrl = (u8)!(sc & SC_BREAK);
+    else if (key == SC_GRPH)
+        kbd_grph = (u8)!(sc & SC_BREAK);
+    else if (kbd_ctrl && kbd_grph && !(sc & SC_BREAK))
+        return (key == SC_STOP || (kbd_stop_alt && key == kbd_stop_alt)) ? X_HOTKEY_STOP :
+               (key == SC_COPY || (kbd_shot_alt && key == kbd_shot_alt)) ? X_HOTKEY_SHOT :
+               key == SC_DEL ? X_HOTKEY_RESET : key == SC_HELP ? X_HOTKEY_MENU :
+               key == SC_PAD0 ? X_HOTKEY_FDD0 : key == SC_PAD1 ? X_HOTKEY_FDD1 : 0;
+    return 0;
+}
+
+/*
  * キーボード割り込み。ホットキーを見るためにスキャンコードをここで読んでしまうので、ゲストには
  * ポート 41h/43h のトラップで同じ値を見せる (mon_on_in)。ホットキーはゲストに渡さず、戻り値で
  * mon_run を抜ける。0 を返したらゲストへ反射する
@@ -182,21 +203,11 @@ static void kbd_wait_release(u8 key)
 static u16 kbd_irq(void)
 {
     u8 sc = mon_in8(KBD_DATA);
-    u8 key = (u8)(sc & ~SC_BREAK);
-    u16 x = 0;
+    u16 x = kbd_note(sc);
 
-    if (key == SC_CTRL)
-        kbd_ctrl = (u8)!(sc & SC_BREAK);
-    else if (key == SC_GRPH)
-        kbd_grph = (u8)!(sc & SC_BREAK);
-    else if (kbd_ctrl && kbd_grph && !(sc & SC_BREAK))
-        x = (key == SC_STOP || (kbd_stop_alt && key == kbd_stop_alt)) ? X_HOTKEY_STOP :
-            (key == SC_COPY || (kbd_shot_alt && key == kbd_shot_alt)) ? X_HOTKEY_SHOT :
-            key == SC_DEL ? X_HOTKEY_RESET : key == SC_HELP ? X_HOTKEY_MENU :
-            key == SC_PAD0 ? X_HOTKEY_FDD0 : key == SC_PAD1 ? X_HOTKEY_FDD1 : 0;
     if (x) {
         eoi(IRQ_FIRST + 1);
-        kbd_wait_release(key);
+        kbd_wait_release((u8)(sc & ~SC_BREAK));
         kbd_hot = 1;
         return x;
     }

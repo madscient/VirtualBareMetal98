@@ -45,6 +45,11 @@
 u8 pio_in8(u16 port);
 void pio_out8(u16 port, u8 val);
 u16 cpu_msw(void);
+void kbd_tap_init(void);        /* kbdtap.S */
+void kbd_tap_set(u8 on);
+u8 kbd_tap_count(void);
+u8 kbd_tap_take(u8 *dst);
+u8 kbd_tap_lost(void);
 
 static int v86;     /* EMM などの仮想86モニタの下で動いている (VCPI 経由で切替する) */
 
@@ -1366,9 +1371,12 @@ static FARTEXT void __far print_hits(void)
  * ハンドラが 41h を読むとモニタが kbd_code を返す。IRET で横取り印に来たら (X_KBD_DONE) 次を
  * 注入するか、控えておいた本来の CS:IP に戻す。FLAGS は注入時に積んだ元の値を IRET が戻している
  */
-static u8 inject_queue[2];
+static u8 inject_queue[KBD_TAP_MAX];
 static u8 inject_n, inject_i;
+static u8 inject_busy;      /* 注入したハンドラがまだ戻っていない (resume_cs:resume_ip が生きている) */
 static u16 resume_cs, resume_ip;
+/* ホスト世界で控えたキーの行き先 (止めたときの表示に出す): ゲストへ渡した数、あふれて捨てた数、見送ったホットキーの数 */
+static u16 tap_fed, tap_dropped, tap_hot;
 
 static void inject_next(struct mon_guest *g)
 {
@@ -1392,12 +1400,13 @@ static void inject_next(struct mon_guest *g)
     g->eflags &= ~(u32)(EFL_IF | EFL_TF);
     kbd_code = inject_queue[inject_i++];
     kbd_pending = 1;
+    inject_busy = 1;
 }
 
 /* メニューから戻るとき。ゲストが割り込みを受けられる状態 (IF=1) のときだけ注入する */
 static void resume_keys(struct mon_guest *g)
 {
-    if (!(g->eflags & EFL_IF))
+    if (!(g->eflags & EFL_IF) || inject_busy)
         return;
     inject_queue[0] = 0xF4;     /* CTRL の break (make 74h + 80h) */
     inject_queue[1] = 0xF3;     /* GRPH の break */
@@ -1412,6 +1421,45 @@ static void kbd_done(struct mon_guest *g)
     g->ip = resume_ip;
     if (inject_i < inject_n)
         inject_next(g);
+    else
+        inject_busy = 0;
+}
+
+static u8 pic_read(u8 cmd_port, u8 ocw3);
+
+/*
+ * ホスト世界にいる間に控えたキー (kbdtap.S) を、ゲストのキーボード割り込みのハンドラへ順に渡す (design.md §7)。
+ * ゲストへ入る前に毎回呼ぶ。渡せるのは、ゲストが割り込みを受けられ (IF=1)、処理中の割り込みが無いときだけ:
+ * ハンドラが出す EOI は、処理中のもののうち優先順位のいちばん高い 1 つを片付けるので、別の割り込みの処理の途中で
+ * 渡すと、その割り込みを片付けてしまう。渡せないときは控えたまま次の機会を待つ。
+ * 修飾キーの状態はここでも追う (kbd_note)。ホスト世界にいる間に押し終えたホットキーは、ゲストへ渡さずに捨てる
+ */
+static void feed_keys(struct mon_guest *g)
+{
+    static u8 codes[KBD_TAP_MAX];
+    u8 i, n;
+
+    if (inject_busy || !(g->eflags & EFL_IF) || !kbd_tap_count())
+        return;
+    _disable();
+    if (pic_read(0x00, 0x0B)) {
+        _enable();
+        return;
+    }
+    n = kbd_tap_take(codes);
+    tap_dropped += kbd_tap_lost();
+    _enable();
+    inject_n = inject_i = 0;
+    for (i = 0; i < n; i++) {
+        if (kbd_note(codes[i]))
+            tap_hot++;
+        else
+            inject_queue[inject_n++] = codes[i];
+    }
+    if (inject_n) {
+        tap_fed += inject_n;
+        inject_next(g);
+    }
 }
 
 /* ---------------------------------------------------------------- リセット */
@@ -1441,6 +1489,7 @@ static FARTEXT int __far vm_reset(struct mon_guest *g)
     screen_clear();
     kbd_pending = 0;
     inject_n = inject_i = 0;
+    inject_busy = 0;
     dma_reset();
     guest_imr_m = init_imr_m;
     guest_imr_s = init_imr_s;
@@ -1784,6 +1833,8 @@ static FARTEXT void __far dump_guest(const struct mon_guest *g, int fault)
     for (i = 0; i < 16; i++)
         if (irq_hits[i])
             say(" %02X=%u", i + 8, irq_hits[i]);
+    say("\nVBM98: keys taken in the host world: %u passed to the guest, %u dropped (queue full), %u hotkeys ignored",
+        tap_fed, tap_dropped, tap_hot);
     say("\nVBM98: V30 instructions emulated: %u", v30_emul_n);
     if (v30_emul_n)
         say(" (first at %04X:%04X: %02X %02X %02X %02X)", (unsigned)(v30_emul_first >> 16), (unsigned)(u16)v30_emul_first,
@@ -1831,6 +1882,7 @@ static void tick_arm(void)
 
 static void guest_hw(void)
 {
+    kbd_tap_set(0);
     /*
      * ホスト世界にいる間に、ホストの BIOS / DOS がカウンタ 0 を別のモードに設定し直すことがある (インターバル
      * タイマ)。そのままだと時計が止まるので、戻るたびに設定し直す (design.md §12)
@@ -1841,7 +1893,14 @@ static void guest_hw(void)
     pio_out8(PIC_S_IMR, guest_imr_s);
 }
 
-static void host_hw(void)
+/* ホストがキーボードを使わない戻り方か。その間に押されたキーは控えておき、ゲストへ渡す (feed_keys) */
+static int taps(u16 rc)
+{
+    return rc == X_INT1B || rc == X_KBD_DONE || rc == X_LOGTICK;
+}
+
+/* rc はゲストから戻った理由 */
+static void host_hw(u16 rc)
 {
     guest_imr_m = pio_in8(PIC_M_IMR);
     guest_imr_s = pio_in8(PIC_S_IMR);
@@ -1849,6 +1908,8 @@ static void host_hw(void)
         guest_imr_m = (u8)((guest_imr_m & 0xFE) | guest_imr0);
     pio_out8(PIC_M_IMR, host_imr_m);
     pio_out8(PIC_S_IMR, host_imr_s);
+    if (taps(rc))
+        kbd_tap_set(1);
     if (imrlog_n < IMRLOG_SIZE) {
         imrlog[imrlog_n].m = guest_imr_m;
         imrlog[imrlog_n].s = guest_imr_s;
@@ -2109,6 +2170,7 @@ int main(int argc, char **argv)
     /* ゲストの割り込みマスクの初期値は、電源投入後の BIOS が残す値に近いホストの現在値 */
     host_imr_m = pio_in8(PIC_M_IMR);
     host_imr_s = pio_in8(PIC_S_IMR);
+    kbd_tap_init();
     guest_imr_m = o.have_imr ? o.imr[0] : (u8)(host_imr_m | held_imr_m);
     guest_imr_s = o.have_imr ? o.imr[1] : (u8)(host_imr_s | held_imr_s);
     init_imr_m = guest_imr_m;
@@ -2164,6 +2226,7 @@ int main(int argc, char **argv)
          * (確認済み: NP21/W でイース2 の VSYNC が INT 1Bh の処理をまたいだときに途絶えた)。
          * mon_enter はこの CLI の状態を保存し、戻るときに復元するので、host_hw まで禁止が続く
          */
+        feed_keys(&g);
         _disable();
         kbd_hot = 0;
         prog_enters++;
@@ -2172,7 +2235,7 @@ int main(int argc, char **argv)
         rc = mon_run(&g);
         prog_rc = rc;
         vm_prog('H');
-        host_hw();
+        host_hw(rc);
         if (stops(rc))
             stop_report(rc, &g);
         _enable();

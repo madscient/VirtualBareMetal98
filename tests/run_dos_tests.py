@@ -15,6 +15,7 @@
     con      出力をファイルに向けずに走らせたとき、DOS に戻ったあとの画面に残る表示
     isr      ゲストが割り込みの処理の途中のまま離れたとき、割り込みコントローラを片付けて DOS に戻るか
     menu     VM メニュー。-menuat で開き -menukeys で操作して、画面の復元とゲストの再開を見る
+    keys     ホスト世界にいる間 (INT 1Bh の処理中) に押されたキーがゲストに届くか (DOSBox-X だけ)
     v86      EMM386 (VCPI) の下での起動 (NP21/W だけ)
 
 引数を省くと全部を走らせる。事前に tools/build16.sh でビルドしておく。
@@ -708,6 +709,49 @@ def test_menu(work):
     return ok
 
 
+def test_keys(work):
+    """ホスト世界にいる間に押されたキーがゲストに届くか。試験用の IPL (tests/boot/keyipl.S) は INT 1Bh でディスクを
+    読み続けながら、キーボード割り込みで届いたスキャンコードを記録し、12 個で止まる。読み続ける間はほとんどの時間が
+    ホスト世界なので、届かなければ止まらない (時間切れになる)。キーは DOSBox-X の AUTOTYPE で a〜f を送る
+    (NP21/W には、ハードウェアの段でキーを送る手段がない)"""
+    if dosenv.name() != 'dosboxx':
+        print('ホスト世界でのキー: DOSBox-X でだけ走らせる (キーの自動送出が要る)')
+        return True
+    with open(os.path.join(BUILT, 'KEYIPL.BIN'), 'rb') as f:
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = f.read()
+    with open(os.path.join(work, 'KEY.IMG'), 'wb') as f:
+        f.write(img)
+    for name in ('KEY.OUT', 'KEY.LOG'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    # 止まるとメニューが開くので、開発用のキー列で「4 (終了)、Y」と答える。止まった所の様子 (-peek を含む) はログに残る
+    finished = dosenv.run_batch(['AUTOTYPE -w 3 -p 0.3 a b c d e f',
+                                 'VBM98.EXE -fdd0 KEY.IMG -peek 00600 -menukeys 04,15 -log KEY.LOG > KEY.OUT'], 60, core='normal')
+    log = imgtests.read_lines(work, 'KEY.LOG') or []
+    for line in log:
+        if 'guest 00600' in line or 'keys taken' in line or 'halted' in line:
+            print('  ' + line)
+    # a〜f の押す符号と離す符号 (PC-98 のスキャンコード)。先頭は IPL が数えた個数
+    want = '0C 1D 9D 2D AD 2B AB 1F 9F 12 92 20 A0'
+    taken = [l for l in log if 'keys taken in the host world:' in l]
+    passed = int(taken[0].split('world:')[1].split()[0]) if taken else -1
+    checks = (
+        ('batch finished: the IPL saw all 12 key events and halted', finished),
+        ('the guest received the make and break codes of a-f, in the order they were typed',
+         any(l.startswith('VBM98: guest 00600: ' + want) for l in log)),
+        ('some of them were typed while the host was serving INT 1Bh, and were passed on (the path under test was taken)',
+         passed >= 1),
+        ('none was dropped', bool(taken) and ' 0 dropped' in taken[0]),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('ホスト世界でのキー: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
 def test_v86(work):
     """EMM386 (VCPI あり) を読み込んだ DOS で、仮想86モードにいることを検出し、VCPI 経由で切り替えて起動試験の IPL が
     動くか。見るのは起動試験の一部 (INT 1Bh の往復とリセット) と、VCPI を使った旨の表示"""
@@ -1060,7 +1104,8 @@ def test_nfdid(work):
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
          ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos), ('nfdid', 'VBM98.EXE', test_nfdid),
          ('boot2dd', 'VBM98.EXE', test_boot2dd),
-         ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('isr', 'VBM98.EXE', test_isr), ('menu', 'VBM98.EXE', test_menu), ('v86', 'VBM98.EXE', test_v86))
+         ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('isr', 'VBM98.EXE', test_isr), ('menu', 'VBM98.EXE', test_menu), ('keys', 'VBM98.EXE', test_keys),
+         ('v86', 'VBM98.EXE', test_v86))
 
 
 def main(argv):

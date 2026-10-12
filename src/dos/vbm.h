@@ -180,6 +180,10 @@ extern u32 dev_log_every;
  * ホストがキー割り込みを注入するとき (design.md §9) もここに置いてからゲストのハンドラへ入る
  */
 extern u8 kbd_pending, kbd_code;
+/* スキャンコードを 1 つ見て修飾キーの状態を追う。ホットキーが成立したら X_HOTKEY_*、そうでなければ 0 (vbm_r0.c) */
+u16 kbd_note(u8 sc);
+/* ホスト世界にいる間に控えるキーの数の上限 (kbdtap.S の TAP_MAX と同じ値) */
+#define KBD_TAP_MAX 16
 
 /* ---- ホスト世界の仮想マシン操作 (vbm98.c)。メニュー (menu.c) から呼ぶ ---- */
 FARTEXT int __far vm_mount(int unit, const char *path, int quiet);   /* 0 で成功。前に入っていたイメージは閉じる */

@@ -130,6 +130,7 @@ cc src/dos/xms.c "$strict"
 cc src/dos/xmsasm.S ""
 cc src/dos/pio.S ""
 cc src/dos/romtrace.S ""
+cc src/dos/kbdtap.S ""
 cc src/mon/mon.c "$strict"
 cc src/mon/monmem.c "$strict"
 cc_r0 src/mon/mon_r0.c
@@ -172,6 +173,9 @@ ls -l "$out/FAULTIPL.BIN" | awk '{print $5, "bytes  FAULTIPL.BIN"}'
 ia16-elf-gcc -c "$root/tests/boot/isripl.S" -o "$out/isripl.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/ISRIPL.BIN" "$out/isripl.o"
 ls -l "$out/ISRIPL.BIN" | awk '{print $5, "bytes  ISRIPL.BIN"}'
+ia16-elf-gcc -c "$root/tests/boot/keyipl.S" -o "$out/keyipl.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/KEYIPL.BIN" "$out/keyipl.o"
+ls -l "$out/KEYIPL.BIN" | awk '{print $5, "bytes  KEYIPL.BIN"}'
 ia16-elf-gcc -c "$root/tests/boot/shotipl.S" -o "$out/shotipl.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTIPL.BIN" "$out/shotipl.o"
 ls -l "$out/SHOTIPL.BIN" | awk '{print $5, "bytes  SHOTIPL.BIN"}'
