@@ -10,6 +10,7 @@
  *   +000h          INT 1Bh のベクタの先
  *   +100h + vec*4  ホストの RAM を指していたベクタ vec の先 (vec < 20h)
  *   +200h          ホストが注入したキー割り込みの戻り先 (design.md §9)
+ *   +204h          控えたキーを渡す機会を作るために差し替えた、ゲストの割り込みハンドラの戻り先 (design.md §7)
  *   +300h          IRET 1 バイト。20h 以上のベクタのうち、ホストの RAM を指していたものの飛び先 (design.md §6)
  */
 extern u16 hook_seg;                    /* ページのセグメント (ring 0 側が持つ。vbm98.c が起動時に決める) */
@@ -19,6 +20,7 @@ extern u16 hook_seg;                    /* ページのセグメント (ring 0 �
 #define HOOK_VEC_OFF   0x100
 #define HOOK_VEC_MAX   0x20
 #define HOOK_KBD_OFF   0x200
+#define HOOK_FEED_OFF  0x204
 #define HOOK_IRET_OFF  0x300
 
 /* 横取り印の識別子 */
@@ -26,6 +28,7 @@ extern u16 hook_seg;                    /* ページのセグメント (ring 0 �
 #define HOOK_RESET 2
 #define HOOK_VEC   3
 #define HOOK_KBD   4
+#define HOOK_FEED  5
 
 /* mon_run の戻り値 (組み込み側が決めるもの) */
 #define X_INT1B  1   /* INT 1Bh の処理をホストに頼む。戻り先はもうゲストのスタックから戻してある */
@@ -41,6 +44,7 @@ extern u16 hook_seg;                    /* ページのセグメント (ring 0 �
 #define X_KBD_DONE     10  /* ホストが注入したキー割り込みのハンドラが戻った (HOOK_KBD)。ホストが次を注入するか再開する */
 #define X_HOTKEY_RESET 11  /* DEL: リセット (実機の CTRL+GRPH+DEL と同じ組み合わせ) */
 #define X_LOGTICK      12  /* -log の心拍: 一定の刻みごとにホストへ戻り、ゲストの様子をログに書いてすぐ戻る */
+#define X_KBD_FEED     13  /* 控えたキーを渡せる所に来た (HOOK_FEED)。戻り先は本来の CS:IP に直してある */
 
 /*
  * ゲストが書いた表示系の写し (ring 0 側が持つ。スクリーンショットの色のため):
@@ -180,6 +184,12 @@ extern u32 dev_log_every;
  * ホストがキー割り込みを注入するとき (design.md §9) もここに置いてからゲストのハンドラへ入る
  */
 extern u8 kbd_pending, kbd_code;
+/*
+ * ホスト世界で控えたキーのうち、ゲストへ渡せずに残っているものがある (vbm98.c の feed_keys が入れる)。立っていると、
+ * ring 0 側が次のハードウェア割り込みをゲストへ渡すとき、ハンドラの戻り先を横取り印 (HOOK_FEED) に差し替える。
+ * ハンドラが IRET で戻ってきた所 (割り込まれた側の FLAGS に戻っている) で X_KBD_FEED を返す
+ */
+extern u8 kbd_feed_wait;
 /* スキャンコードを 1 つ見て修飾キーの状態を追う。ホットキーが成立したら X_HOTKEY_*、そうでなければ 0 (vbm_r0.c) */
 u16 kbd_note(u8 sc);
 /* ホスト世界にいる間に控えるキーの数の上限 (kbdtap.S の TAP_MAX と同じ値) */

@@ -128,6 +128,10 @@ static u16 xms_handle;
 static u32 guest_off;       /* ゲストの線形番地 0 に当たる、XMS ブロック内の位置 */
 static struct mon_paging pg;
 static u8 host_imr_m, host_imr_s;
+static u8 dev_feed[KBD_TAP_MAX];    /* 開発用 (-feedkeys): ゲストへ渡すスキャンコード */
+static u8 dev_feed_n, dev_feed_i;
+static u8 dev_feed_ok;      /* ゲストから 1 回戻ったあとで渡し始める (最初に入る時点では、IPL がまだ何も置いていない) */
+static u8 dev_nopage0;
 static u8 guest_imr_m, guest_imr_s;
 /* 開発用: ホストへ戻るたびのゲストの割り込みマスクと、そのときの evlog_n */
 #define IMRLOG_SIZE 24
@@ -218,6 +222,21 @@ static FARTEXT int __far parse_args(int argc, char **argv, struct opts *o)
             i++;
         } else if (eq(a, "-stopkey") && v && !hexbytes(v, &kbd_stop_alt, 1)) {
             i++;
+        } else if (eq(a, "-feedkeys") && v) {
+            /* 開発用: ゲストへ渡すスキャンコードの列 (16 進、コンマ区切り)。ホスト世界で控えたキーと同じ道で渡す (feed_keys) */
+            const char *p = v;
+            char *end;
+
+            while (*p && dev_feed_n < KBD_TAP_MAX) {
+                dev_feed[dev_feed_n++] = (u8)strtol(p, &end, 16);
+                if (end == p)
+                    break;
+                p = *end == ',' ? end + 1 : end;
+            }
+            i++;
+        } else if (eq(a, "-nopage0")) {
+            /* 開発用: ゲストの 0 番ページを実メモリの 0 番ページに置かない (design.md §3 の入れ替えを外して切り分ける) */
+            dev_nopage0 = 1;
         } else if (eq(a, "-tick")) {
             dev_tick = 1;
         } else if (eq(a, "-progress")) {
@@ -394,9 +413,17 @@ int stash_write(u32 off, u16 seg, u16 soff, u16 len)
     return xms_move(xms_handle, guest_off + GUEST_KB * 1024UL + off, 0, xms_far(seg, soff), len);
 }
 
+/*
+ * 控えから seg:soff へ戻す (len は 8000h まで)。戻す先はテキスト VRAM なので、XMS ドライバに直接写させず、転送バッファの
+ * 前半に受けてから、ふつうのメモリの書き込みで置く。XMS の転送で VRAM に書くと、NP21/W は表示を描き直さない
+ * (VRAM の中身は戻るのに、画面には前の絵が残る。design.md §12)
+ */
 int stash_read(u32 off, u16 seg, u16 soff, u16 len)
 {
-    return xms_move(0, xms_far(seg, soff), xms_handle, guest_off + GUEST_KB * 1024UL + off, len);
+    if (xms_move(0, xms_far(xfer_seg(), 0), xms_handle, guest_off + GUEST_KB * 1024UL + off, len))
+        return 1;
+    _fmemcpy(MK_FP(seg, soff), MK_FP(xfer_seg(), 0), len);
+    return 0;
 }
 
 static u8 word_buf[2];
@@ -1147,7 +1174,7 @@ static FARTEXT void __far show_remapped(void)
  */
 static FARTEXT int __far setup_guest(u32 tables)
 {
-    u32 lock, phys, hookpage, rompage;
+    u32 lock, phys, hookpage, rompage, page0save;
     const u8 __far *rom;
     u8 __far *p;
     u16 i;
@@ -1218,9 +1245,21 @@ static FARTEXT int __far setup_guest(u32 tables)
     }
     if (v86)
         show_remapped();
+    /*
+     * ゲストの 0 番ページは、ゲストが動いている間だけ実メモリの 0 番ページに置く (design.md §3)。置き場はゲスト用
+     * メモリの先頭のまま (ホスト世界にいる間の中身はそこにある) で、ホストの中身の控えに 1 ページ使う
+     */
+    if (!dev_nopage0) {
+        page0save = alloc_pages(1);
+        if (!page0save)
+            return 1;
+        monmem_page0(phys, page0save);
+        mon_page0_on = 1;
+    }
     mon_hook_add(HOOK_PAGE_LIN, HOOK_INT1B);
     mon_hook_add(RESET_LIN, HOOK_RESET);
     mon_hook_add(HOOK_PAGE_LIN + HOOK_KBD_OFF, HOOK_KBD);
+    mon_hook_add(HOOK_PAGE_LIN + HOOK_FEED_OFF, HOOK_FEED);
     return guest_memory(1);
 }
 
@@ -1439,16 +1478,24 @@ static void feed_keys(struct mon_guest *g)
     static u8 codes[KBD_TAP_MAX];
     u8 i, n;
 
-    if (inject_busy || !(g->eflags & EFL_IF) || !kbd_tap_count())
+    if (inject_busy || (!kbd_tap_count() && (dev_feed_i == dev_feed_n || !dev_feed_ok)))
         return;
     _disable();
-    if (pic_read(0x00, 0x0B)) {
+    if (!(g->eflags & EFL_IF) || pic_read(0x00, 0x0B)) {
         _enable();
+        /*
+         * いまは渡せない。このあとゲストがホスト世界へ戻ってこないと渡す機会がないので、ring 0 側に、次にゲストへ
+         * 渡すハードウェア割り込みのハンドラが戻った所で抜けさせる (vbm.h の kbd_feed_wait)
+         */
+        if (!kbd_feed_wait)
+            kbd_feed_wait = 1;
         return;
     }
     n = kbd_tap_take(codes);
     tap_dropped += kbd_tap_lost();
     _enable();
+    while (dev_feed_ok && dev_feed_i < dev_feed_n && n < KBD_TAP_MAX)
+        codes[n++] = dev_feed[dev_feed_i++];
     inject_n = inject_i = 0;
     for (i = 0; i < n; i++) {
         if (kbd_note(codes[i]))
@@ -1490,6 +1537,7 @@ static FARTEXT int __far vm_reset(struct mon_guest *g)
     kbd_pending = 0;
     inject_n = inject_i = 0;
     inject_busy = 0;
+    kbd_feed_wait = 0;
     dma_reset();
     guest_imr_m = init_imr_m;
     guest_imr_s = init_imr_s;
@@ -1896,7 +1944,7 @@ static void guest_hw(void)
 /* ホストがキーボードを使わない戻り方か。その間に押されたキーは控えておき、ゲストへ渡す (feed_keys) */
 static int taps(u16 rc)
 {
-    return rc == X_INT1B || rc == X_KBD_DONE || rc == X_LOGTICK;
+    return rc == X_INT1B || rc == X_KBD_DONE || rc == X_KBD_FEED || rc == X_LOGTICK;
 }
 
 /* rc はゲストから戻った理由 */
@@ -1923,7 +1971,7 @@ static int stops(u16 rc)
 {
     switch (rc) {
     case X_INT1B: case MON_HALT: case X_RESET: case X_HOTKEY_RESET: case X_HOTKEY_STOP: case X_HOTKEY_MENU:
-    case X_HOTKEY_FDD0: case X_HOTKEY_FDD1: case X_HOTKEY_SHOT: case X_LOGTICK: case X_KBD_DONE:
+    case X_HOTKEY_FDD0: case X_HOTKEY_FDD1: case X_HOTKEY_SHOT: case X_LOGTICK: case X_KBD_DONE: case X_KBD_FEED:
         return 0;
     }
     return 1;
@@ -2233,6 +2281,7 @@ int main(int argc, char **argv)
         vm_prog('G');
         guest_hw();
         rc = mon_run(&g);
+        dev_feed_ok = 1;
         prog_rc = rc;
         vm_prog('H');
         host_hw(rc);
@@ -2316,6 +2365,9 @@ int main(int argc, char **argv)
             break;
         case X_KBD_DONE:
             kbd_done(&g);
+            break;
+        case X_KBD_FEED:
+            /* 控えたキーを渡せる所に来た。渡すのは、ゲストへ入る前の feed_keys */
             break;
         default:
             /* ゲストの例外 (X_FAULT) と、モニタ内の例外。内容は stop_report が出してある */

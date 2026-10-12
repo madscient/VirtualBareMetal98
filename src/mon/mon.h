@@ -24,6 +24,13 @@
 #define MON_RMFIX_TABLES  0x10  /* GDTR と CR3 */
 #define MON_RMFIX_ALL     0x1F
 
+/*
+ * ゲスト向けの写像の中で、0 番ページの入れ替え (monasm.S の page0_in / page0_out) が使う線形番地。
+ * 仮想86モードのゲストからは届かない所 (10FFEFh より上) に置く
+ */
+#define MON_PAGE0_HOME    0x003FE000  /* ゲストの 0 番ページの置き場 (ホスト世界にいる間の中身) */
+#define MON_PAGE0_SAVE    0x003FF000  /* ゲストが動いている間の、ホストの 0 番ページの控え */
+
 #define MON_STACK_SIZE  1024
 #define MON_TSS_BASE    104
 #define MON_IOPB_SIZE   8192
@@ -118,6 +125,15 @@ void monmem_map(u32 lin, u32 phys);
  * ホストとゲストで見える中身が違う
  */
 int monmem_host_same(u32 lin);
+/*
+ * ゲストの 0 番ページ (割り込みベクタ表と BIOS のワークエリア) を、ゲストが動いている間だけ実メモリの 0 番ページに
+ * 置くための写像を作る (design.md §3)。ゲスト向けの写像で、線形 0 をホストの 0 番ページと同じ物理ページに向け、
+ * MON_PAGE0_HOME を home_phys に、MON_PAGE0_SAVE を save_phys に向ける (どちらも 4KB 境界の 1 ページ)。
+ * EMM の下では mon_vcpi_setup のあとに呼ぶ (ホストの 0 番ページの物理番地はサーバが埋める)。
+ * 入れ替えは mon_page0_on を 0 以外にすると始まる
+ */
+void monmem_page0(u32 home_phys, u32 save_phys);
+extern u16 mon_page0_on;
 
 void mon_init(const struct mon_paging *pg);
 

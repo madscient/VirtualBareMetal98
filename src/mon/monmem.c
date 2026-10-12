@@ -53,6 +53,16 @@ void monmem_map(u32 lin, u32 phys)
     pt_guest[(u16)(lin >> 12)] = (phys & ~0xFFFUL) | PTE_FLAGS;
 }
 
+void monmem_page0(u32 home_phys, u32 save_phys)
+{
+    u32 __far *pt_host = table(T_HOST);
+    u32 __far *pt_guest = table(T_GUEST);
+
+    pt_guest[0] = pt_host[0];
+    pt_guest[(u16)(MON_PAGE0_HOME >> 12)] = (home_phys & ~0xFFFUL) | PTE_FLAGS;
+    pt_guest[(u16)(MON_PAGE0_SAVE >> 12)] = (save_phys & ~0xFFFUL) | PTE_FLAGS;
+}
+
 int monmem_host_same(u32 lin)
 {
     u32 __far *pt_host = table(T_HOST);

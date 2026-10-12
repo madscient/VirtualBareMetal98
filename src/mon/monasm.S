@@ -22,6 +22,7 @@
         .global mon_pd_phys, mon_pd_lin, mon_pde0_host, mon_pde0_guest
         .global mon_rm_cs, mon_panic_vec, mon_panic_stack
         .global mon_vcpi_on, mon_vcpi_entry, mon_vcpi_sw, mon_pm_start
+        .global mon_page0_on
 
 mon_stack:      .skip   MON_STACK_SIZE
 mon_stack_top:
@@ -58,6 +59,9 @@ exit_code:      .skip   2
 mon_panic_vec:  .skip   2
 mon_halt_bp:    .skip   2
 mon_halt_vec:   .skip   2
+/* 0 番ページの入れ替え (page0_in / page0_out)。mon_page0_on は組み込む側が立てる。page0_swapped は入れ替えてある間 1 */
+mon_page0_on:   .skip   2
+page0_swapped:  .skip   2
 /*
  * VCPI (EMM の下)。mon_vcpi_on が 0 以外なら、モード切替を自分で CR0 を触らずにサーバに頼む。
  * mon_vcpi_sw は AX=DE0Ch に渡す構造体 (CR3、GDTR と IDTR の線形番地、LDTR、TR、CS:EIP の PWORD。22 バイト)、
@@ -278,6 +282,7 @@ mon_pm_start:
         mov     fs:[edx], eax
         mov     eax, [mon_pd_phys]
         mov     cr3, eax
+        call    page0_in
         xor     ax, ax
         lldt    ax
         mov     gs, ax
@@ -386,6 +391,7 @@ trap_in_monitor:
  */
 leave_pm:
         mov     [exit_code], ax
+        call    page0_out
         mov     ax, MON_SEL_FLAT
         mov     fs, ax
         mov     edx, [mon_pd_lin]
@@ -514,6 +520,63 @@ rm_back:
         pop     si
         pop     bp
         ret
+
+/*
+ * ゲストの 0 番ページ (割り込みベクタ表と BIOS のワークエリア) を、ゲストが動いている間だけ実メモリの 0 番ページに置く
+ * (design.md §3)。BIOS がワークエリアを物理番地で読み書きする実装でも、ゲストのものが使われるようにするため。
+ * ゲスト向けの写像では、線形 0 がホストの 0 番ページと同じ物理ページを、MON_PAGE0_HOME がゲストの 0 番ページの置き場を、
+ * MON_PAGE0_SAVE がホストの中身の控えを指している (monmem_page0)。
+ *
+ * page0_in:  実メモリ → 控え、ゲストの置き場 → 実メモリ。リアルモードから入った直後に呼ぶ
+ * page0_out: 実メモリ → ゲストの置き場、控え → 実メモリ。リアルモードへ戻る前に呼ぶ
+ * 入口: ring 0、割り込み禁止、下位 4MB がゲスト向けの写像、SS = MON_SEL_DATA。壊す: EAX, ECX, ESI, EDI
+ *
+ * page0_swapped は、控え終えた時点で立てる。そのあとの写しの途中でモニタの例外になっても、戻るときにホストの
+ * 中身が戻る。rep movsd はバイト列で書く (番地に ESI・EDI、回数に ECX を使う形)
+ */
+page0_in:
+        cmp     word ptr ss:[mon_page0_on], 0
+        je      9f
+        push    ds
+        push    es
+        mov     ax, MON_SEL_FLAT
+        mov     ds, ax
+        mov     es, ax
+        cld
+        xor     esi, esi
+        mov     edi, MON_PAGE0_SAVE
+        mov     ecx, 1024
+        .byte   0xF3, 0x67, 0x66, 0xA5
+        mov     word ptr ss:[page0_swapped], 1
+        mov     esi, MON_PAGE0_HOME
+        xor     edi, edi
+        mov     ecx, 1024
+        .byte   0xF3, 0x67, 0x66, 0xA5
+        pop     es
+        pop     ds
+9:      ret
+
+page0_out:
+        cmp     word ptr ss:[page0_swapped], 0
+        je      9f
+        push    ds
+        push    es
+        mov     ax, MON_SEL_FLAT
+        mov     ds, ax
+        mov     es, ax
+        cld
+        xor     esi, esi
+        mov     edi, MON_PAGE0_HOME
+        mov     ecx, 1024
+        .byte   0xF3, 0x67, 0x66, 0xA5
+        mov     esi, MON_PAGE0_SAVE
+        xor     edi, edi
+        mov     ecx, 1024
+        .byte   0xF3, 0x67, 0x66, 0xA5
+        mov     word ptr ss:[page0_swapped], 0
+        pop     es
+        pop     ds
+9:      ret
 
 /*
  * u16 mon_halt_wait(void)  ring 0 専用

@@ -121,12 +121,34 @@ FARTEXT void __far ui_box(u8 row, u8 col, u8 w, u8 h, u8 attr)
     }
 }
 
+u8 pio_in8(u16 port);
+
+/* 開発用: VSYNC (テキスト GDC の状態 60h の bit 5) を 60 回数えるあいだ待つ。VSYNC が来ない場合に備えて回数でも打ち切る */
+static FARTEXT void __far dev_hold(void)
+{
+    u8 vs = 0, v, frames = 0;
+    u32 n = 0;
+
+    while (frames < 60 && n < 2000000UL) {
+        n++;
+        v = (u8)(pio_in8(0x60) & 0x20);
+        if (v && !vs)
+            frames++;
+        vs = v;
+    }
+}
+
 /* INT 18h AH=00h: キーを 1 つ読む (AH = スキャンコード、AL = 文字)。AH=01h: 読まずに有無を見る (BH が 0 なら無し) */
 FARTEXT u16 __far ui_getkey(void)
 {
     union REGS r;
 
     if (dev_keys) {
+        /* FFh は「約 1 秒待つ」: 画面を何コマか出したままにする (閉じたあとの表示を外から撮って確かめるため) */
+        while (dev_keyi < dev_nkeys && dev_keys[dev_keyi] == 0xFF) {
+            dev_keyi++;
+            dev_hold();
+        }
         if (dev_keyi < dev_nkeys)
             return (u16)(dev_keys[dev_keyi++] << 8);
         return (u16)(UI_SC_ESC << 8);

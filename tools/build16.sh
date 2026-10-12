@@ -176,6 +176,12 @@ ls -l "$out/ISRIPL.BIN" | awk '{print $5, "bytes  ISRIPL.BIN"}'
 ia16-elf-gcc -c "$root/tests/boot/keyipl.S" -o "$out/keyipl.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/KEYIPL.BIN" "$out/keyipl.o"
 ls -l "$out/KEYIPL.BIN" | awk '{print $5, "bytes  KEYIPL.BIN"}'
+ia16-elf-gcc -c "$root/tests/boot/page0ipl.S" -o "$out/page0ipl.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/PAGE0IPL.BIN" "$out/page0ipl.o"
+ls -l "$out/PAGE0IPL.BIN" | awk '{print $5, "bytes  PAGE0IPL.BIN"}'
+ia16-elf-gcc -c "$root/tests/boot/deferipl.S" -o "$out/deferipl.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/DEFERIPL.BIN" "$out/deferipl.o"
+ls -l "$out/DEFERIPL.BIN" | awk '{print $5, "bytes  DEFERIPL.BIN"}'
 ia16-elf-gcc -c "$root/tests/boot/shotipl.S" -o "$out/shotipl.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTIPL.BIN" "$out/shotipl.o"
 ls -l "$out/SHOTIPL.BIN" | awk '{print $5, "bytes  SHOTIPL.BIN"}'

@@ -83,6 +83,9 @@ u8 kbd_pending;                 /* ゲストがまだ読んでいないスキャ
 u8 kbd_code;
 u8 kbd_stop_alt, kbd_shot_alt;
 u8 kbd_hot;
+/* 0 = なし、1 = 次のハードウェア割り込みで戻り先を差し替える (vbm.h)、2 = 差し替えてあって、戻ってくるのを待っている */
+u8 kbd_feed_wait;
+static u16 feed_ip, feed_cs;    /* 差し替えたハンドラの、本来の戻り先 */
 u8 prog_on;
 u8 dev_tick, guest_imr0;
 u32 dev_shot_at[2], dev_menu_at, dev_log_every;
@@ -288,6 +291,19 @@ u16 mon_on_int(u8 vec, struct mon_vframe *f, struct mon_gregs *r)
         log_ev(vec, EV_SOFT, f, (u16)r->eax);
     }
     mon_reflect(vec, f);
+    /*
+     * 控えたキーが渡せずに残っている: いま渡したハードウェア割り込みのハンドラの戻り先を、横取り印 (HOOK_FEED) に
+     * 差し替える。ゲストのスタックの先頭には、反射が積んだ IP・CS・FLAGS がある。本来の戻り先は feed_ip・feed_cs に控える
+     */
+    if (kbd_feed_wait == 1 && vec >= IRQ_FIRST && vec <= IRQ_LAST) {
+        u16 ss = (u16)f->ss, sp = (u16)f->esp;
+
+        feed_ip = mon_peek16(mon_lin(ss, sp));
+        feed_cs = mon_peek16(mon_lin(ss, (u16)(sp + 2)));
+        mon_poke16(mon_lin(ss, sp), HOOK_FEED_OFF);
+        mon_poke16(mon_lin(ss, (u16)(sp + 2)), HOOK_PAGE_SEG);
+        kbd_feed_wait = 2;
+    }
     /* 持ち越したスクリーンショットを待ちきった。反射は済んでいるので、戻ればハンドラが動く */
     if (shot_tick())
         return X_HOTKEY_SHOT;
@@ -597,6 +613,12 @@ u16 mon_on_hook(u8 id, struct mon_vframe *f, struct mon_gregs *r)
     case HOOK_KBD:
         /* ホストが注入したキー割り込みのハンドラが IRET で戻ってきた。フレームは IRET が片付けている */
         return X_KBD_DONE;
+    case HOOK_FEED:
+        /* 戻り先を差し替えておいたハンドラが IRET で戻ってきた。本来の戻り先に直して、ホストに控えたキーを渡させる */
+        f->eip = (f->eip & 0xFFFF0000UL) | feed_ip;
+        f->cs = feed_cs;
+        kbd_feed_wait = 0;
+        return X_KBD_FEED;
     case HOOK_VEC:
         /*
          * ホストの RAM を指していたので差し替えたベクタ。ゲストに相当する処理はないので、

@@ -15,6 +15,8 @@
     con      出力をファイルに向けずに走らせたとき、DOS に戻ったあとの画面に残る表示
     isr      ゲストが割り込みの処理の途中のまま離れたとき、割り込みコントローラを片付けて DOS に戻るか
     menu     VM メニュー。-menuat で開き -menukeys で操作して、画面の復元とゲストの再開を見る
+    page0    ゲストが BIOS のワークエリアに書いたものを BIOS が使うか (ゲストの 0 番ページの置き場)
+    kdefer   ゲストが割り込み禁止のままホスト世界へ行った間のキーが、あとで届くか
     keys     ホスト世界にいる間 (INT 1Bh の処理中) に押されたキーがゲストに届くか (DOSBox-X だけ)
     v86      EMM386 (VCPI) の下での起動 (NP21/W だけ)
 
@@ -709,6 +711,80 @@ def test_menu(work):
     return ok
 
 
+def test_page0(work):
+    """BIOS がゲストの BIOS のワークエリアを読み書きするか。試験用の IPL (tests/boot/page0ipl.S) は、ワークエリアに書いた値を
+    INT 18h で尋ね (読む側)、開発用の -feedkeys で渡させたキーの結果を自分で読んで (書く側: キーボード割り込みのハンドラ)、
+    記録して止まる。キーボード割り込みの結果を物理番地に書く BIOS (NP21/W の内蔵 BIOS) では、ゲストの 0 番ページが
+    実メモリの 0 番ページに置かれていないと、書く側の結果がゲストに見えない (design.md §3)。
+    入れ替えを外した版 (-nopage0) も走らせて、結果を参考として出す (NP21/W では書く側が 00 になる。この試験が
+    見分けていることの確認)"""
+    with open(os.path.join(BUILT, 'PAGE0IPL.BIN'), 'rb') as f:
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = f.read()
+    with open(os.path.join(work, 'P0.IMG'), 'wb') as f:
+        f.write(img)
+    for name in ('P0.OUT', 'P0.LOG', 'P0N.OUT', 'P0N.LOG'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    # 止まるとメニューが開くので、開発用のキー列で「4 (終了)、Y」と答える。止まった所の様子 (-peek を含む) はログに残る
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 P0.IMG -feedkeys 1D -peek 00600 -menukeys 04,15 -log P0.LOG > P0.OUT',
+                                 'VBM98.EXE -fdd0 P0.IMG -feedkeys 1D -nopage0 -peek 00600 -menukeys 04,15 -log P0N.LOG > P0N.OUT'],
+                                180, core='normal')
+    log = imgtests.read_lines(work, 'P0.LOG') or []
+    rec = [l for l in log if l.startswith('VBM98: guest 00600: ')]
+    got = rec[0].split(': ')[2].split() if rec else []
+    for l in rec:
+        print('  ' + l)
+    for l in imgtests.read_lines(work, 'P0N.LOG') or []:
+        if l.startswith('VBM98: guest 00600: '):
+            print('  (-nopage0) ' + l)
+    checks = (
+        ('batch finished', finished),
+        ('read side: INT 18h answered from what the guest had put in its own work area (key 1E73h, table 5Ah, shift 15h)',
+         got[0:5] == ['73', '1E', '01', '5A', '15']),
+        ('write side: the key passed to the keyboard interrupt handler shows up in the key table the guest reads (052Dh = 20h)',
+         got[5:6] == ['20']),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('ゲストの 0 番ページ: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
+def test_kdefer(work):
+    """ゲストが割り込み禁止のままホスト世界へ行き、そのあとホスト世界へ戻らないとき、その間に控えたキーがあとで届くか。
+    試験用の IPL (tests/boot/deferipl.S) は、割り込み禁止のまま INT 1Bh を 1 回呼んだあと、VSYNC 割り込みを受けながら
+    HLT で待つだけ。開発用の -feedkeys のキーは最初の機会には渡せないので、ゲストへ渡す割り込みのハンドラが戻った所で
+    渡す仕組み (design.md §7) が働かなければ届かず、止まらない (時間切れになる)"""
+    with open(os.path.join(BUILT, 'DEFERIPL.BIN'), 'rb') as f:
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = f.read()
+    with open(os.path.join(work, 'KD.IMG'), 'wb') as f:
+        f.write(img)
+    for name in ('KD.OUT', 'KD.LOG'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    # 止まるとメニューが開くので、開発用のキー列で「4 (終了)、Y」と答える。止まった所の様子 (-peek を含む) はログに残る
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 KD.IMG -feedkeys 1D,9D -peek 00600 -menukeys 04,15 -log KD.LOG > KD.OUT'],
+                                60, core='normal')
+    log = imgtests.read_lines(work, 'KD.LOG') or []
+    for line in log:
+        if 'guest 00600' in line or 'keys taken' in line or 'halted' in line:
+            print('  ' + line)
+    checks = (
+        ('batch finished: the keys reached the guest although it never returned to the host world', finished),
+        ('the guest received both codes in order (1Dh, 9Dh)', any(l.startswith('VBM98: guest 00600: 02 1D 9D') for l in log)),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('渡せなかったキー: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
 def test_keys(work):
     """ホスト世界にいる間に押されたキーがゲストに届くか。試験用の IPL (tests/boot/keyipl.S) は INT 1Bh でディスクを
     読み続けながら、キーボード割り込みで届いたスキャンコードを記録し、12 個で止まる。読み続ける間はほとんどの時間が
@@ -1106,7 +1182,8 @@ def test_nfdid(work):
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
          ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos), ('nfdid', 'VBM98.EXE', test_nfdid),
          ('boot2dd', 'VBM98.EXE', test_boot2dd),
-         ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('isr', 'VBM98.EXE', test_isr), ('menu', 'VBM98.EXE', test_menu), ('keys', 'VBM98.EXE', test_keys),
+         ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('isr', 'VBM98.EXE', test_isr), ('menu', 'VBM98.EXE', test_menu), ('page0', 'VBM98.EXE', test_page0), ('kdefer', 'VBM98.EXE', test_kdefer),
+         ('keys', 'VBM98.EXE', test_keys),
          ('v86', 'VBM98.EXE', test_v86))
 
 
