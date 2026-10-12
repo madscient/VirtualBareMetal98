@@ -1,6 +1,6 @@
 #!/bin/sh
 # DOS 向け (gcc-ia16) のビルド。ia16-elf-gcc に PATH が通った環境で実行する。
-#   build/dos/IMGDUMP.EXE    ディスクイメージ層の試験プログラム
+#   build/dos/IMGDUMP.EXE    ディスクイメージ層の試験プログラム (IMGDUMPM.EXE・FDBTESTM.EXE は、イメージの写しを通す版)
 #   build/dos/MONPROBE.EXE   モニタ核の試験プログラム
 #   build/dos/VBM98.EXE      本体
 #   build/dos/IPL.BIN        起動の試験に使う IPL (1024 バイトの生のバイナリ)
@@ -110,6 +110,25 @@ cc src/dos/dosio.c "$strict"
 cc tests/fdbios/fdbtest.c "$loose"
 link FDBTEST.EXE
 
+# 同じ 2 本を、イメージの写しを XMS に持つ入出力 (imgcache) を通す形で (試験 fdmem)
+cc src/core/dimg.c "$strict"
+cc src/dos/dosio.c "$strict"
+cc src/dos/imgcache.c "$strict"
+cc src/dos/xms.c "$strict"
+cc src/dos/xmsasm.S ""
+cc tests/imgdump/imgdump.c "$loose"
+cc tests/imgdump/plat_dos.c "$loose -DIMG_IN_MEMORY"
+link IMGDUMPM.EXE
+
+cc src/core/dimg.c "$strict"
+cc src/core/fdbios.c "$strict"
+cc src/dos/dosio.c "$strict"
+cc src/dos/imgcache.c "$strict"
+cc src/dos/xms.c "$strict"
+cc src/dos/xmsasm.S ""
+cc tests/fdbios/fdbtest.c "$loose -DIMG_IN_MEMORY"
+link FDBTESTM.EXE
+
 cc src/mon/mon.c "$strict"
 cc src/mon/monmem.c "$strict"
 cc_r0 src/mon/mon_r0.c
@@ -126,6 +145,7 @@ link MONPROBE.EXE
 cc src/core/dimg.c "$strict"
 cc src/core/fdbios.c "$strict"
 cc src/dos/dosio.c "$strict"
+cc src/dos/imgcache.c "$strict"
 cc src/dos/xms.c "$strict"
 cc src/dos/xmsasm.S ""
 cc src/dos/pio.S ""
@@ -209,6 +229,9 @@ ls -l "$out/TEXT20.BIN" | awk '{print $5, "bytes  TEXT20.BIN"}'
 ia16-elf-gcc -c -DDIRECT "$root/tests/boot/textipl.S" -o "$out/text20d.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/TEXT20D.BIN" "$out/text20d.o"
 ls -l "$out/TEXT20D.BIN" | awk '{print $5, "bytes  TEXT20D.BIN"}'
+ia16-elf-gcc -c "$root/tests/boot/memipl.S" -o "$out/memipl.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/MEMIPL.BIN" "$out/memipl.o"
+ls -l "$out/MEMIPL.BIN" | awk '{print $5, "bytes  MEMIPL.BIN"}'
 ia16-elf-gcc -c "$root/tests/boot/planerd.S" -o "$out/planerd.o"
 ia16-elf-ld -Ttext=0x100 --oformat=binary -o "$out/PLANERD.COM" "$out/planerd.o"
 ls -l "$out/PLANERD.COM" | awk '{print $5, "bytes  PLANERD.COM"}'

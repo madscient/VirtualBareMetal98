@@ -22,6 +22,7 @@
 #include "fdbios.h"
 #include <libi86/string.h>
 #include "dosio.h"
+#include "imgcache.h"
 #include "xms.h"
 #include "shot.h"
 #include "ui.h"
@@ -124,6 +125,9 @@ static struct fdb fb;
 static dimg imgs[DRIVES];
 static dos_file files[DRIVES];
 static dimg_io ios[DRIVES];
+static imgcache caches[DRIVES];     /* イメージの写し (拡張メモリ。design.md §8)。ios はこれを通してファイルに届く */
+static u8 xms_ready;                /* ゲスト用メモリを確保し終えた。ここから先は、入れたイメージの写しを取る */
+static u8 dev_nocache;              /* 開発用 (-nocache): 写しを取らない (置き場が取れなかったときと同じ経路を通す) */
 static u16 xms_handle;
 static u32 guest_off;       /* ゲストの線形番地 0 に当たる、XMS ブロック内の位置 */
 static struct mon_paging pg;
@@ -237,6 +241,8 @@ static FARTEXT int __far parse_args(int argc, char **argv, struct opts *o)
         } else if (eq(a, "-nopage0")) {
             /* 開発用: ゲストの 0 番ページを実メモリの 0 番ページに置かない (design.md §3 の入れ替えを外して切り分ける) */
             dev_nopage0 = 1;
+        } else if (eq(a, "-nocache")) {
+            dev_nocache = 1;
         } else if (eq(a, "-tick")) {
             dev_tick = 1;
         } else if (eq(a, "-progress")) {
@@ -456,12 +462,65 @@ static u8 __far *page_ptr(u32 phys)
 /* ---------------------------------------------------------------- ドライブ */
 
 static char drive_name[DRIVES][64];
+/* 入れたときに正規化したパス。同じファイルが 2 つのドライブに入っているかを見る (入れたあとでカレントディレクトリが変わる) */
+#define TRUE_PATH_MAX 128
+static char drive_true[DRIVES][TRUE_PATH_MAX];
+
+/* DOS にパスを正規化させる (INT 21h AH=60h。出力は 128 バイトまで)。できなければ渡された名前のまま */
+static FARTEXT void __far true_path(const char *path, char *out)
+{
+    union REGS r;
+    struct SREGS s;
+
+    segread(&s);
+    s.es = s.ds;
+    r.h.ah = 0x60;
+    r.x.si = (unsigned)path;
+    r.x.di = (unsigned)out;
+    intdosx(&r, &r, &s);
+    if (r.x.cflag) {
+        strncpy(out, path, TRUE_PATH_MAX - 1);
+        out[TRUE_PATH_MAX - 1] = 0;
+    }
+}
+
+/*
+ * ドライブ unit のイメージを丸ごと拡張メモリへ読み込む (design.md §8)。以後の読み出しはファイルに触れない。
+ * 置き場が取れなければ、ファイルから必要なセクタだけを読む経路のまま動かす。
+ * 同じファイルが別のドライブにも入っているときは、どちらも写しを持たない (写しを別々に持つと、片方からの
+ * 書き込みがもう片方の写しに入らない)
+ */
+static FARTEXT void __far hold_image(int unit, void (*note)(const char *, ...))
+{
+    unsigned long kb = (unsigned long)((imgs[unit].fsize + 1023) >> 10);
+    int i;
+
+    for (i = 0; i < DRIVES; i++)
+        if (i != unit && fb.img[i] && eq(drive_true[i], drive_true[unit])) {
+            imgcache_drop(&caches[i]);
+            note("VBM98: drive %d: the same file is in drive %d; both are read from the file as needed\n", unit, i);
+            return;
+        }
+    if (dev_nocache) {
+        note("VBM98: drive %d: -nocache; the image is read from the file as needed\n", unit);
+        return;
+    }
+    if (imgcache_reserve(&caches[unit], imgs[unit].fsize)) {
+        note("VBM98: drive %d: no room in extended memory for the image (%lu KB); it is read from the file as needed\n",
+             unit, kb);
+        return;
+    }
+    note("VBM98: drive %d: reading the image into memory (%lu KB)\n", unit, kb);
+    if (imgcache_fill(&caches[unit]))
+        note("VBM98: drive %d: could not read the whole image; it is read from the file as needed\n", unit);
+}
 
 /* ---- メニューから呼ぶ仮想マシンの操作 (vbm.h) ---- */
 
 FARTEXT void __far vm_eject(int unit)
 {
     if (fb.img[unit]) {
+        imgcache_drop(&caches[unit]);
         dosio_close(&files[unit]);
         fb.img[unit] = 0;
     }
@@ -483,7 +542,8 @@ FARTEXT int __far vm_mount(int unit, const char *path, int quiet)
     }
     vm_eject(unit);
     files[unit] = f;
-    dosio_bind(&ios[unit], &files[unit]);
+    dosio_bind(&caches[unit].lower, &files[unit]);
+    imgcache_bind(&ios[unit], &caches[unit]);
     rc = dimg_mount(&imgs[unit], &ios[unit], size);
     if (rc) {
         note("VBM98: %s: not a supported disk image (%d)\n", path, rc);
@@ -497,6 +557,9 @@ FARTEXT int __far vm_mount(int unit, const char *path, int quiet)
                imgs[unit].fmt == DIMG_FMT_RAW ? "RAW" : imgs[unit].fmt == DIMG_FMT_FDI ? "FDI" :
                imgs[unit].fmt == DIMG_FMT_NFD0 ? "NFD r0" : imgs[unit].fmt == DIMG_FMT_NFD1 ? "NFD r1" : "FDD",
                imgs[unit].cyls, imgs[unit].readonly ? ", write protected" : "");
+    true_path(path, drive_true[unit]);
+    if (xms_ready)
+        hold_image(unit, note);
     return 0;
 }
 
@@ -2333,6 +2396,11 @@ int main(int argc, char **argv)
         video_host();
         return 1;
     }
+    /* ゲストのメモリを取った残りで、イメージの写しを取る。これより後に入れるイメージは vm_mount が取る */
+    xms_ready = 1;
+    for (i = 0; i < DRIVES; i++)
+        if (fb.img[i])
+            hold_image(i, say);
     for (i = 0; i < ntrace_ports; i++)
         mon_trap_port(trace_ports[i], 1);
     /* キーボードはホットキーを見るためにモニタが先に読むので、ゲストにはトラップ経由で見せる (vbm_r0.c) */
@@ -2545,9 +2613,13 @@ int main(int argc, char **argv)
     xms_a20(0);
     xms_unlock(xms_handle);
     xms_free(xms_handle);
-    for (i = 0; i < DRIVES; i++)
+    for (i = 0; i < DRIVES; i++) {
+        /* 写しを持っていたかと、写しを読み込み終えてからファイルを読んだ回数 (持っていなければ、入れてからの回数) */
         if (fb.img[i])
-            dosio_close(&files[i]);
+            (trace ? say : log_line)("VBM98: drive %d: image %s, %lu file reads\n", i,
+                                     caches[i].have ? "in memory" : "not in memory", (unsigned long)caches[i].file_reads);
+        vm_eject(i);
+    }
     print_hits();
     say("VBM98: back to DOS\n");
     log_release();

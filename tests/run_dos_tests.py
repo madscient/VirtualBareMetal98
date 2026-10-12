@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """DOS 向けにビルドした試験プログラムを DOS 上で走らせる。
 
-    python tests/run_dos_tests.py [img] [fdb] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [shot] [con] [isr] [menu] [v86]
+    python tests/run_dos_tests.py [img] [fdb] [fdmem] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [shot] [con] [isr] [menu] [v86]
 
     img      ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
     fdb      INT 1Bh の意味論 (fdbios)。同上
+    fdmem    イメージの写しを拡張メモリに持つ経路。上の 2 つを写しを通す版で走らせ、本体で読み書きとディスク交換を見る
     mon      モニタ核。保護モード・仮想86モード・ページング・V30 の命令の代行
     boot     本体 (VBM98.EXE)。試験用の IPL を起動し、INT 1Bh の読み書き、スイッチ、リセットなどを見る
     hook     ホストの割り込みが横取りされている状態での起動 (ROM の入口の追跡、拡張メモリ量)
@@ -34,9 +35,9 @@ import imgtests
 BUILT = os.path.join(imgtests.ROOT, 'build', 'dos')
 
 
-def test_img(work):
+def test_img(work, exe='IMGDUMP.EXE'):
     steps = imgtests.prepare(work)
-    finished = dosenv.run_batch(imgtests.batch_lines(steps, 'IMGDUMP.EXE'), 1800)
+    finished = dosenv.run_batch(imgtests.batch_lines(steps, exe), 1800)
     if not finished:
         print('バッチが最後まで走っていない')
     return imgtests.evaluate(work, steps) == 0 and finished
@@ -47,7 +48,7 @@ FDB_IMAGES = (('raw_2hd.hdm', 'FDB1.IMG'), ('raw_640.img', 'FDB2.IMG'), ('nfd0_r
               ('nfd1_prot.nfd', 'FDB4.IMG'), ('vfdd_fill.fdd', 'FDB5.IMG'))
 
 
-def test_fdb(work):
+def test_fdb(work, exe='FDBTEST.EXE'):
     """INT 1Bh の意味論 (fdbios) を int が 16 ビットの環境で。ホスト OS 上の tests/fdbios/fdbtest.c と同じ試験"""
     import mkimg
     cases = {c.name: c for c in mkimg.build_cases()}
@@ -57,7 +58,7 @@ def test_fdb(work):
     out = os.path.join(work, 'FDB.OUT')
     if os.path.exists(out):
         os.remove(out)
-    finished = dosenv.run_batch(['FDBTEST.EXE %s > FDB.OUT' % ' '.join(d for _, d in FDB_IMAGES)], 300)
+    finished = dosenv.run_batch(['%s %s > FDB.OUT' % (exe, ' '.join(d for _, d in FDB_IMAGES))], 300)
     lines = imgtests.read_lines(work, 'FDB.OUT') or []
     for line in lines:
         if line.startswith('FAIL') or line.startswith('END'):
@@ -747,10 +748,12 @@ def test_menu(work):
          any(l.startswith('VBM98: tick: CS:IP=') for l in loglines) and any('stopped after 150' in l for l in loglines)),
         ('the log records that the VM menu was opened by the hotkey path and the guest resumed',
          any('VM menu (hotkey): resumed' in l for l in loglines)),
+        # 終了時のドライブごとの行 (写しを持っていたかと、ファイルを読んだ回数) は、ログにだけ出る
         ('the stop dump is written to the log at the end, in one piece: every console line from the stop on is in the log',
          bool(lines) and any('stopped after 150' in l for l in lines) and
          [l for l in lines[next(i for i, l in enumerate(lines) if 'stopped after 150' in l):] if 'tvram row' not in l] ==
-         [l for l in loglines[next((i for i, l in enumerate(loglines) if 'stopped after 150' in l), len(loglines)):] if 'tvram row' not in l]),
+         [l for l in loglines[next((i for i, l in enumerate(loglines) if 'stopped after 150' in l), len(loglines)):]
+          if 'tvram row' not in l and not l.endswith(' file reads')]),
         ('guest with the code access mode (port 68h) on: the menu turned it off for its stay, and the guest resumed and stopped',
          any('code access mode (port 68h) on; turned off' in l for l in klog) and any('stopped after 100' in l for l in klog)),
         ('guest that leaves the code access mode alone: no such note', not any('code access mode' in l for l in loglines)),
@@ -1239,7 +1242,127 @@ def test_nfdid(work):
     return ok
 
 
-TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
+def fdmem_run(work, sub, extra, keys='01,3D,3D,3D,1C,1C,00,04,15'):
+    """試験用の IPL (tests/boot/memipl.S) を、イメージ 2 枚 (A.IMG から起動し、途中で VM メニューから B.IMG に入れ替える) で
+    走らせる。一覧に何が並ぶかを決めるため、sub のフォルダで走らせる (一覧は「取り出す」、「..」、A.IMG、B.IMG の順。
+    「..」が出ない環境でも、下へ 3 回で B.IMG に止まる)。返すのは (判定の表, 通ったか)"""
+    with open(os.path.join(BUILT, 'MEMIPL.BIN'), 'rb') as f:
+        ipl = f.read()
+    # A: R=2 に pat_a、R=5 に pat_d (奇数長の読み込み)、R=6 に pat_e (奇数長の書き込みの下敷き)。R=4 は 0 (IPL が書く)
+    # B: R=2 に pat_b、R=4 に pat_c (A に書いたものが残っていれば、これが読めない)
+    # 中身は種を決めた乱数 (規則的なパターンは語の和が似た値になり、取り違えを見分けられない)
+    import random
+    rnd = random.Random(9801)
+    pat_a, pat_b, pat_c, pat_d, pat_e = (bytes(rnd.getrandbits(8) for _ in range(1024)) for _ in range(5))
+    wrote = b''.join(((0x0101 + 3 * i) & 0xFFFF).to_bytes(2, 'little') for i in range(512))
+    odd = wrote[:1023] + pat_e[1023:]
+    sums = [word_sum(p) for p in (pat_a, pat_b, pat_c, pat_d[:1022], wrote, odd)]
+    assert len(ipl) == 1024 and wrote[1022] != pat_d[1022] and wrote[1023] != pat_e[1023] and len(set(sums)) == len(sums)
+    a = bytearray(77 * 2 * 8 * 1024)
+    a[0:1024] = ipl
+    a[1024:2048] = pat_a
+    a[4096:5120] = pat_d
+    a[5120:6144] = pat_e
+    b = bytearray(77 * 2 * 8 * 1024)
+    b[1024:2048] = pat_b
+    b[3072:4096] = pat_c
+    d = os.path.join(work, sub)
+    os.makedirs(d, exist_ok=True)
+    for name in os.listdir(d):
+        os.remove(os.path.join(d, name))
+    for name, blob in (('A.IMG', a), ('B.IMG', b)):
+        with open(os.path.join(d, name), 'wb') as f:
+            f.write(blob)
+    shutil.copy2(os.path.join(BUILT, 'VBM98.EXE'), os.path.join(d, 'VBM98.EXE'))
+    # -stopafter は、入れ替わりを IPL が見つけられずに回り続けたときの打ち切り。DOS のコマンド行は 126 文字まで
+    cmd = 'VBM98 -fdd0 A.IMG %s -tick -menuat 50 -menukeys %s -stopafter 9000 -log M.LOG > M.OUT' % (extra, keys)
+    assert len(cmd) <= 126
+    finished = dosenv.run_batch(['CD ' + sub, cmd, 'CD ..'], 300, core='normal')
+    log = imgtests.read_lines(d, 'M.LOG') or []
+    for line in log:
+        if line.startswith('VBM98: drive') or 'stopped after' in line or 'halted' in line:
+            print('  %s: %s' % (sub, line))
+    with open(os.path.join(d, 'A.IMG'), 'rb') as f:
+        fa = f.read()
+    with open(os.path.join(d, 'B.IMG'), 'rb') as f:
+        fb = f.read()
+    rec = fb[2048:3072]
+
+    def w(off):
+        return int.from_bytes(rec[off:off + 2], 'little')
+
+    print('  %s: record %s' % (sub, rec[0x300:0x320].hex(' ')))
+    checks = [
+        ('batch finished, and the IPL halted and VBM98 returned to DOS',
+         finished and any('halted' in l for l in log) and any('back to DOS' in l for l in log)),
+        ('the IPL ran from image A and read its sector 2', rec[0x300:0x308] == b'VBM98MEM' and rec[0x309] == 0 and w(0x30A) == word_sum(pat_a)),
+        ('a sector the guest wrote reads back as written', rec[0x30C] == 0 and rec[0x30D] == 0 and w(0x30E) == word_sum(wrote)),
+        ('the same write is in the image file', fa[3072:4096] == wrote),
+        ('odd length read (1023 bytes): the bytes arrive, including the last one', rec[0x310] == 0 and w(0x312) == word_sum(pat_d[:1022]) and rec[0x311] == pat_d[1022]),
+        ('odd length write (1023 bytes): reads back as written, with byte 1023 of the sector left as it was',
+         rec[0x314] == 0 and rec[0x315] == 0 and w(0x316) == word_sum(odd)),
+        ('the same odd length write is in the image file', fa[5120:6144] == odd),
+        ('after the image was changed from the menu, sector 2 reads as image B', rec[0x318] == 1 and w(0x31C) == word_sum(pat_b)),
+        ('and the sector the guest wrote to image A reads as image B', rec[0x319] == 0 and w(0x31E) == word_sum(pat_c)),
+        ('the record went to image B, not to image A', fa[2048:3072] == bytes(1024)),
+    ]
+    return log, checks
+
+
+def test_fdmem(work):
+    """イメージの写しを拡張メモリに持つ経路 (design.md §8)。ディスクイメージ層と INT 1Bh の意味論の試験を、写しを通す版
+    (IMGDUMPM.EXE、FDBTESTM.EXE) で走らせ、本体では、読み出しがファイルに触れないこと、書き込みが写しとファイルの
+    両方に入ること、ディスク交換で写しが入れ替わることを見る。写しを取らない設定 (-nocache。置き場が取れないときと
+    同じ経路) と、同じファイルを 2 つのドライブに入れたときも見る"""
+    for name in ('IMGDUMPM.EXE', 'FDBTESTM.EXE'):
+        if work != BUILT:
+            shutil.copy2(os.path.join(BUILT, name), os.path.join(work, name))
+    ok = test_img(work, 'IMGDUMPM.EXE')
+    ok = test_fdb(work, 'FDBTESTM.EXE') and ok
+
+    def mem_lines(log, unit):
+        return [l for l in log if l.startswith('VBM98: drive %d: reading the image into memory (1232 KB)' % unit)]
+
+    def at_exit(log, unit):
+        return next((l for l in log if l.startswith('VBM98: drive %d: image ' % unit)), '')
+
+    log, checks = fdmem_run(work, 'FDM', '')
+    checks += [
+        ('in memory: the image was read into memory at the start and again after the change', len(mem_lines(log, 0)) == 2),
+        ('in memory: no reads from the image file after it was read into memory', at_exit(log, 0).endswith('image in memory, 0 file reads')),
+    ]
+    log, more = fdmem_run(work, 'FDN', '-nocache')
+    reads = at_exit(log, 0).split()
+    checks += [('-nocache: ' + n, c) for n, c in more]
+    checks += [
+        ('-nocache: the image is not read into memory, and the log says so each time an image is put in',
+         not mem_lines(log, 0) and len([l for l in log if l.startswith('VBM98: drive 0: -nocache;')]) == 2),
+        ('-nocache: the sectors are read from the image file', 'not in memory,' in at_exit(log, 0) and len(reads) > 2 and reads[-3].isdigit() and int(reads[-3]) > 0),
+    ]
+    # 同じファイルを 2 つのドライブに (書き方を変えて)。どちらも写しを持たない。途中でドライブ 0 を入れ替えると、
+    # ドライブ 0 は写しを持ち、ドライブ 1 は持たないまま。NP21/W では見ない: ホストのフォルダを見せるドライブ (HOSTDRV) が
+    # 同じファイルを 2 回開かせないので、2 つ目のドライブに入れる所で「開けない」になる
+    if dosenv.name() == 'dosboxx':
+        log, more = fdmem_run(work, 'FDS', '-fdd1 .\\A.IMG')
+        checks += [('same file in both drives: ' + n, c) for n, c in more]
+        checks += [
+            ('same file in both drives: neither is read into memory at the start, and the log says why',
+             any(l.startswith('VBM98: drive 0: the same file is in drive 1;') for l in log) and
+             any(l.startswith('VBM98: drive 1: the same file is in drive 0;') for l in log) and not mem_lines(log, 1)),
+            ('same file in both drives: after drive 0 is changed to another image, that one is read into memory',
+             len(mem_lines(log, 0)) == 1 and at_exit(log, 0).endswith('image in memory, 0 file reads') and
+             'not in memory,' in at_exit(log, 1)),
+        ]
+    else:
+        print('  同じファイルを 2 つのドライブに入れる項目は見ていない (DOSBox-X だけ)')
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('イメージの写し: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
+TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('fdmem', 'VBM98.EXE', test_fdmem), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
          ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos), ('nfdid', 'VBM98.EXE', test_nfdid),
          ('boot2dd', 'VBM98.EXE', test_boot2dd),
          ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('isr', 'VBM98.EXE', test_isr), ('menu', 'VBM98.EXE', test_menu), ('page0', 'VBM98.EXE', test_page0), ('kdefer', 'VBM98.EXE', test_kdefer),

@@ -31,6 +31,12 @@ typedef u8 __far *bufp;
 #define WANT_AT(off)      ((bufp)MK_FP(want_seg, (u16)(off)))
 static unsigned want_seg;
 static dos_file dfiles[NIMG];
+#ifdef IMG_IN_MEMORY
+/* 本体と同じく、イメージの写しを XMS に持つ入出力 (imgcache) を通す版。期待値 (want_read) はファイルから直接読む */
+#include "imgcache.h"
+#include "xms.h"
+static imgcache caches[NIMG];
+#endif
 #else
 typedef u8 *bufp;
 #define BUF_COPY(d, s, n) memcpy(d, s, n)
@@ -59,12 +65,23 @@ static int open_image(int i, const char *path)
 
     if (dosio_open(&dfiles[i], path, 1, &size))
         return 1;
+#ifdef IMG_IN_MEMORY
+    /* 写しが取れなければ失敗にする (ファイルの経路に落ちて通ったのでは、写しの経路を見たことにならない) */
+    dosio_bind(&caches[i].lower, &dfiles[i]);
+    imgcache_bind(&ios[i], &caches[i]);
+    if ((i == 0 && xms_init()) || imgcache_reserve(&caches[i], size) || imgcache_fill(&caches[i]))
+        return 1;
+#else
     dosio_bind(&ios[i], &dfiles[i]);
+#endif
     return dimg_mount(&imgs[i], &ios[i], size) != 0;
 }
 
 static void close_image(int i)
 {
+#ifdef IMG_IN_MEMORY
+    imgcache_drop(&caches[i]);
+#endif
     dosio_close(&dfiles[i]);
 }
 
@@ -506,6 +523,14 @@ int main(int argc, char **argv)
     test_protected();
     test_nfd1();
     test_vfdd();
+#if defined(__ia16__) && defined(IMG_IN_MEMORY)
+    check("in memory: the RAW images were served from their copies (still held, no reads from the files)",
+          caches[RAW_2HD].have && caches[RAW_2HD].file_reads == 0 && caches[RAW_640].have && caches[RAW_640].file_reads == 0);
+    check("in memory: the NFD images too (the ID tables are read from the copies)",
+          caches[NFD0_RO].have && caches[NFD0_RO].file_reads == 0 && caches[NFD1_PROT].have && caches[NFD1_PROT].file_reads == 0);
+    check("in memory: the write that made the FDD image grow dropped its copy",
+          !caches[VFDD_FILL].have);
+#endif
     for (i = 0; i < NIMG; i++)
         close_image(i);
     printf("END %u %u\n", failures, checks);
