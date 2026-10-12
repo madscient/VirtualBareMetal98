@@ -328,7 +328,9 @@ NP21/W の FreeDOS(98) + HIMEMX + EMM386（NOEMS）で `run_dos_tests.py v86` �
 ### リリースの手順
 
 1. `src/dos/vbm98.c` の `VBM98_VERSION` を `x.y.z` にしてビルドする
-2. ホスト OS 上の試験と、DOS 上の全試験を DOSBox-X と NP21/W の両方で通す
+2. ホスト OS 上の試験と、DOS 上の全試験を DOSBox-X と NP21/W の両方で通す。全試験を通したあとの変更が版の番号だけなら、
+   全試験のやり直しは要らない（利用者の判断、2026-10-11・2026-10-12）。ビルドと、ホスト OS 上の試験（README から作る
+   文書の変換を見る）は行う
 3. `vx.y.z` の題でコミットし、同じ名前のタグを打って、ブランチとタグを push する
 4. `build/dos/` の `VBM98.EXE` と `VBM98.DOC`、リポジトリの `README.md` と `LICENSE` を `build/release/` に写し、zip にする。
    zip は Windows の `tar.exe`（`%SystemRoot%\System32`）の `-a -c -f` で作る。Git Bash の `tar` は同じ引数で tar 形式の
