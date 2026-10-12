@@ -77,8 +77,8 @@ struct fdb {
     u16 cmiss;              /* ID の C が要求と違うまま読み書きしたセクタの数 (FFFFh で頭打ち) */
 };
 
-void fdb_init(struct fdb *fb, u8 nunits);
-u8 fdb_direction(u8 ah);
-void fdb_call(struct fdb *fb, const struct fdb_in *in, struct fdb_out *out);
+FARTEXT void __far fdb_init(struct fdb *fb, u8 nunits);
+FARTEXT u8 __far fdb_direction(u8 ah);
+FARTEXT void __far fdb_call(struct fdb *fb, const struct fdb_in *in, struct fdb_out *out);
 
 #endif

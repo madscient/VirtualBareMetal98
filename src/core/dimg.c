@@ -28,17 +28,17 @@
 /* マウントとトラック読込で使い回す。この層は再入しない前提 */
 static u8 scratch[CHUNK_IDS * NFD_ID_SIZE];
 
-static u16 ld16(const u8 *p)
+static FARTEXT u16 __far ld16(const u8 *p)
 {
     return (u16)(p[0] | ((u16)p[1] << 8));
 }
 
-static u32 ld32(const u8 *p)
+static FARTEXT u32 __far ld32(const u8 *p)
 {
     return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
 }
 
-static void st32(u8 *p, u32 v)
+static FARTEXT void __far st32(u8 *p, u32 v)
 {
     p[0] = (u8)v;
     p[1] = (u8)(v >> 8);
@@ -46,22 +46,22 @@ static void st32(u8 *p, u32 v)
     p[3] = (u8)(v >> 24);
 }
 
-static int rd(dimg *img, u32 off, void *buf, u16 len)
+static FARTEXT int __far rd(dimg *img, u32 off, void *buf, u16 len)
 {
     return img->io->read(img->io->ctx, off, buf, len) ? DIMG_E_IO : DIMG_OK;
 }
 
-static int wr(dimg *img, u32 off, const void *buf, u16 len)
+static FARTEXT int __far wr(dimg *img, u32 off, const void *buf, u16 len)
 {
     return img->io->write(img->io->ctx, off, buf, len) ? DIMG_E_IO : DIMG_OK;
 }
 
-u32 dimg_sect_size(u8 n)
+FARTEXT u32 __far dimg_sect_size(u8 n)
 {
     return (u32)128 << n;
 }
 
-static u8 nfd_media(u8 pda)
+static FARTEXT u8 __far nfd_media(u8 pda)
 {
     switch (pda & 0xF0) {
     case 0x10:
@@ -86,7 +86,7 @@ static const struct {
     {  655360UL, 80,  8, 2, DIMG_MEDIA_2DD }
 };
 
-static int mount_raw(dimg *img)
+static FARTEXT int __far mount_raw(dimg *img)
 {
     u16 i;
 
@@ -108,7 +108,7 @@ static int mount_raw(dimg *img)
 /* ---------------------------------------------------------------- FDI */
 
 /* 識別子を持たない形式なので、ヘッダの値とファイルサイズの整合で判定する */
-static int mount_fdi(dimg *img)
+static FARTEXT int __far mount_fdi(dimg *img)
 {
     const u8 *h = scratch;
     u32 type = ld32(h + 4);
@@ -163,7 +163,7 @@ static int mount_fdi(dimg *img)
     return DIMG_OK;
 }
 
-static void track_uniform(dimg *img, dimg_track *t)
+static FARTEXT void __far track_uniform(dimg *img, dimg_track *t)
 {
     dimg_sect *s;
     u32 off;
@@ -189,7 +189,7 @@ static void track_uniform(dimg *img, dimg_track *t)
 
 /* ---------------------------------------------------------------- NFD */
 
-static int nfd_common(dimg *img, u32 *hsize)
+static FARTEXT int __far nfd_common(dimg *img, u32 *hsize)
 {
     int rc = rd(img, 0, scratch, NFD_HDR_COMMON);
 
@@ -203,14 +203,14 @@ static int nfd_common(dimg *img, u32 *hsize)
     return DIMG_OK;
 }
 
-static void nfd_finish(dimg *img, u8 fmt, int maxtrk, u8 pda)
+static FARTEXT void __far nfd_finish(dimg *img, u8 fmt, int maxtrk, u8 pda)
 {
     img->fmt = fmt;
     img->media = nfd_media(pda);
     img->cyls = (u8)(maxtrk < 0 ? 0 : (maxtrk >> 1) + 1);
 }
 
-static int mount_nfd0(dimg *img)
+static FARTEXT int __far mount_nfd0(dimg *img)
 {
     const u8 *e;
     u32 hsize, off;
@@ -252,7 +252,7 @@ static int mount_nfd0(dimg *img)
     return DIMG_OK;
 }
 
-static int track_nfd0(dimg *img, dimg_track *t)
+static FARTEXT int __far track_nfd0(dimg *img, dimg_track *t)
 {
     const u8 *e;
     dimg_sect *s;
@@ -289,7 +289,7 @@ static int track_nfd0(dimg *img, dimg_track *t)
     return DIMG_OK;
 }
 
-static int mount_nfd1(dimg *img)
+static FARTEXT int __far mount_nfd1(dimg *img)
 {
     const u8 *e;
     u32 hsize, off, pos, len;
@@ -370,7 +370,7 @@ static int mount_nfd1(dimg *img)
     return DIMG_OK;
 }
 
-static int track_nfd1(dimg *img, dimg_track *t)
+static FARTEXT int __far track_nfd1(dimg *img, dimg_track *t)
 {
     const u8 *e;
     dimg_sect *s;
@@ -449,7 +449,7 @@ static int track_nfd1(dimg *img, dimg_track *t)
 
 /* --------------------------------------------------------------- VFDD */
 
-static int mount_vfdd(dimg *img)
+static FARTEXT int __far mount_vfdd(dimg *img)
 {
     const u8 *e;
     int rc;
@@ -489,12 +489,12 @@ static int mount_vfdd(dimg *img)
     return DIMG_OK;
 }
 
-static u32 vfdd_map_pos(const dimg_track *t, u8 slot)
+static FARTEXT u32 __far vfdd_map_pos(const dimg_track *t, u8 slot)
 {
     return VFDD_HDR + (u32)(t->cyl * 2 + t->head) * VFDD_TRK_BYTES + (u32)slot * VFDD_ID_SIZE;
 }
 
-static int track_vfdd(dimg *img, dimg_track *t)
+static FARTEXT int __far track_vfdd(dimg *img, dimg_track *t)
 {
     const u8 *e;
     dimg_sect *s;
@@ -532,7 +532,7 @@ static int track_vfdd(dimg *img, dimg_track *t)
 }
 
 /* データを持たないセクタに書くときは、ファイル末尾に実体を足して位置表を書き換える */
-static int vfdd_materialize(dimg *img, dimg_sect *s, u16 xoff, u16 len)
+static FARTEXT int __far vfdd_materialize(dimg *img, dimg_sect *s, u16 xoff, u16 len)
 {
     u32 size = dimg_sect_size(s->n);
     u32 pos = img->fsize;
@@ -563,7 +563,7 @@ static int vfdd_materialize(dimg *img, dimg_sect *s, u16 xoff, u16 len)
 
 /* ------------------------------------------------------------- 共通部 */
 
-int dimg_mount(dimg *img, const dimg_io *io, u32 fsize)
+FARTEXT int __far dimg_mount(dimg *img, const dimg_io *io, u32 fsize)
 {
     int rc;
 
@@ -588,7 +588,7 @@ int dimg_mount(dimg *img, const dimg_io *io, u32 fsize)
     return mount_raw(img);
 }
 
-int dimg_get_track(dimg *img, u8 cyl, u8 head, const dimg_track **trk)
+FARTEXT int __far dimg_get_track(dimg *img, u8 cyl, u8 head, const dimg_track **trk)
 {
     dimg_track *t = &img->cache;
     int rc = DIMG_OK;
@@ -629,7 +629,7 @@ int dimg_get_track(dimg *img, u8 cyl, u8 head, const dimg_track **trk)
     return DIMG_OK;
 }
 
-int dimg_read(dimg *img, const dimg_sect *s, u8 copy, u16 xoff, u16 len)
+FARTEXT int __far dimg_read(dimg *img, const dimg_sect *s, u8 copy, u16 xoff, u16 len)
 {
     u32 size = dimg_sect_size(s->n);
 
@@ -642,7 +642,7 @@ int dimg_read(dimg *img, const dimg_sect *s, u8 copy, u16 xoff, u16 len)
     return img->io->xread(img->io->ctx, s->off + size * copy, xoff, len) ? DIMG_E_IO : DIMG_OK;
 }
 
-int dimg_read_diag(dimg *img, const dimg_diag *d, u8 copy, u16 xoff, u16 len)
+FARTEXT int __far dimg_read_diag(dimg *img, const dimg_diag *d, u8 copy, u16 xoff, u16 len)
 {
     if (len > d->len)
         len = (u16)d->len;
@@ -651,7 +651,7 @@ int dimg_read_diag(dimg *img, const dimg_diag *d, u8 copy, u16 xoff, u16 len)
     return img->io->xread(img->io->ctx, d->off + d->len * copy, xoff, len) ? DIMG_E_IO : DIMG_OK;
 }
 
-int dimg_write(dimg *img, const dimg_sect *s, u16 xoff, u16 len)
+FARTEXT int __far dimg_write(dimg *img, const dimg_sect *s, u16 xoff, u16 len)
 {
     dimg_sect *ms;
     u32 size = dimg_sect_size(s->n);

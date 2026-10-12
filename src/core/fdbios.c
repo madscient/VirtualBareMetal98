@@ -20,7 +20,7 @@ static const struct {
     { 0x5, DIMG_MEDIA_2D,  0 },
 };
 
-static void wa(struct fdb_out *out, u16 addr, u8 val, u8 mask)
+static FARTEXT void __far wa(struct fdb_out *out, u16 addr, u8 val, u8 mask)
 {
     if (out->nwa < sizeof out->wa / sizeof out->wa[0]) {
         out->wa[out->nwa].addr = addr;
@@ -31,14 +31,14 @@ static void wa(struct fdb_out *out, u16 addr, u8 val, u8 mask)
 }
 
 /* AH=84h の問い合わせには、ドライブの能力 (1MB/640KB 両用、1.44MB 対応) を足して返す */
-static u8 caps(const struct fdb_in *in)
+static FARTEXT u8 __far caps(const struct fdb_in *in)
 {
     if ((in->ah & 0x8F) != 0x84 || (in->al & 0x40))
         return 0;
     return (u8)(0x08 | ((in->ah & 0x40) ? 0x04 : 0));
 }
 
-static u8 eot(const dimg_track *t)
+static FARTEXT u8 __far eot(const dimg_track *t)
 {
     u8 i, m = 0;
 
@@ -55,7 +55,7 @@ static u8 eot(const dimg_track *t)
  * R が合う ID が C も H か N も違うものだけなら「シリンダ違い」、R が合って H か N が違えば「該当なし」、
  * R が無ければ「該当なし」
  */
-static u8 find(const dimg_track *t, u8 c, u8 h, u8 r, u8 n, const dimg_sect **s)
+static FARTEXT u8 __far find(const dimg_track *t, u8 c, u8 h, u8 r, u8 n, const dimg_sect **s)
 {
     const dimg_sect *alt = 0;
     u8 i, st = FDB_ST_NODATA;
@@ -82,7 +82,7 @@ static u8 find(const dimg_track *t, u8 c, u8 h, u8 r, u8 n, const dimg_sect **s)
     return st;
 }
 
-static const dimg_diag *find_diag(const dimg_track *t, u8 cmd, u8 c, u8 h, u8 r, u8 n)
+static FARTEXT const dimg_diag * __far find_diag(const dimg_track *t, u8 cmd, u8 c, u8 h, u8 r, u8 n)
 {
     u8 i;
 
@@ -94,7 +94,7 @@ static const dimg_diag *find_diag(const dimg_track *t, u8 cmd, u8 c, u8 h, u8 r,
 }
 
 /* 複数通りのデータを持つセクタは、読むたびに次の通りを返す (不安定なデータの再現) */
-static u8 pick_copy(struct fdb *fb, u8 retry)
+static FARTEXT u8 __far pick_copy(struct fdb *fb, u8 retry)
 {
     u8 copy = 0;
 
@@ -105,7 +105,7 @@ static u8 pick_copy(struct fdb *fb, u8 retry)
     return copy;
 }
 
-static void result(struct fdb_out *out, u8 unit, u8 hd, u8 cyl, u8 c, u8 h, u8 r, u8 n, u8 st, u8 seek)
+static FARTEXT void __far result(struct fdb_out *out, u8 unit, u8 hd, u8 cyl, u8 c, u8 h, u8 r, u8 n, u8 st, u8 seek)
 {
     u8 st0 = (u8)((hd << 2) | unit), st1 = 0, st2 = 0;
 
@@ -135,7 +135,7 @@ static void result(struct fdb_out *out, u8 unit, u8 hd, u8 cyl, u8 c, u8 h, u8 r
 }
 
 /* 読み込み・ベリファイ・書き込み (診断読み込みと削除データの読み書きを含む) */
-static u8 transfer(struct fdb *fb, dimg *img, const struct fdb_in *in, struct fdb_out *out,
+static FARTEXT u8 __far transfer(struct fdb *fb, dimg *img, const struct fdb_in *in, struct fdb_out *out,
                    u8 unit, u8 hd, int op)
 {
     const dimg_track *t;
@@ -211,7 +211,7 @@ static u8 transfer(struct fdb *fb, dimg *img, const struct fdb_in *in, struct fd
     return st;
 }
 
-static u8 format(struct fdb *fb, dimg *img, const struct fdb_in *in, struct fdb_out *out, u8 unit, u8 hd)
+static FARTEXT u8 __far format(struct fdb *fb, dimg *img, const struct fdb_in *in, struct fdb_out *out, u8 unit, u8 hd)
 {
     const dimg_track *t;
     u32 size;
@@ -235,7 +235,7 @@ static u8 format(struct fdb *fb, dimg *img, const struct fdb_in *in, struct fdb_
     return st;
 }
 
-void fdb_init(struct fdb *fb, u8 nunits)
+FARTEXT void __far fdb_init(struct fdb *fb, u8 nunits)
 {
     memset(fb, 0, sizeof *fb);
     fb->nunits = nunits;
@@ -243,7 +243,7 @@ void fdb_init(struct fdb *fb, u8 nunits)
     fb->mode_2hd = fb->mode_2dd = 0x33;
 }
 
-u8 fdb_direction(u8 ah)
+FARTEXT u8 __far fdb_direction(u8 ah)
 {
     switch (ah & 0x0F) {
     case 0x02: case 0x06: case 0x0C:
@@ -255,7 +255,7 @@ u8 fdb_direction(u8 ah)
     }
 }
 
-void fdb_call(struct fdb *fb, const struct fdb_in *in, struct fdb_out *out)
+FARTEXT void __far fdb_call(struct fdb *fb, const struct fdb_in *in, struct fdb_out *out)
 {
     const dimg_track *t;
     const dimg_sect *s;

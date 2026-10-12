@@ -99,17 +99,17 @@ typedef struct dimg {
     dimg_track cache;
 } dimg;
 
-u32 dimg_sect_size(u8 n);
+FARTEXT u32 __far dimg_sect_size(u8 n);
 
-int dimg_mount(dimg *img, const dimg_io *io, u32 fsize);
+FARTEXT int __far dimg_mount(dimg *img, const dimg_io *io, u32 fsize);
 
 /* 何も記録されていないトラックは nsect=0, ndiag=0 で成功を返す */
-int dimg_get_track(dimg *img, u8 cyl, u8 head, const dimg_track **trk);
+FARTEXT int __far dimg_get_track(dimg *img, u8 cyl, u8 head, const dimg_track **trk);
 
-int dimg_read(dimg *img, const dimg_sect *s, u8 copy, u16 xoff, u16 len);
-int dimg_read_diag(dimg *img, const dimg_diag *d, u8 copy, u16 xoff, u16 len);
+FARTEXT int __far dimg_read(dimg *img, const dimg_sect *s, u8 copy, u16 xoff, u16 len);
+FARTEXT int __far dimg_read_diag(dimg *img, const dimg_diag *d, u8 copy, u16 xoff, u16 len);
 
 /* s は直前の dimg_get_track が返したトラックの要素であること */
-int dimg_write(dimg *img, const dimg_sect *s, u16 xoff, u16 len);
+FARTEXT int __far dimg_write(dimg *img, const dimg_sect *s, u16 xoff, u16 len);
 
 #endif
