@@ -719,6 +719,57 @@ static FARTEXT void __far int18(u8 ah, u8 al, u8 ch)
 }
 
 /*
+ * GDC (テキストは状態とパラメータが 60h・コマンドが 62h、グラフィックは A0h・A2h) にコマンドかパラメータを 1 バイト書く。
+ * FIFO が満杯なら空くのを待つ (上限つき)
+ */
+static void gdc_wait(u16 stat_port)
+{
+    u16 n = 10000;
+
+    while ((pio_in8(stat_port) & 0x02) && --n)
+        ;
+}
+
+static void gdc_cmd(u16 stat_port, u8 cmd)
+{
+    gdc_wait(stat_port);
+    pio_out8((u16)(stat_port + 2), cmd);
+}
+
+static void gdc_par(u16 stat_port, u8 val)
+{
+    gdc_wait(stat_port);
+    pio_out8(stat_port, val);
+}
+
+/*
+ * BIOS に CRT モード (行数・桁数・属性の種類) を設定させ、BIOS がそのとき書き直さないレジスタのうち、ゲストが
+ * 書いたもの (vbm.h の vid_text) を既定に戻す: PITCH は 80、表示領域は VRAM の先頭から 1 つ (AH=0Eh)、スムーズ
+ * スクロールのライン数 (CRTC の SSL) は 0。ゲストが書いていないものには触らない (ホストから引き継いだままなので、
+ * 既定の値をこちらで決めなくて済む)。AH=0Ah が設定する範囲と PITCH の既定は参考実装から (design.md §12)
+ */
+static FARTEXT void __far text_mode(u8 mode)
+{
+    int18(0x0A, mode, 0);
+    if (vid_text.pitch_seen) {
+        gdc_cmd(0x60, 0x47);
+        gdc_par(0x60, 80);
+    }
+    if (vid_text.pram_seen)
+        int18(0x0E, 0, 0);
+    if (vid_text.crtc_seen & 0x08)
+        pio_out8(0x76, 0x00);
+}
+
+/* ゲストの書き込みの写しを「何も書かれていない」に戻す。パラメータの途中だったら、60h のトラップも元に戻す */
+static FARTEXT void __far text_forget(void)
+{
+    if (vid_text.par_n)
+        mon_trap_port(0x60, vid_text.par_was);
+    memset(&vid_text, 0, sizeof vid_text);
+}
+
+/*
  * 表示系を電源投入直後 (BIOS が IPL を呼ぶ時点) の状態にする。ホストの BIOS に設定させるので、
  * あとで写す BIOS ワークエリアもその状態になる。初期値は NP2 系の BIOS 実装のリセット処理から:
  *   CRT モード = 04h (簡易グラフィック属性) + SW2-3 が OFF なら 20 行 (bit 1) + SW2-4 が OFF なら 40 桁 (bit 0)
@@ -745,7 +796,8 @@ static FARTEXT void __far video_guest(void)
     vid_gdisp = 0;
     int18(0x42, 0, 0x80);
     vid_glr = VID_GLR_NONE;
-    int18(0x0A, (u8)(0x04 | crt_lo), 0);
+    text_mode((u8)(0x04 | crt_lo));
+    text_forget();
     /* BIOS が 68h に書く項目のうち、モードの値から決まるもの (参考実装の bios0x18_0a): 項目 0 (簡易グラフィック属性) = ON、
        項目 2 (40 桁) = モードの bit 1、項目 5 (KAC) = モードの bit 3 (OFF)。項目 3 はディスプレイの設定で決まり、ここでは追わない */
     vid_mode68 = (u8)(0x01 | ((crt_lo & 0x02) ? 0x04 : 0));
@@ -819,7 +871,7 @@ static FARTEXT void __far video_host(void)
     pio_out8(0x7C, 0x00);
     /* 054Dh の bit 5 (5MHz を使う) をゲスト用に落としていたら戻す (guest_memory)。BIOS に戻させる前に */
     *(u8 __far *)MK_FP(0, WA_PRXDUPD) = (u8)((*(u8 __far *)MK_FP(0, WA_PRXDUPD) & ~0x20) | (host_prxdupd & 0x20));
-    int18(0x0A, (u8)(host_crt_mode & 0x0F), 0);
+    text_mode((u8)(host_crt_mode & 0x0F));
     int18(0x42, 0, (u8)((host_prxdupd & 0x04) ? 0xC0 : 0x80));
     int18((u8)((host_prxcrt & 0x80) ? 0x40 : 0x41), 0, 0);
     int18(0x0C, 0, 0);
@@ -1566,16 +1618,6 @@ static FARTEXT void __far reset_vm(struct mon_guest *g, const char *why, int *ru
     }
 }
 
-/* GDC (テキストは状態 60h・コマンド 62h、グラフィックは A0h・A2h) にコマンドを 1 バイト書く。FIFO が満杯なら空くのを待つ (上限つき) */
-static void gdc_cmd(u16 stat_port, u8 cmd)
-{
-    u16 n = 10000;
-
-    while ((pio_in8(stat_port) & 0x02) && --n)
-        ;
-    pio_out8((u16)(stat_port + 2), cmd);
-}
-
 /* 進み具合の表示 (vbm.h)。ホスト側から。テキスト表示が消されていても見えるように、毎回 ON にする */
 static u16 prog_enters, prog_rc;
 
@@ -1622,7 +1664,58 @@ void vm_prog(char phase)
  * KAC (コードアクセス) モード (vbm.h の vid_mode68) も同じ時機で扱う。ON のままメニューを描くと、漢字が 1 バイトの
  * 文字として描かれて読めない (実機の報告: PC-9821Ap2 で、終了の確認が読めない画面になった。design.md §12)
  */
-FARTEXT void __far vm_gdisp_pause(void)
+/*
+ * テキスト画面の行数・桁数・表示領域も同じ時機で扱う (design.md §9)。メニューは 25 行・80 桁で描くので、開くときに
+ * BIOS にそのモードを設定させる。閉じるときは 2 段で戻す:
+ *   1. BIOS に、ゲストのワークエリアにあるモード (053Ch) を設定させる。ゲストが BIOS で設定した状態はこれで戻る
+ *   2. ゲストがポートに直接書いたレジスタ (vbm.h の vid_text) を、その値で上から書き直す
+ * 1 だけでは、BIOS を通さずに画面を作るゲストの設定が BIOS の既定値になる。2 だけでは、BIOS がポートを通さない
+ * エミュレータで何も戻らず、ゲストが一度も書いていないレジスタの値も決められない。
+ * カーソルを消すのにも BIOS (AH=12h) を使うが、これは CSRFORM の「1 行のライン数」もワークエリアの値で書き直す。
+ * ホスト世界のワークエリアはホストのものなので、先にモードを設定させてワークエリアと画面を揃えておかないと、
+ * ゲストの行数がホストの行数で上書きされて文字が崩れる
+ */
+#define MENU_CRT_MODE 0x04      /* 25 行・80 桁、簡易グラフィック属性 (電源投入時と同じ並び。design.md §16) */
+
+static FARTEXT u8 __far guest_crt_mode(void)
+{
+    g_read(WA_CRT_MODE & ~1UL, mon_data_seg(), (u16)(unsigned)word_buf, 2);
+    return word_buf[WA_CRT_MODE & 1];
+}
+
+static FARTEXT void __far text_note_bytes(const char *name, const u8 *p, u8 n, u16 seen)
+{
+    u8 i;
+
+    if (!seen)
+        return;
+    log_line("; %s", name);
+    for (i = 0; i < n; i++) {
+        if (seen & (1U << i))
+            log_line(" %02X", p[i]);
+        else
+            log_line(" --");
+    }
+}
+
+/* ゲストの画面がメニューの画面と違うとき (モードが違うか、ゲストがポートに直接書いている)、何を戻すことになるかをログに残す */
+static FARTEXT void __far text_note(u8 gmode)
+{
+    if ((gmode & 0x0F) == MENU_CRT_MODE && !vid_text.crtc_seen && !vid_text.csrform_seen && !vid_text.pitch_seen &&
+        !vid_text.pram_seen && !(vid_text.m68_seen & 0x0D))
+        return;
+    log_line("VBM98: VM menu: guest CRT mode %02X", gmode);
+    text_note_bytes("CRTC", vid_text.crtc, 6, vid_text.crtc_seen);
+    text_note_bytes("CSRFORM", vid_text.csrform, 3, vid_text.csrform_seen);
+    text_note_bytes("PITCH", &vid_text.pitch, 1, vid_text.pitch_seen);
+    text_note_bytes("PRAM", vid_text.pram, 16, vid_text.pram_seen);
+    if (vid_text.m68_seen & 0x0D)
+        log_line("; mode flip-flop %02X (written %02X)", vid_mode68, vid_text.m68_seen);
+    log_line(". The menu uses mode %02X; the guest's is put back when it closes\n", MENU_CRT_MODE);
+}
+
+/* ポートへの書き込みだけで済むぶん。例外で止まったときの表示 (stop_report) は BIOS を呼ばないので、これだけを使う */
+static FARTEXT void __far gdisp_pause(void)
 {
     gdc_cmd(0xA0, 0x0C);
     if (vid_mode68 & 0x20) {
@@ -1631,14 +1724,59 @@ FARTEXT void __far vm_gdisp_pause(void)
     }
 }
 
-FARTEXT void __far vm_gdisp_resume(void)
+FARTEXT void __far vm_screen_pause(void)
 {
-    if (vid_mode68 & 0x20)
-        pio_out8(0x68, 0x0B);
+    text_note(guest_crt_mode());
+    text_mode(MENU_CRT_MODE);
+    gdisp_pause();
+}
+
+FARTEXT void __far vm_screen_resume(void)
+{
+    u8 i;
+
+    int18(0x0A, (u8)(guest_crt_mode() & 0x0F), 0);
+    int18(0x12, 0, 0);
+    for (i = 0; i < 6; i++)
+        if (vid_text.crtc_seen & (1U << i))
+            pio_out8((u16)(0x70 + i * 2), vid_text.crtc[i]);
+    /* 68h の項目のうち BIOS のモード設定が書き直すもの: 0 (属性の種類)、2 (40 桁)、3、5 (KAC) */
+    for (i = 0; i < 6; i++)
+        if ((0x2D & vid_text.m68_seen) & (1U << i))
+            pio_out8(0x68, (u8)(i * 2 + ((vid_mode68 >> i) & 1)));
+    if (vid_text.pitch_seen) {
+        gdc_cmd(0x60, 0x47);
+        gdc_par(0x60, vid_text.pitch);
+    }
+    /* PRAM は、書かれたバイトの並びごとに、その先頭の番号をコマンドに入れて書く */
+    for (i = 0; i < 16; i++) {
+        if (!(vid_text.pram_seen & (1U << i)))
+            continue;
+        if (i == 0 || !(vid_text.pram_seen & (1U << (i - 1))))
+            gdc_cmd(0x60, (u8)(0x70 + i));
+        gdc_par(0x60, vid_text.pram[i]);
+    }
+    if (vid_text.csrform_seen) {
+        gdc_cmd(0x60, 0x4B);
+        for (i = 0; i < 3 && (vid_text.csrform_seen & (1U << i)); i++)
+            gdc_par(0x60, vid_text.csrform[i]);
+    }
     if (vid_gdisp)
         gdc_cmd(0xA0, 0x0D);
     if (!vid_tdisp)
         gdc_cmd(0x60, 0x0C);
+    /*
+     * ゲストが、写しを取っているコマンドのパラメータを書いている途中だった。こちらが挟んだコマンドで列が切れて
+     * いるので、同じコマンドと、そこまでに受け取ったパラメータを最後に書き直す。ゲストの続きがその後ろにつながる
+     */
+    if (vid_text.par_n) {
+        const u8 *p = vid_text.par_cmd == 0x4B ? vid_text.csrform :
+                      vid_text.par_cmd == 0x47 ? &vid_text.pitch : vid_text.pram + (vid_text.par_cmd & 0x0F);
+
+        gdc_cmd(0x60, vid_text.par_cmd);
+        for (i = 0; i < vid_text.par_i; i++)
+            gdc_par(0x60, p[i]);
+    }
 }
 
 /*
@@ -1661,7 +1799,7 @@ enum { SHOT_PLAIN, SHOT_OR_HOLD, SHOT_AND_NOTE };
 static FARTEXT int __far shot_take(char *gname, u8 how)
 {
     struct shot_info si;
-    u8 disp, acc;
+    u8 disp, acc, gmode;
     int rc, same;
 
     /*
@@ -1679,6 +1817,21 @@ static FARTEXT int __far shot_take(char *gname, u8 how)
     si.pal = vid_pal;
     si.color16 = vid_color16;
     si.anapal = vid_anapal;
+    /*
+     * テキストの 1 行のライン数と、文字の上に空くライン数 (design.md §17)。ゲストがテキスト GDC に CSRFORM を書いて
+     * いれば、その L/R + 1。書いていなければ (起動時のままか、BIOS がポートを通さないエミュレータ)、ゲストの
+     * ワークエリアのモードの bit 0 (20 行) から。文字は 16 ラインなので、それより短い行 (200 ラインの画面など) は
+     * 16 ラインとして描く。文字の上の空きは CRTC の PL (16 以上は負の数で、そのぶん上が空く) から。書かれて
+     * いなければ、文字が行の中央に来る数 (BIOS が 20 行で設定する PL = 1Eh と同じ 2 ライン)
+     */
+    gmode = guest_crt_mode();
+    si.text_pitch = (u8)((vid_text.csrform_seen & 1) ? (vid_text.csrform[0] & 0x1F) + 1 : (gmode & 0x01) ? 20 : 16);
+    if (si.text_pitch < 16)
+        si.text_pitch = 16;
+    if (vid_text.crtc_seen & 1)
+        si.text_top = (u8)((vid_text.crtc[0] & 0x10) ? 32 - (vid_text.crtc[0] & 0x1F) : 0);
+    else
+        si.text_top = (u8)((si.text_pitch - 16) >> 1);
     /*
      * 撮るのは表示しているページ。VRAM の窓に見えているのは描画ページなので、違っていれば撮る間だけ合わせる
      * (2 つのページを切り替えながら描くソフトでは、描きかけや作業用のページが窓に出ている)。
@@ -1706,8 +1859,10 @@ static FARTEXT int __far shot_take(char *gname, u8 how)
         if (!rc) {
             u8 k;
 
+            log_line("VBM98: screenshot: text: %u rows of %u lines, glyphs %u lines down (guest CRT mode %02X)\n",
+                     (unsigned)(400 / si.text_pitch), si.text_pitch, si.text_top, gmode);
             log_line("VBM98: screenshot: text attributes: %u of %u cells reversed, %u hidden, cell 0 attr %02X\n",
-                     shot_rev_cells, (unsigned)(80 * 25), shot_hidden_cells, shot_attr0);
+                     shot_rev_cells, (unsigned)(80 * (400 / si.text_pitch)), shot_hidden_cells, shot_attr0);
             /* 色の写し (ポート 6Ah・A8h〜AEh への書き込みから)。絵の色が合わないときの切り分けの材料 */
             log_line("VBM98: screenshot: %s mode, mode flip-flop %02X, palette (GRB):", vid_color16 ? "16-color" : "8-color", vid_mode68);
             for (k = 0; k < 16; k++)
@@ -2023,7 +2178,7 @@ static FARTEXT void __far stop_report(u16 rc, const struct mon_guest *g)
     log_hold(xfer_seg(), 0x8000);
     keep_on();
     gdc_cmd(0x60, 0x0D);
-    vm_gdisp_pause();
+    gdisp_pause();
     screen_clear();
     vm_prog('F');
     ui_tty_begin(1);
@@ -2194,6 +2349,9 @@ int main(int argc, char **argv)
     mon_trap_port(0xA2, 1);
     /* モードフリップフロップ (68h)。KAC モードを追い、メニューの間だけ OFF にする (vbm.h の vid_mode68) */
     mon_trap_port(0x68, 1);
+    /* CRTC (PL、BL、CL、SSL、SUR、SDR)。テキストの行の作りの写しを持ち、メニューのあとに戻す (vbm.h の vid_text) */
+    for (i = 0x70; i <= 0x7A; i += 2)
+        mon_trap_port((u16)i, 1);
     /* DIP スイッチの読み出しポート。-dipsw があればゲストの値に差し替える (vbm_r0.c)。なければ素通し */
     if (dip_on) {
         mon_trap_port(0x31, 1);

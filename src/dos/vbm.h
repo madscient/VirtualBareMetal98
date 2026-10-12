@@ -73,6 +73,25 @@ extern u8 vid_glr;
  * BIOS が設定する値を vbm98.c が入れ、以後の書き込みを ring 0 が追う
  */
 extern u8 vid_mode68;
+/*
+ * ゲストがテキストの表示系のポートに書いた値の写し (ring 0 側が持つ)。どれも読み出せないレジスタで、メニューが BIOS に
+ * 画面を設定させ直すと失われる。閉じるときに、BIOS にゲストのモードを設定させたあと、ここに写しのあるものだけを
+ * 上から書き直す (design.md §9)。*_seen の bit n が「n 番目のバイトをゲストが書いた」。起動時とリセットで全部 0
+ *   crtc      CRTC のポート 70h + n * 2 (PL、BL、CL、SSL、SUR、SDR の順)
+ *   csrform   テキスト GDC の CSRFORM (コマンド 4Bh) のパラメータ 3 つ。1 行のライン数とカーソルの形
+ *   pitch     同じく PITCH (47h) のパラメータ
+ *   pram      同じく PRAM (70h + 先頭の番号) の 16 バイト。表示領域の開始番地とライン数
+ *   m68_seen  モードフリップフロップ (68h) の項目のうち、ゲストが書いたもの (値は vid_mode68)
+ * par_* は、パラメータを取るコマンドを 62h で見てから、そのパラメータを 60h で受け取っている途中の状態。
+ * par_n が 0 でなければ途中 (ポート 60h をトラップしている。par_was は、その前にトラップしていたか)
+ */
+struct vid_text {
+    u8  crtc[6], csrform[3], pitch, pram[16];
+    u8  crtc_seen, csrform_seen, pitch_seen, m68_seen;
+    u16 pram_seen;
+    u8  par_cmd, par_i, par_n, par_was;
+};
+extern struct vid_text vid_text;
 /* 開発用: COPY の代わりにスクリーンショットにするスキャンコード (0 なら無し)。-stopkey と同じ事情 */
 extern u8 kbd_shot_alt;
 /*
@@ -200,8 +219,8 @@ FARTEXT int __far vm_mount(int unit, const char *path, int quiet);   /* 0 で成
 FARTEXT void __far vm_eject(int unit);
 FARTEXT const char * __far vm_drive_name(int unit);                   /* 入っているイメージのパス。空なら "" */
 FARTEXT int __far vm_shot(char *gname);                              /* スクリーンショット。gname (13 バイト以上) に G 側のファイル名。0 なら名前はいらない */
-FARTEXT void __far vm_gdisp_pause(void);                             /* メニューを開く: グラフィック表示を GDC のコマンドで消す (VRAM には触らない) */
-FARTEXT void __far vm_gdisp_resume(void);                            /* メニューを閉じる: ゲストの状態 (vid_gdisp) が ON なら表示を戻す */
+FARTEXT void __far vm_screen_pause(void);                            /* メニューを開く: グラフィック表示を消し、テキストを 25 行・80 桁にする (VRAM には触らない) */
+FARTEXT void __far vm_screen_resume(void);                           /* メニューを閉じる: 表示系をゲストが設定していた状態へ戻す */
 
 /* 開発用: モニタに届いたものの記録 (ring 0 側が書き、ホストが止めたときに表示する) */
 #define EVLOG_SIZE 32

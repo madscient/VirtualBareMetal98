@@ -96,6 +96,7 @@ u8 vid_color16, vid_anapal[16 * 3];
 u8 vid_gdisp, vid_tdisp;
 u8 vid_glr = VID_GLR_NONE;
 u8 vid_mode68;
+struct vid_text vid_text;
 static u8 glr_wait;             /* グラフィック GDC に CSRFORM が書かれ、最初のパラメータを待っている */
 static u8 glr_was;              /* 待つ前に、ポート A0h をトラップしていたか */
 u8 shot_wait, shot_max, shot_clean;
@@ -564,6 +565,44 @@ u16 mon_on_out(u16 port, u8 size, u32 val)
         u8 bit = (u8)(1 << ((v >> 1) & 7));
 
         vid_mode68 = (u8)((v & 1) ? (vid_mode68 | bit) : (vid_mode68 & ~bit));
+        vid_text.m68_seen |= bit;
+    }
+    /*
+     * テキストの表示系の写し (vbm.h の vid_text)。CRTC (70h〜7Ah) は常にトラップする。テキスト GDC のパラメータの
+     * ポート 60h は、カーソルを動かすたびに書かれるので常にはトラップしない。写す対象のコマンド (CSRFORM 4Bh、
+     * PITCH 47h、PRAM 70h〜7Fh) を 62h で見てから、パラメータが揃うか次のコマンドが来るまでの間だけトラップする
+     */
+    if (port >= 0x70 && port <= 0x7A && !(port & 1) && size == 1) {
+        u8 n = (u8)((port - 0x70) >> 1);
+
+        vid_text.crtc[n] = (u8)v;
+        vid_text.crtc_seen |= (u8)(1 << n);
+    }
+    if (port == 0x62 && size == 1) {
+        if (vid_text.par_n)
+            mon_trap_port_r0(0x60, vid_text.par_was);
+        vid_text.par_cmd = (u8)v;
+        vid_text.par_i = 0;
+        vid_text.par_n = (u8)(v == 0x4B ? 3 : v == 0x47 ? 1 : (v & 0xF0) == 0x70 ? 16 - (v & 0x0F) : 0);
+        if (vid_text.par_n)
+            vid_text.par_was = mon_trap_port_r0(0x60, 1);
+    } else if (port == 0x60 && size == 1 && vid_text.par_n) {
+        if (vid_text.par_cmd == 0x4B) {
+            vid_text.csrform[vid_text.par_i] = (u8)v;
+            vid_text.csrform_seen |= (u8)(1 << vid_text.par_i);
+        } else if (vid_text.par_cmd == 0x47) {
+            vid_text.pitch = (u8)v;
+            vid_text.pitch_seen = 1;
+        } else {
+            u8 k = (u8)((vid_text.par_cmd & 0x0F) + vid_text.par_i);
+
+            vid_text.pram[k] = (u8)v;
+            vid_text.pram_seen |= (u16)(1U << k);
+        }
+        if (++vid_text.par_i == vid_text.par_n) {
+            vid_text.par_n = 0;
+            mon_trap_port_r0(0x60, vid_text.par_was);
+        }
     }
     if ((port == 0xA2 || port == 0x62) && size == 1) {
         u8 *disp = port == 0xA2 ? &vid_gdisp : &vid_tdisp;

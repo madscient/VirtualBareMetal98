@@ -404,8 +404,21 @@ def test_shot(work):
         for name in (tag + '001G.PNG', tag + '001T.PNG', tag + '.LOG', 'SHOT%s.OUT' % tag[1], 'PLANE.OUT'):
             if os.path.exists(os.path.join(work, name)):
                 os.remove(os.path.join(work, name))
+    # 画面を 20 行にして待つ IPL (tests/boot/textipl.S)。SA は BIOS で、SB はポートに直接書いて 20 行にする。
+    # テキストの PNG は画面と同じ行の間隔 (1 行 20 ライン、文字はその 3 ライン目から 16 ライン) で描かれる
+    for tag, binname in (('SA', 'TEXT20.BIN'), ('SB', 'TEXT20D.BIN')):
+        with open(os.path.join(BUILT, binname), 'rb') as f:
+            imgc = bytearray(77 * 2 * 8 * 1024)
+            imgc[0:1024] = f.read()
+        with open(os.path.join(work, tag + '.IMG'), 'wb') as f:
+            f.write(imgc)
+        for name in (tag + '001G.PNG', tag + '001T.PNG', tag + '.LOG', 'SHOT%s.OUT' % tag[1]):
+            if os.path.exists(os.path.join(work, name)):
+                os.remove(os.path.join(work, name))
     # 1 枚目は 8 色モード。IPL が約 1 秒後に 16 色モードへ移るので、2 枚目は 16 色モード
     finished = dosenv.run_batch(['VBM98.EXE -fdd0 S.IMG -tick -shotat 50,150 -stopafter 200 -log S.LOG,1 > SHOT.OUT',
+                                 'VBM98.EXE -fdd0 SA.IMG -tick -shotat 50 -stopafter 100 -ss SA -log SA.LOG > SHOTA.OUT',
+                                 'VBM98.EXE -fdd0 SB.IMG -tick -shotat 50 -stopafter 100 -ss SB -log SB.LOG > SHOTB.OUT',
                                  'VBM98.EXE -fdd0 S4.IMG -tick -shotat 50 -stopafter 100 -ss S4A -dipsw *0**** > SHOT4A.OUT',
                                  'VBM98.EXE -fdd0 S4.IMG -tick -shotat 50 -stopafter 100 -ss S4B -dipsw *1**** > SHOT4B.OUT',
                                  'PAGESET.COM',
@@ -415,7 +428,7 @@ def test_shot(work):
                                  'VBM98.EXE -fdd0 S8.IMG -tick -shotat 50 -stopafter 150 -ss S8 -log S8.LOG > SHOT8.OUT',
                                  'PLANERD.COM > PLANE.OUT',
                                  'VBM98.EXE -fdd0 S9.IMG -tick -shotat 50 -stopafter 100 -ss S9 -log S9.LOG > SHOT9.OUT'],
-                                300, core='normal')
+                                360, core='normal')
     for line in imgtests.read_lines(work, 'SHOT.OUT') or []:
         print('  ' + line)
     if not finished:
@@ -460,6 +473,22 @@ def test_shot(work):
     log7, log8, log9 = (imgtests.read_lines(work, n) or [] for n in ('S7.LOG', 'S8.LOG', 'S9.LOG'))
     plane = ' '.join(imgtests.read_lines(work, 'PLANE.OUT') or []).strip()
     print('  planes after the run that leaves the charger on: %s' % plane)
+
+    def text20(tag):
+        """20 行の画面のテキストの PNG。IPL は r 行 c 桁 (c >= 3) に 'A' + (r + c) mod 26 を白で書く。1 行 20 ラインで、
+        上下 2 ラインずつが空き、文字はその間の 16 ライン。1 行 3 桁の文字は 0 行 4 桁と同じなので、形が一致するはず
+        (25 行の間隔で描かれていれば、位置がずれて一致しない)"""
+        p = read_png4(os.path.join(work, tag + '001T.PNG'))
+        if p is None or len(p['rows']) != 400:
+            return False
+        rows = p['rows']
+
+        def block(r, c):
+            return [rows[r * 20 + 2 + y][c * 8:c * 8 + 8] for y in range(16)]
+
+        gaps = all(v == 8 for r in range(20) for y in (r * 20, r * 20 + 1, r * 20 + 18, r * 20 + 19) for v in rows[y])
+        inked = all(any(v == 7 for line in block(r, 3) for v in line) for r in (0, 1, 19))
+        return gaps and inked and block(1, 3) == block(0, 4) and block(19, 3) == block(0, 22) and block(0, 3) != block(0, 4)
 
     def put_off(log):
         return any('screenshot put off' in l for l in log)
@@ -507,6 +536,14 @@ def test_shot(work):
         ('the log records the attribute counts of the text shot: 1 reversed cell ("R"), 1 hidden ("S"), cell 0 attr E1',
          any('text attributes: 1 of 2000 cells reversed, 1 hidden, cell 0 attr E1' in l
              for l in imgtests.read_lines(work, 'S.LOG') or [])),
+        ('the log records the text layout of that shot: 25 rows of 16 lines',
+         any('screenshot: text: 25 rows of 16 lines, glyphs 0 lines down' in l for l in imgtests.read_lines(work, 'S.LOG') or [])),
+        ('guest that set 20 lines through the BIOS: the text shot has 20 rows of 20 lines, glyphs 2 lines down, gaps transparent',
+         text20('SA') and any('screenshot: text: 20 rows of 20 lines, glyphs 2 lines down' in l
+                              for l in imgtests.read_lines(work, 'SA.LOG') or [])),
+        ('guest that set 20 lines through the ports: the same picture layout',
+         text20('SB') and any('screenshot: text: 20 rows of 20 lines, glyphs 2 lines down' in l
+                              for l in imgtests.read_lines(work, 'SB.LOG') or [])),
     )
     ok = True
     for name, c in checks:
@@ -665,18 +702,33 @@ def test_menu(work):
         imgk[0:1024] = f.read()
     with open(os.path.join(work, 'K.IMG'), 'wb') as f:
         f.write(imgk)
-    for name in ('MENU.OUT', 'M001G.PNG', 'M001T.PNG', 'M.LOG', 'MENUK.OUT', 'K.LOG'):
+    # 画面を 20 行にして待つ IPL (tests/boot/textipl.S)。TEXT20.BIN は BIOS で、TEXT20D.BIN はポートに直接書いて 20 行にする。
+    # メニューは 25 行で描いて、閉じるときにゲストの行数へ戻す (design.md §9)。戻すための材料 (ゲストのワークエリアの
+    # モードと、ポートへの書き込みの写し) がそろっていることを、ログの行で見る。戻ったあとの絵は自動試験では見えない
+    for binname, imgname in (('TEXT20.BIN', 'T.IMG'), ('TEXT20D.BIN', 'TD.IMG')):
+        with open(os.path.join(BUILT, binname), 'rb') as f:
+            imgt = bytearray(77 * 2 * 8 * 1024)
+            imgt[0:1024] = f.read()
+        with open(os.path.join(work, imgname), 'wb') as f:
+            f.write(imgt)
+    for name in ('MENU.OUT', 'M001G.PNG', 'M001T.PNG', 'M.LOG', 'MENUK.OUT', 'K.LOG', 'MENUT.OUT', 'T.LOG', 'MENUTD.OUT', 'TD.LOG'):
         if os.path.exists(os.path.join(work, name)):
             os.remove(os.path.join(work, name))
     # -log の心拍 (1 秒 = 100 刻み) は、150 刻みで止める前に 1 回入る
     finished = dosenv.run_batch(['VBM98.EXE -fdd0 M.IMG -tick -menuat 50 -menukeys 03,00,00 -stopafter 150 -log M.LOG,1 > MENU.OUT',
-                                 'VBM98.EXE -fdd0 K.IMG -tick -menuat 50 -menukeys 00 -stopafter 100 -log K.LOG > MENUK.OUT'],
-                                240, core='normal')
+                                 'VBM98.EXE -fdd0 K.IMG -tick -menuat 50 -menukeys 00 -stopafter 100 -log K.LOG > MENUK.OUT',
+                                 'VBM98.EXE -fdd0 T.IMG -tick -menuat 50 -menukeys 00 -stopafter 100 -log T.LOG > MENUT.OUT',
+                                 'VBM98.EXE -fdd0 TD.IMG -tick -menuat 50 -menukeys 00 -stopafter 100 -log TD.LOG > MENUTD.OUT'],
+                                360, core='normal')
     lines = imgtests.read_lines(work, 'MENU.OUT') or []
     for line in lines:
         print('  ' + line)
     loglines = imgtests.read_lines(work, 'M.LOG') or []
     klog = imgtests.read_lines(work, 'K.LOG') or []
+    tlog = imgtests.read_lines(work, 'T.LOG') or []
+    tdlog = imgtests.read_lines(work, 'TD.LOG') or []
+    tnote = [l for l in tlog if 'VM menu: guest CRT mode' in l]
+    tdnote = [l for l in tdlog if 'VM menu: guest CRT mode' in l]
     g = read_png4(os.path.join(work, 'M001G.PNG'))
     t = read_png4(os.path.join(work, 'M001T.PNG'))
 
@@ -702,6 +754,14 @@ def test_menu(work):
         ('guest with the code access mode (port 68h) on: the menu turned it off for its stay, and the guest resumed and stopped',
          any('code access mode (port 68h) on; turned off' in l for l in klog) and any('stopped after 100' in l for l in klog)),
         ('guest that leaves the code access mode alone: no such note', not any('code access mode' in l for l in loglines)),
+        ('guest that set 20 lines through the BIOS: the menu saw the mode in the guest work area (low digit 5), and the guest resumed and stopped',
+         len(tnote) == 1 and tnote[0].split('guest CRT mode ')[1][1:2] == '5' and any('stopped after 100' in l for l in tlog)),
+        ('guest that set 20 lines through the ports: the monitor kept what it wrote to the CRTC and the text GDC (CSRFORM, PITCH, PRAM)',
+         len(tdnote) == 1 and tdnote[0].split('guest CRT mode ')[1][1:2] == '4' and
+         '; CRTC 1E 11 10 -- -- --; CSRFORM 13 00 9B; PITCH 50; PRAM 00 00 00 19' + ' --' * 12 + '.' in tdnote[0] and
+         any('stopped after 100' in l for l in tdlog)),
+        ('guest in the power-on text mode that wrote none of those ports: no such note',
+         not any('VM menu: guest CRT mode' in l for l in loglines)),
     )
     ok = True
     for name, c in checks:

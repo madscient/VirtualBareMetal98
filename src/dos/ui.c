@@ -55,7 +55,7 @@ static FARTEXT void __far put_wide(u8 row, u8 col, u16 code, u8 attr)
 
 FARTEXT void __far ui_open(void)
 {
-    vm_gdisp_pause();   /* グラフィック表示を消す (閉じるときにゲストの状態へ戻す。design.md §9) */
+    vm_screen_pause();  /* グラフィック表示を消し、テキストを 25 行・80 桁にする (閉じるときにゲストの状態へ戻す。design.md §9) */
     saved = (u8)(stash_write(STASH_MENU, TVRAM_SEG, 0, SHOWN) == 0 &&
                  stash_write(STASH_MENU + SHOWN, TVRAM_SEG, TVRAM_ATTR, SHOWN) == 0);
     ui_fill(0, 0, UI_COLS, UI_ROWS, UI_WHITE);
@@ -69,7 +69,7 @@ FARTEXT void __far ui_close(void)
         stash_read(STASH_MENU, TVRAM_SEG, 0, SHOWN);
         stash_read(STASH_MENU + SHOWN, TVRAM_SEG, TVRAM_ATTR, SHOWN);
     }
-    vm_gdisp_resume();
+    vm_screen_resume();
 }
 
 FARTEXT void __far ui_fill(u8 row, u8 col, u8 w, u8 h, u8 attr)

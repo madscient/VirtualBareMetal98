@@ -203,6 +203,12 @@ ls -l "$out/SHOTKAC.BIN" | awk '{print $5, "bytes  SHOTKAC.BIN"}'
 ia16-elf-gcc -c -DMONO "$root/tests/boot/shotipl.S" -o "$out/shotmono.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTMONO.BIN" "$out/shotmono.o"
 ls -l "$out/SHOTMONO.BIN" | awk '{print $5, "bytes  SHOTMONO.BIN"}'
+ia16-elf-gcc -c "$root/tests/boot/textipl.S" -o "$out/text20.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/TEXT20.BIN" "$out/text20.o"
+ls -l "$out/TEXT20.BIN" | awk '{print $5, "bytes  TEXT20.BIN"}'
+ia16-elf-gcc -c -DDIRECT "$root/tests/boot/textipl.S" -o "$out/text20d.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/TEXT20D.BIN" "$out/text20d.o"
+ls -l "$out/TEXT20D.BIN" | awk '{print $5, "bytes  TEXT20D.BIN"}'
 ia16-elf-gcc -c "$root/tests/boot/planerd.S" -o "$out/planerd.o"
 ia16-elf-ld -Ttext=0x100 --oformat=binary -o "$out/PLANERD.COM" "$out/planerd.o"
 ls -l "$out/PLANERD.COM" | awk '{print $5, "bytes  PLANERD.COM"}'

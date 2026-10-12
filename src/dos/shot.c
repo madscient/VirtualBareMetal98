@@ -4,7 +4,7 @@
  * グラフィックは B・R・G の 3 プレーン (A8000h・B0000h・B8000h) をデジタルパレットの色に直し、
  * 640×400 にする (200 ラインは縦 2 倍)。表示開始番地は見ていない。表示ページは呼ぶ側が合わせる (design.md §17)。
  * テキストは文字コードと属性 (A0000h・A2000h) を、CG ROM のパターン (ポート A1h/A3h/A5h/A9h) で描き、
- * 文字のない画素はパレット番号 8 (透明) にする。BIOS (INT 18h AH=14h) は NP21/W のホスト世界で
+ * 文字のない画素はパレット番号 8 (透明) にする。行の間隔は呼ぶ側が渡す (20 行なら 1 行 20 ライン)。BIOS (INT 18h AH=14h) は NP21/W のホスト世界で
  * 何も返さなかったので使わない。
  * VRAM は far ポインタに添字で触ると gcc-ia16 6.3 の内部エラーを起こすので、_fmemcpy で 1 行ずつ写す。
  * 書き出しは転送バッファ (64KB) に溜めてから DOS へ渡す
@@ -28,7 +28,6 @@
 #define TVRAM_SEG   0xA000
 #define TVRAM_ATTR  0x2000
 #define COLS        80
-#define ROWS        25
 #define CELL_H      16
 #define TRANSPARENT 8
 
@@ -228,7 +227,11 @@ static FARTEXT void __far text_palette(u8 *rgb, u8 *alpha)
     alpha[8] = 0;
 }
 
-static FARTEXT void __far pack_text_line(u8 line)
+/*
+ * 1 行のうちの 1 ラインを色番号にする。glyph は文字のパターンの何ライン目か (CELL_H 以上なら、文字の上下に空く
+ * ライン)、last はその行の最後のラインか。下線は行の最後のラインに引かれ、反転は空くラインも塗る (design.md §12)
+ */
+static FARTEXT void __far pack_text_line(u8 glyph, u8 last)
 {
     u16 c;
     u8 a, color, pat, x, k, px[8];
@@ -236,8 +239,8 @@ static FARTEXT void __far pack_text_line(u8 line)
     for (c = 0; c < COLS; c++) {
         a = tattr[c * 2];
         color = (u8)(a >> 5);
-        pat = cellpat[c][line];
-        if ((a & ATTR_UL) && line == CELL_H - 1)
+        pat = (u8)(glyph < CELL_H ? cellpat[c][glyph] : 0);
+        if ((a & ATTR_UL) && last)
             pat = 0xFF;
         if (a & ATTR_REV)
             pat = (u8)~pat;
@@ -250,12 +253,12 @@ static FARTEXT void __far pack_text_line(u8 line)
     }
 }
 
-static FARTEXT int __far save_text(struct sink_ctx *s)
+static FARTEXT int __far save_text(struct sink_ctx *s, const struct shot_info *si)
 {
     struct png_writer w;
     u8 rgb[9 * 3], alpha[9];
-    u16 r, off;
-    u8 line;
+    u16 r, off, y = 0;
+    u8 line, rows = (u8)(HEIGHT / si->text_pitch);
 
     text_palette(rgb, alpha);
     if (png_begin(&w, sink, s, WIDTH, HEIGHT, rgb, 9, alpha))
@@ -268,7 +271,7 @@ static FARTEXT int __far save_text(struct sink_ctx *s)
      */
     pio_out8(0x68, 0x0B);
     shot_rev_cells = shot_hidden_cells = 0;
-    for (r = 0; r < ROWS; r++) {
+    for (r = 0; r < rows; r++) {
         u16 c;
 
         off = (u16)(r * COLS * 2);
@@ -283,8 +286,9 @@ static FARTEXT int __far save_text(struct sink_ctx *s)
                 shot_hidden_cells++;
         }
         gather_patterns();
-        for (line = 0; line < CELL_H; line++) {
-            pack_text_line(line);
+        for (line = 0; line < si->text_pitch; line++, y++) {
+            /* 文字より上のラインでは、引き算が 0 を下回って CELL_H 以上になる (空くラインとして扱われる) */
+            pack_text_line((u8)(line - si->text_top), (u8)(line == si->text_pitch - 1));
             if (png_row(&w, packed)) {
                 pio_out8(0x68, (u8)((vid_mode68 & 0x20) ? 0x0B : 0x0A));
                 return 1;
@@ -292,6 +296,11 @@ static FARTEXT int __far save_text(struct sink_ctx *s)
         }
     }
     pio_out8(0x68, (u8)((vid_mode68 & 0x20) ? 0x0B : 0x0A));
+    /* 1 行のライン数で 400 が割り切れないときの残りは、何も描かない */
+    memset(packed, (TRANSPARENT << 4) | TRANSPARENT, sizeof packed);
+    for (; y < HEIGHT; y++)
+        if (png_row(&w, packed))
+            return 1;
     return png_end(&w) != 0;
 }
 
@@ -337,7 +346,7 @@ static FARTEXT int __far write_file(const char *name, const struct shot_info *si
     if (_dos_creat(name, _A_NORMAL, &s.handle) != 0)
         return 1;
     s.fill = 0;
-    rc = graphics ? save_graphics(&s, si) : save_text(&s);
+    rc = graphics ? save_graphics(&s, si) : save_text(&s, si);
     if (rc == 0)
         rc = sink_flush(&s);
     _dos_close(s.handle);
