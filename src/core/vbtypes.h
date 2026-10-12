@@ -19,4 +19,10 @@ typedef uint32_t u32;
 #define __far
 #endif
 
+/*
+ * FARTEXT の static 関数を、本体のコードセグメントに残る関数 (main など) から 1 箇所だけで呼ぶときに足す。
+ * 足さないと、コンパイラが呼ぶ側に取り込んで、中身が本体のコードセグメントに戻る (リンクマップで呼ぶ側が膨らむ)
+ */
+#define NOINLINE __attribute__((noinline))
+
 #endif

@@ -29,7 +29,7 @@ static void st32(u8 *p, u32 v)
     st16(p + 2, (u16)(v >> 16));
 }
 
-int xms_init(void)
+FARTEXT int __far xms_init(void)
 {
     union REGS r;
     struct SREGS s;
@@ -46,7 +46,7 @@ int xms_init(void)
     return 0;
 }
 
-int xms_alloc(u16 kb, u16 *handle)
+FARTEXT int __far xms_alloc(u16 kb, u16 *handle)
 {
     struct xms_regs r = { 0x0900, 0, 0, 0 };
 
@@ -57,7 +57,7 @@ int xms_alloc(u16 kb, u16 *handle)
     return 0;
 }
 
-int xms_free(u16 handle)
+FARTEXT int __far xms_free(u16 handle)
 {
     struct xms_regs r = { 0x0A00, 0, 0, 0 };
 
@@ -65,7 +65,7 @@ int xms_free(u16 handle)
     return call(&r);
 }
 
-int xms_lock(u16 handle, u32 *phys)
+FARTEXT int __far xms_lock(u16 handle, u32 *phys)
 {
     struct xms_regs r = { 0x0C00, 0, 0, 0 };
 
@@ -76,7 +76,7 @@ int xms_lock(u16 handle, u32 *phys)
     return 0;
 }
 
-int xms_unlock(u16 handle)
+FARTEXT int __far xms_unlock(u16 handle)
 {
     struct xms_regs r = { 0x0D00, 0, 0, 0 };
 
@@ -84,7 +84,7 @@ int xms_unlock(u16 handle)
     return call(&r);
 }
 
-int xms_a20(int enable)
+FARTEXT int __far xms_a20(int enable)
 {
     struct xms_regs r = { 0, 0, 0, 0 };
 

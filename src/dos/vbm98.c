@@ -2317,29 +2317,30 @@ static FARTEXT void __far stop_wait(u16 rc)
     ui_getkey();
 }
 
-int main(int argc, char **argv)
+/*
+ * 起動の前半: 引数、ログ、ホストの検査、ドライブ、ゲストの器、トラップするポート、割り込みマスク、スイッチ。
+ * 0 で続行。0 以外は、そのまま終了コードにする
+ */
+static FARTEXT NOINLINE int __far vm_setup(int argc, char **argv, struct opts *o)
 {
-    struct opts o;
-    struct mon_guest g;
     u32 tables;
-    u16 rc;
-    int i, mrc, running = 1, code = 0;
+    int i;
 
-    if (parse_args(argc, argv, &o))
+    if (parse_args(argc, argv, o))
         return 2;
-    if (o.log) {
-        if (log_open(o.log)) {
-            say("VBM98: cannot open the log file: %s\n", o.log);
+    if (o->log) {
+        if (log_open(o->log)) {
+            say("VBM98: cannot open the log file: %s\n", o->log);
             return 2;
         }
-        if (o.log_sec) {
+        if (o->log_sec) {
             dev_tick = 1;
-            dev_log_every = (u32)o.log_sec * 100;
+            dev_log_every = (u32)o->log_sec * 100;
         }
     }
     say("VBM98 " VBM98_VERSION "\n");
-    if (o.log)
-        say("VBM98: log: %s (heartbeat %u s)\n", o.log, o.log_sec);
+    if (o->log)
+        say("VBM98: log: %s (heartbeat %u s)\n", o->log, o->log_sec);
     if (check_v86())
         return 1;
     if (!v86) {
@@ -2354,13 +2355,13 @@ int main(int argc, char **argv)
             (st[0] & 1) ? " DS" : "", (st[0] & 2) ? " ES" : "", (st[0] & 4) ? " FS" : "", (st[0] & 8) ? " GS" : "",
             st[0] ? "" : " none", st[1], st[2], mon_rmfix);
     }
-    v30_on = (u8)o.v30;
-    if (o.have_dipsw) {
+    v30_on = (u8)o->v30;
+    if (o->have_dipsw) {
         u8 hsw[3];
 
         host_dipsw(hsw);
         for (i = 0; i < 3; i++)
-            dip_sw[i] = optval_merge(o.dipsw[i], hsw[i], o.dipsw_hm[i]);
+            dip_sw[i] = optval_merge(o->dipsw[i], hsw[i], o->dipsw_hm[i]);
         dip_on = 1;
     } else {
         /*
@@ -2370,17 +2371,17 @@ int main(int argc, char **argv)
          */
         dip_gdc25 = 1;
     }
-    if (o.iotrap && iotrap_setup(o.iotrap))
+    if (o->iotrap && iotrap_setup(o->iotrap))
         return 2;
-    force_hook_seg = o.hookseg;
-    sbrom_path = o.sbrom;
-    sbrom_lin = o.sbrom_lin;
-    trace = o.trace;
-    menu_debug = o.trace;
+    force_hook_seg = o->hookseg;
+    sbrom_path = o->sbrom;
+    sbrom_lin = o->sbrom_lin;
+    trace = o->trace;
+    menu_debug = o->trace;
 
     fdb_init(&fb, DRIVES);
     for (i = 0; i < DRIVES; i++)
-        if (o.fdd[i] && vm_mount(i, o.fdd[i], 0))
+        if (o->fdd[i] && vm_mount(i, o->fdd[i], 0))
             return 1;
     if (xfer_alloc()) {
         say("VBM98: cannot allocate the transfer buffer\n");
@@ -2445,8 +2446,8 @@ int main(int argc, char **argv)
     host_imr_m = pio_in8(PIC_M_IMR);
     host_imr_s = pio_in8(PIC_S_IMR);
     kbd_tap_init();
-    guest_imr_m = o.have_imr ? o.imr[0] : (u8)(host_imr_m | held_imr_m);
-    guest_imr_s = o.have_imr ? o.imr[1] : (u8)(host_imr_s | held_imr_s);
+    guest_imr_m = o->have_imr ? o->imr[0] : (u8)(host_imr_m | held_imr_m);
+    guest_imr_s = o->have_imr ? o->imr[1] : (u8)(host_imr_s | held_imr_s);
     init_imr_m = guest_imr_m;
     init_imr_s = guest_imr_s;
     say("VBM98: booting from drive 0 (host IMR %02X %02X, guest IMR %02X %02X; IRR %02X %02X ISR %02X %02X)\n",
@@ -2465,16 +2466,22 @@ int main(int argc, char **argv)
         guest_imr0 = (u8)(guest_imr_m & 1);
         tick_arm();
     }
-    if (o.have_memsw) {
+    if (o->have_memsw) {
         u8 host[8];
 
         read_memsw(MK_FP(TVRAM_SEG, MEMSW_OFF - 2), host);
         for (i = 0; i < 8; i++)
-            eff_memsw[i] = optval_merge(o.memsw[i], host[i], o.memsw_hm[i]);
+            eff_memsw[i] = optval_merge(o->memsw[i], host[i], o->memsw_hm[i]);
         have_memsw = 1;
         memsw_guest(eff_memsw);
         print_memsw("guest", MK_FP((u16)(mswpage >> 4), 0xFE0));
     }
+    return 0;
+}
+
+/* 起動の後半: ホストの画面を控えて消し、IPL を読む。起動できなければ *running を 0 に (IPL が読めないときは *code も 1 に) する */
+static FARTEXT NOINLINE void __far vm_boot(const struct opts *o, struct mon_guest *g, int *running, int *code)
+{
     screen_save();
     screen_clear();
     /* 起動できずに戻るときの理由 (イメージを選ばなかった、IPL が読めない) */
@@ -2482,17 +2489,58 @@ int main(int argc, char **argv)
     /* -fdd0 がなければここで選ばせる (spec.md)。取り消したら起動せずに戻る */
     if (!fb.img[0] && !menu_pick_boot()) {
         say("VBM98: no disk was selected\n");
-        running = 0;
+        *running = 0;
     }
-    if (running) {
-        set_shot_base(o.ss ? o.ss : vm_drive_name(0));
-        if (load_ipl(&g)) {
-            running = 0;
-            code = 1;
+    if (*running) {
+        set_shot_base(o->ss ? o->ss : vm_drive_name(0));
+        if (load_ipl(g)) {
+            *running = 0;
+            *code = 1;
         }
     }
-    if (running)
+    if (*running)
         say_keep(0, 0, 0);
+}
+
+/* 終了: 割り込みコントローラと表示をホストの状態へ戻し、確保したものを返す */
+static FARTEXT NOINLINE void __far vm_finish(const struct opts *o)
+{
+    int i;
+
+    pic_settle();
+    if (o->dump)
+        dump_memory(o->dump);
+    video_host();
+    screen_host();
+    say_again();
+    xms_a20(0);
+    xms_unlock(xms_handle);
+    xms_free(xms_handle);
+    for (i = 0; i < DRIVES; i++) {
+        /* 写しを持っていたかと、写しを読み込み終えてからファイルを読んだ回数 (持っていなければ、入れてからの回数) */
+        if (fb.img[i])
+            (trace ? say : log_line)("VBM98: drive %d: image %s, %lu file reads\n", i,
+                                     caches[i].have ? "in memory" : "not in memory", (unsigned long)caches[i].file_reads);
+        vm_eject(i);
+    }
+    print_hits();
+    say("VBM98: back to DOS\n");
+    log_release();
+    xfer_free();
+    log_close();
+}
+
+int main(int argc, char **argv)
+{
+    struct opts o;
+    struct mon_guest g;
+    u16 rc;
+    int mrc, running = 1, code;
+
+    code = vm_setup(argc, argv, &o);
+    if (code)
+        return code;
+    vm_boot(&o, &g, &running, &code);
     while (running) {
         /*
          * ゲストの割り込みマスクが効いている間にホストのベクタ表で割り込みを受けてはいけない。
@@ -2604,26 +2652,6 @@ int main(int argc, char **argv)
         }
     }
 
-    pic_settle();
-    if (o.dump)
-        dump_memory(o.dump);
-    video_host();
-    screen_host();
-    say_again();
-    xms_a20(0);
-    xms_unlock(xms_handle);
-    xms_free(xms_handle);
-    for (i = 0; i < DRIVES; i++) {
-        /* 写しを持っていたかと、写しを読み込み終えてからファイルを読んだ回数 (持っていなければ、入れてからの回数) */
-        if (fb.img[i])
-            (trace ? say : log_line)("VBM98: drive %d: image %s, %lu file reads\n", i,
-                                     caches[i].have ? "in memory" : "not in memory", (unsigned long)caches[i].file_reads);
-        vm_eject(i);
-    }
-    print_hits();
-    say("VBM98: back to DOS\n");
-    log_release();
-    xfer_free();
-    log_close();
+    vm_finish(&o);
     return code;
 }

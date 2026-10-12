@@ -107,24 +107,24 @@ struct mon_hook {
  * 線形番地 lin にある HLT を横取り印として登録する。ゲストがそこで HLT を実行すると
  * mon_on_hook(id) が呼ばれる。登録しない HLT は本物の HLT として扱う (次の割り込みまで待つ)
  */
-int mon_hook_add(u32 lin, u8 id);
-void mon_hook_clear(void);
+FARTEXT int __far mon_hook_add(u32 lin, u8 id);
+FARTEXT void __far mon_hook_clear(void);
 
 /*
  * ページ表を組む。tables_phys は 4KB 境界で MONMEM_TABLE_PAGES ページぶんの物理メモリ。
  * guest_phys はゲストの下位 640KB を置く物理番地 (4KB 境界)。0 なら恒等写像のまま。
  * 下位 640KB 以外 (A0000〜3FFFFF) は恒等写像
  */
-void monmem_build(struct mon_paging *pg, u32 tables_phys, u32 guest_phys);
+FARTEXT void __far monmem_build(struct mon_paging *pg, u32 tables_phys, u32 guest_phys);
 /* ゲスト向けの写像で、線形 lin (4MB 未満) のページの先を phys に差し替える */
-void monmem_map(u32 lin, u32 phys);
+FARTEXT void __far monmem_map(u32 lin, u32 phys);
 /*
  * ホスト向けの写像で、線形 lin (4MB 未満) のページが、番地どおりの物理メモリを指しているか。
  * リアルモードでは常に 1。EMM の下では mon_vcpi_setup のあとで意味を持つ: サーバが別のメモリ (UMB、EMS のページ枠)
  * を写しているページは 0 になる。ゲスト向けの写像は A0000h 以上を番地どおりにするので、そのページでは
  * ホストとゲストで見える中身が違う
  */
-int monmem_host_same(u32 lin);
+FARTEXT int __far monmem_host_same(u32 lin);
 /*
  * ゲストの 0 番ページ (割り込みベクタ表と BIOS のワークエリア) を、ゲストが動いている間だけ実メモリの 0 番ページに
  * 置くための写像を作る (design.md §3)。ゲスト向けの写像で、線形 0 をホストの 0 番ページと同じ物理ページに向け、
@@ -132,10 +132,10 @@ int monmem_host_same(u32 lin);
  * EMM の下では mon_vcpi_setup のあとに呼ぶ (ホストの 0 番ページの物理番地はサーバが埋める)。
  * 入れ替えは mon_page0_on を 0 以外にすると始まる
  */
-void monmem_page0(u32 home_phys, u32 save_phys);
+FARTEXT void __far monmem_page0(u32 home_phys, u32 save_phys);
 extern u16 mon_page0_on;
 
-void mon_init(const struct mon_paging *pg);
+FARTEXT void __far mon_init(const struct mon_paging *pg);
 
 /*
  * EMM などの仮想86モニタの下で起動したとき (CR0 の PE が立っている)、VCPI のクライアントとして動く準備。
@@ -143,7 +143,7 @@ void mon_init(const struct mon_paging *pg);
  * サーバが先頭 1MB とサーバ自身の分の項を埋める。以後、モード切替は VCPI 経由 (INT 67h AX=DE0Ch と、サーバの
  * 保護モード側の入口) になる。0 で成功
  */
-int mon_vcpi_setup(u32 pt0_phys);
+FARTEXT int __far mon_vcpi_setup(u32 pt0_phys);
 
 extern u8 mon_rmfix;
 /*
@@ -163,7 +163,7 @@ extern u16 mon_test_errhi;
 extern u16 mon_errhi_seen;
 
 /* ポートの I/O をトラップするかどうか。トラップしたものは mon_on_in / mon_on_out に届く */
-void mon_trap_port(u16 port, int on);
+FARTEXT void __far mon_trap_port(u16 port, int on);
 /* 同じことを ring 0 から行う (ゲストの実行中に切り替える)。それまでトラップしていたかを返す */
 u8 mon_trap_port_r0(u16 port, u8 on);
 
@@ -173,7 +173,7 @@ u8 mon_trap_port_r0(u16 port, u8 on);
  * モニタ自身の実行中に例外が起きた場合は MON_PANIC + ベクタ番号を返す。詳細は mon_panic_get
  */
 u16 mon_run(struct mon_guest *g);
-void mon_panic_get(struct mon_panic *p);
+FARTEXT void __far mon_panic_get(struct mon_panic *p);
 
 /* ---- モニタを組み込む側が用意するもの。ring 0 で呼ばれる (制約は mon_r0.c の先頭) ---- */
 

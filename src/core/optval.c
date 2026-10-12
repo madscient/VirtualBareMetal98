@@ -1,6 +1,6 @@
 #include "optval.h"
 
-static int hexval(char c)
+static FARTEXT int __far hexval(char c)
 {
     if (c >= '0' && c <= '9')
         return c - '0';
@@ -11,7 +11,7 @@ static int hexval(char c)
     return -1;
 }
 
-int optval_hexmask(const char *s, u8 *val, u8 *hostmask, int n)
+FARTEXT int __far optval_hexmask(const char *s, u8 *val, u8 *hostmask, int n)
 {
     int i, k, d;
     u8 v, m;
@@ -38,13 +38,13 @@ int optval_hexmask(const char *s, u8 *val, u8 *hostmask, int n)
     return s[n * 2] != 0;
 }
 
-u8 optval_merge(u8 val, u8 host, u8 hostmask)
+FARTEXT u8 __far optval_merge(u8 val, u8 host, u8 hostmask)
 {
     return (u8)((val & ~hostmask) | (host & hostmask));
 }
 
 /* 16 進 1〜4 桁を読む。読んだ文字数を返し、0 なら誤り */
-static int parse_port(const char *s, u16 *port)
+static FARTEXT int __far parse_port(const char *s, u16 *port)
 {
     u16 v = 0;
     int i, d;
@@ -57,7 +57,7 @@ static int parse_port(const char *s, u16 *port)
     return i;
 }
 
-static int add(u16 g, u16 h, u16 *guest, u16 *host, u8 *n, u8 max)
+static FARTEXT int __far add(u16 g, u16 h, u16 *guest, u16 *host, u8 *n, u8 max)
 {
     u8 i;
 
@@ -74,7 +74,7 @@ static int add(u16 g, u16 h, u16 *guest, u16 *host, u8 *n, u8 max)
     return 0;
 }
 
-int optval_iotrap_list(const char *s, u16 *guest, u16 *host, u8 *n, u8 max)
+FARTEXT int __far optval_iotrap_list(const char *s, u16 *guest, u16 *host, u8 *n, u8 max)
 {
     u16 g, h;
     int len;
@@ -99,12 +99,12 @@ int optval_iotrap_list(const char *s, u16 *guest, u16 *host, u8 *n, u8 max)
     }
 }
 
-static int blank(char c)
+static FARTEXT int __far blank(char c)
 {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n';
 }
 
-int optval_iotrap_line(const char *line, u16 *guest, u16 *host, u8 *n, u8 max)
+FARTEXT int __far optval_iotrap_line(const char *line, u16 *guest, u16 *host, u8 *n, u8 max)
 {
     u16 g, h;
     int len;

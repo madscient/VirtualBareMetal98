@@ -14,10 +14,10 @@
  */
 
 /* c が Shift-JIS の 2 バイト文字の先頭バイトか */
-int sjis_is_lead(u8 c);
+FARTEXT int __far sjis_is_lead(u8 c);
 
 /* Shift-JIS の 2 バイト (s1, s2) を、左半分の桁に書く 16 ビット値にする。右半分は VRAM_RIGHT を足す */
-u16 sjis_to_vram(u8 s1, u8 s2);
+FARTEXT u16 __far sjis_to_vram(u8 s1, u8 s2);
 #define VRAM_RIGHT 0x0080
 
 #endif

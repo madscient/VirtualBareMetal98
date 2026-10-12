@@ -10,14 +10,14 @@ enum { T_PD, T_HOST, T_GUEST, T_ALIAS };
 
 static u32 tables;
 
-static u32 __far *table(u16 n)
+static FARTEXT u32 __far * __far table(u16 n)
 {
     u32 p = tables + (u32)n * PAGE_SIZE;
 
     return MK_FP((u16)(p >> 4), 0);
 }
 
-void monmem_build(struct mon_paging *pg, u32 tables_phys, u32 guest_phys)
+FARTEXT void __far monmem_build(struct mon_paging *pg, u32 tables_phys, u32 guest_phys)
 {
     u32 __far *pd;
     u32 __far *pt_host;
@@ -46,14 +46,14 @@ void monmem_build(struct mon_paging *pg, u32 tables_phys, u32 guest_phys)
     pg->pde0_guest = (tables_phys + T_GUEST * PAGE_SIZE) | PTE_FLAGS;
 }
 
-void monmem_map(u32 lin, u32 phys)
+FARTEXT void __far monmem_map(u32 lin, u32 phys)
 {
     u32 __far *pt_guest = table(T_GUEST);
 
     pt_guest[(u16)(lin >> 12)] = (phys & ~0xFFFUL) | PTE_FLAGS;
 }
 
-void monmem_page0(u32 home_phys, u32 save_phys)
+FARTEXT void __far monmem_page0(u32 home_phys, u32 save_phys)
 {
     u32 __far *pt_host = table(T_HOST);
     u32 __far *pt_guest = table(T_GUEST);
@@ -63,7 +63,7 @@ void monmem_page0(u32 home_phys, u32 save_phys)
     pt_guest[(u16)(MON_PAGE0_SAVE >> 12)] = (save_phys & ~0xFFFUL) | PTE_FLAGS;
 }
 
-int monmem_host_same(u32 lin)
+FARTEXT int __far monmem_host_same(u32 lin)
 {
     u32 __far *pt_host = table(T_HOST);
 

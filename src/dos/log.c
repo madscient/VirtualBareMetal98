@@ -16,7 +16,7 @@ static unsigned keep_seg, keep_off, keep_size, keep_len;   /* keep_size が 0 �
 static unsigned keep_sunk;      /* 写しの先頭から、標準出力に届いていない (say_sink の先へ渡した) ぶんの長さ */
 static void (*sink)(const char *s, unsigned len);
 
-int log_open(const char *path)
+FARTEXT int __far log_open(const char *path)
 {
     union REGS r;
 
@@ -33,7 +33,7 @@ int log_open(const char *path)
     return 0;
 }
 
-void log_close(void)
+FARTEXT void __far log_close(void)
 {
     if (handle >= 0)
         _dos_close(handle);
@@ -73,7 +73,7 @@ static unsigned format(const char *fmt, va_list ap)
     return n < 0 ? 0 : (unsigned)n;
 }
 
-void log_hold(unsigned seg, unsigned size)
+FARTEXT void __far log_hold(unsigned seg, unsigned size)
 {
     if (handle < 0 || hold_size)
         return;
@@ -82,7 +82,7 @@ void log_hold(unsigned seg, unsigned size)
     hold_len = 0;
 }
 
-void log_release(void)
+FARTEXT void __far log_release(void)
 {
     union REGS r;
     unsigned put;
@@ -118,7 +118,7 @@ static void to_con(const char *s, unsigned len)
         _dos_write(1, (const void __far *)(s + from), len - from, &put);
 }
 
-void say_keep(unsigned seg, unsigned off, unsigned size)
+FARTEXT void __far say_keep(unsigned seg, unsigned off, unsigned size)
 {
     keep_seg = seg;
     keep_off = off;
@@ -127,12 +127,12 @@ void say_keep(unsigned seg, unsigned off, unsigned size)
     keep_sunk = 0;
 }
 
-void say_sink(void (*put)(const char *s, unsigned len))
+FARTEXT void __far say_sink(void (*put)(const char *s, unsigned len))
 {
     sink = put;
 }
 
-int say_on_screen(void)
+FARTEXT int __far say_on_screen(void)
 {
     union REGS r;
 
@@ -142,7 +142,7 @@ int say_on_screen(void)
     return !r.x.cflag && (r.x.dx & 0x80);
 }
 
-void say_again(void)
+FARTEXT void __far say_again(void)
 {
     unsigned at, n, end;
 

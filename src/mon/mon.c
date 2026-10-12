@@ -19,12 +19,12 @@ u16 mon_vcpi_de01(u16 pt_seg, u16 gdt_off, u32 *entry);
 
 u8 mon_rmfix = MON_RMFIX_ALL;
 
-static u16 off(const void *p)
+static FARTEXT u16 __far off(const void *p)
 {
     return (u16)(unsigned)p;
 }
 
-static void set_desc(u8 *e, u32 base, u32 limit, u8 access, u8 gran)
+static FARTEXT void __far set_desc(u8 *e, u32 base, u32 limit, u8 access, u8 gran)
 {
     e[0] = (u8)limit;
     e[1] = (u8)(limit >> 8);
@@ -36,7 +36,7 @@ static void set_desc(u8 *e, u32 base, u32 limit, u8 access, u8 gran)
     e[7] = (u8)(base >> 24);
 }
 
-static void set_ptr(u8 *p, u16 limit, u32 base)
+static FARTEXT void __far set_ptr(u8 *p, u16 limit, u32 base)
 {
     p[0] = (u8)limit;
     p[1] = (u8)(limit >> 8);
@@ -46,7 +46,7 @@ static void set_ptr(u8 *p, u16 limit, u32 base)
     p[5] = (u8)(base >> 24);
 }
 
-void mon_init(const struct mon_paging *pg)
+FARTEXT void __far mon_init(const struct mon_paging *pg)
 {
     u32 ds_lo, cs_lo, ds_hi, cs_hi;
     u16 v, stub;
@@ -101,7 +101,7 @@ void mon_init(const struct mon_paging *pg)
     mon_pde0_guest = pg->pde0_guest;
 }
 
-static void put32(u8 *p, u32 v)
+static FARTEXT void __far put32(u8 *p, u32 v)
 {
     p[0] = (u8)v;
     p[1] = (u8)(v >> 8);
@@ -114,7 +114,7 @@ static void put32(u8 *p, u32 v)
  * GDT の 3 項の最初がサーバのコードセグメントになる。DE0Ch の構造体は CR3、GDTR / IDTR の 6 バイトの線形番地、
  * LDTR、TR、CS:EIP。構造体と GDTR / IDTR は 1MB 未満の線形番地 (= データセグメントの実番地) に置く
  */
-int mon_vcpi_setup(u32 pt0_phys)
+FARTEXT int __far mon_vcpi_setup(u32 pt0_phys)
 {
     u32 entry, ds_lo = (u32)mon_data_seg() << 4;
 
@@ -140,7 +140,7 @@ int mon_vcpi_setup(u32 pt0_phys)
 extern struct mon_hook mon_hooks[MON_HOOK_MAX];
 extern u16 mon_hook_count;
 
-int mon_hook_add(u32 lin, u8 id)
+FARTEXT int __far mon_hook_add(u32 lin, u8 id)
 {
     if (mon_hook_count >= MON_HOOK_MAX)
         return 1;
@@ -150,12 +150,12 @@ int mon_hook_add(u32 lin, u8 id)
     return 0;
 }
 
-void mon_hook_clear(void)
+FARTEXT void __far mon_hook_clear(void)
 {
     mon_hook_count = 0;
 }
 
-void mon_trap_port(u16 port, int on)
+FARTEXT void __far mon_trap_port(u16 port, int on)
 {
     u8 *b = mon_tss + MON_TSS_BASE + (port >> 3);
     u8 m = (u8)(1 << (port & 7));
@@ -214,12 +214,12 @@ u16 mon_run(struct mon_guest *g)
 }
 
 /* mon_run が MON_PANIC を返したとき、例外がエラーコードを伴う種類かどうか */
-static int vec_has_err(u8 vec)
+static FARTEXT int __far vec_has_err(u8 vec)
 {
     return vec == 8 || (vec >= 10 && vec <= 14) || vec == 17;
 }
 
-void mon_panic_get(struct mon_panic *p)
+FARTEXT void __far mon_panic_get(struct mon_panic *p)
 {
     const u32 *w = mon_panic_stack;
     int e = vec_has_err((u8)mon_panic_vec);

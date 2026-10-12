@@ -10,12 +10,12 @@
 
 static unsigned xseg;
 
-int xfer_alloc(void)
+FARTEXT int __far xfer_alloc(void)
 {
     return _dos_allocmem(XFER_PARAS, &xseg) != 0;
 }
 
-void xfer_free(void)
+FARTEXT void __far xfer_free(void)
 {
     if (xseg) {
         _dos_freemem(xseg);
@@ -102,7 +102,7 @@ static int io_xfill(void *ctx, u16 xoff, u8 val, u16 len)
     return 0;
 }
 
-int dosio_open(dos_file *f, const char *path, int writable, u32 *size)
+FARTEXT int __far dosio_open(dos_file *f, const char *path, int writable, u32 *size)
 {
     if (_dos_open(path, writable ? ACCESS_RDWR : ACCESS_READ, &f->handle) != 0)
         return 1;
@@ -113,12 +113,12 @@ int dosio_open(dos_file *f, const char *path, int writable, u32 *size)
     return 0;
 }
 
-void dosio_close(dos_file *f)
+FARTEXT void __far dosio_close(dos_file *f)
 {
     _dos_close(f->handle);
 }
 
-void dosio_bind(dimg_io *io, dos_file *f)
+FARTEXT void __far dosio_bind(dimg_io *io, dos_file *f)
 {
     io->ctx = f;
     io->read = io_read;
