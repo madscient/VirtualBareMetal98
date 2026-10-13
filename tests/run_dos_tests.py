@@ -312,7 +312,53 @@ def test_boot(work):
     for name, c in checks:
         print('%s %s' % ('ok  ' if c else 'FAIL', name))
         ok = ok and c
+    ok = vram_cleared(work) and ok
     print('起動: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
+def vram_cleared(work):
+    """起動時とリセット時に、グラフィック VRAM が消されること (design.md §16)。先に色の帯を描く IPL (shotipl.S) を
+    動かして VRAM に絵を残し、続けて vramipl.S を起動する。その IPL は、起動した時点の VRAM の 5 か所 (B・R・G・E の
+    各プレーンと、ページ 1 の B プレーン) を控え、同じ所に A5h を書いてから自分でリセットを起こし、再起動後の
+    5 か所も控える。帯が残っていれば最初の B プレーンが FFh、リセットで消されていなければあとの 5 つが A5h になる。
+    第 4 プレーン (E) は、VBM98 が「消した」とログに書いたときだけ見る (拡張 G-VRAM のない環境では消さない)"""
+    for binname, imgname in (('SHOTIPL.BIN', 'VS.IMG'), ('VRAMIPL.BIN', 'VR.IMG')):
+        with open(os.path.join(BUILT, binname), 'rb') as f:
+            img = bytearray(77 * 2 * 8 * 1024)
+            img[0:1024] = f.read()
+        with open(os.path.join(work, imgname), 'wb') as f:
+            f.write(img)
+    for name in ('VS.OUT', 'VR.OUT', 'VR.LOG'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 VS.IMG -tick -stopafter 100 > VS.OUT',
+                                 'VBM98.EXE -fdd0 VR.IMG -peek 00710 -menukeys 04,15 -log VR.LOG > VR.OUT'],
+                                180, core='normal')
+    log = imgtests.read_lines(work, 'VR.LOG') or []
+    for line in log:
+        if 'guest 00710' in line or 'graphics VRAM' in line or 'reset (' in line:
+            print('  ' + line[:150])
+    peek = [l for l in log if l.startswith('VBM98: guest 00710:')]
+    seen = [int(h, 16) for h in peek[0].split(':', 2)[2].split()] if peek else []
+    cleared = [l for l in log if 'graphics VRAM cleared' in l]
+    with_e = bool(cleared) and all('planes B R G E' in l for l in cleared)
+    idx = (0, 1, 2, 3, 4) if with_e else (0, 1, 2, 4)
+    checks = (
+        ('graphics VRAM: batch finished', finished),
+        ('graphics VRAM: cleared at start and at the reset the IPL raised (two lines in the log, a reset between them)',
+         len(cleared) == 2 and any('reset (guest)' in l for l in log)),
+        ('graphics VRAM: the IPL sampled the planes twice (its marks follow each set of samples)',
+         len(seen) == 16 and seen[5] == 0x5A and seen[13] == 0x5A),
+        ('graphics VRAM: nothing of the previous guest was left at start (plane B had FFh there)',
+         len(seen) == 16 and seen[5] == 0x5A and all(seen[i] == 0 for i in idx)),
+        ('graphics VRAM: what the guest wrote (A5h) was gone after the reset, on both pages',
+         len(seen) == 16 and seen[13] == 0x5A and all(seen[8 + i] == 0 for i in idx)),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
     return ok
 
 

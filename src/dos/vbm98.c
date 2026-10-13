@@ -1632,9 +1632,41 @@ static void feed_keys(struct mon_guest *g)
 static u8 init_imr_m, init_imr_s;   /* ゲストの割り込みマスクの起動時の値 (リセットで戻す) */
 
 /*
+ * グラフィック VRAM を消す (起動時とリセット時。design.md §16)。消さないと、前に動かしていたソフトの絵が、次のソフトが
+ * 描き直すまで残る。実機では、電源投入とリセットボタンのあとは消えている (ITF が消す。利用者の知識で、確かめてはいない)。
+ * B・R・G の 3 プレーンを、ページ 0 と 1 の両方 (描画ページのポート A6h で切り替える)。16 色用の第 4 プレーン
+ * (E0000h〜E7FFFh) は、あると分かっているときだけ: ワークエリア 054Ch の bit 2 (拡張 G-VRAM あり。design.md §12 の資料) が
+ * 立っていて、EMM ドライバがそこに別のメモリを写していないとき (写されていれば、そこはホストの常駐物のメモリ)。
+ * グラフィックチャージャーを止めたあと (video_guest の 7Ch ← 00h) に呼ぶ。有効なままだと、書いた値がプレーンに届かない
+ */
+static FARTEXT void __far gvram_clear(void)
+{
+    u8 page, e = (u8)((host_prxcrt & 0x04) != 0);
+    u32 l;
+
+    for (l = 0xE0000UL; e && l < 0xE8000UL; l += 0x1000UL)
+        if (!monmem_host_same(l))
+            e = 0;
+    for (page = 0; page < 2; page++) {
+        pio_out8(0xA6, page);
+        _fmemset(MK_FP(0xA800, 0), 0, 0x8000);
+        _fmemset(MK_FP(0xB000, 0), 0, 0x8000);
+        _fmemset(MK_FP(0xB800, 0), 0, 0x8000);
+        if (e) {
+            /* 16 色モードの間に書く。8 色モードのままだと、DOSBox-X では第 4 プレーンに届かない (実機でどうかは未確認) */
+            pio_out8(0x6A, 0x01);
+            _fmemset(MK_FP(0xE000, 0), 0, 0x8000);
+            pio_out8(0x6A, 0x00);
+        }
+    }
+    pio_out8(0xA6, 0);
+    log_line("VBM98: graphics VRAM cleared (planes B R G%s, pages 0 and 1)\n", e ? " E" : "; plane E left alone");
+}
+
+/*
  * 仮想マシンをイメージから再起動する (ゲストが FFFF0h へ飛んだ、CTRL+GRPH+DEL、メニュー。design.md §10)。
  * 表示系、ベクタ表とワークエリア、メモリスイッチの写し、キーボードの状態、割り込みマスクを起動時の状態に
- * 戻し、IPL を読み直す。ゲストの RAM の残りは消さない (実機のリセットでも残る)。ドライブ 0 が空なら選ばせる。
+ * 戻し、画面を消して、IPL を読み直す。ゲストの RAM の残りは消さない。ドライブ 0 が空なら選ばせる。
  * 0 で再開、1 で失敗、2 で取り消し
  */
 /* 見送ったスクリーンショットがある (vbm.h の shot_wait。ring 0 側が数えているか、数え終えて戻ってきた) */
@@ -1652,6 +1684,7 @@ static FARTEXT int __far vm_reset(struct mon_guest *g)
     if (guest_memory(0))
         return 1;
     screen_clear();
+    gvram_clear();
     kbd_pending = 0;
     inject_n = inject_i = 0;
     inject_busy = 0;
@@ -2689,6 +2722,7 @@ static FARTEXT NOINLINE void __far vm_boot(const struct opts *o, struct mon_gues
 {
     screen_save();
     screen_clear();
+    gvram_clear();
     /* 起動できずに戻るときの理由 (イメージを選ばなかった、IPL が読めない) */
     keep_on();
     /* -fdd0 がなければここで選ばせる (spec.md)。取り消したら起動せずに戻る */
