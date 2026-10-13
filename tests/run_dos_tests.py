@@ -935,12 +935,13 @@ def menu_real_keys(work):
     for line in log:
         if 'kbdprobe' in line or 'arrived' in line or 'VM menu' in line:
             print('  ' + line[:150])
-    wrote = [i for i, l in enumerate(log) if '-kbdprobe: wrote 16h to port 43h' in l]
-    init = [i for i, l in enumerate(log) if '-kbdprobe: called INT 18h AH=03h' in l]
+    wrote = [i for i, l in enumerate(log) if '-kbdprobe 1: wrote 36h, then 16h' in l]
+    retry = [i for i, l in enumerate(log) if '-kbdprobe 2: wrote 14h, then 16h' in l]
+    init = [i for i, l in enumerate(log) if '-kbdprobe 3: called INT 18h AH=03h' in l]
     got = [i for i, l in enumerate(log) if 'key wait: key 00' in l and 'arrived after' in l]
     checks += [
         ('VM menu, -kbdprobe: batch finished', finished),
-        ('VM menu, -kbdprobe: both steps ran, in order, before the key', bool(wrote and init and got) and wrote[0] < init[0] < got[0]),
+        ('VM menu, -kbdprobe: the three steps ran, in order, before the key', bool(wrote and retry and init and got) and wrote[0] < retry[0] < init[0] < got[0]),
         ('VM menu, -kbdprobe: ESC still arrived after them and closed the menu',
          any('VM menu (hotkey): resumed' in l for l in log) and any('stopped after 150' in l for l in log)),
     ]

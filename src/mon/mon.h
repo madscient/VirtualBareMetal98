@@ -206,6 +206,11 @@ int mon_v30_emulate(struct mon_vframe *f, struct mon_gregs *r);
 /* ゼロ除算 (ベクタ 0) の戻り番地を V30 と同じ「命令の次」にするための、CS:IP の除算命令の長さ。読み解けなければ 0 */
 u16 mon_v30_div_len(const struct mon_vframe *f);
 
+/*
+ * 割り込みを一瞬だけ許可し、その間に来た割り込みのベクタ番号を返す (来なければ 0)。割り込みは取り込まない
+ * (EOI を出さない) ので、呼び出し側が処理して EOI を出す。受け付けたくない割り込みは、呼ぶ前に割り込みマスクで閉じる
+ */
+u16 mon_irq_window(void);
 /* リアルモードの CPU が割り込みを受けたときと同じことを、ゲストのスタックとベクタ表に対して行う */
 void mon_reflect(u8 vec, struct mon_vframe *f);
 u8 mon_peek8(u32 lin);

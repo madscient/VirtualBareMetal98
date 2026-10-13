@@ -3,6 +3,7 @@
 
 /* PC-98 の割り込みコントローラ (記憶による。design.md §12) */
 #define PIC_M_CMD 0x00
+#define PIC_M_IMR 0x02
 #define PIC_S_CMD 0x08
 #define PIC_EOI   0x20
 #define IRQ_FIRST 0x08
@@ -177,26 +178,54 @@ static void kbd_ack(void)
 }
 
 /*
+ * 受信の割り込みが来てから、データのポートを読むまでの間を空ける。キーボードへの RDY# (送ってよい) は、8251 の
+ * RxRDY に従う: 受信したデータを本体が読むまでが「待て」で、読むと「送ってよい」に戻る (design.md §12。資料)。
+ * 受信の直後に読むと「待て」の時間が数 µs しかなく、実機でそのあとキーボードが止まった。キーボードがこの短い
+ * 「待て」を見落とすのだと見ている (推測)。グラフィック GDC の状態のポートを読んで時間をつぶす (どの機種にもあり、
+ * 読んでも状態が変わらない。1 回 0.5〜3µs と見て、0.1〜0.8ms。未計測)。待たせている間は次の符号が来ないので、
+ * 長くても取りこぼさない
+ */
+#define KBD_READ_DELAY 256
+
+static void kbd_read_delay(void)
+{
+    u16 i;
+
+    for (i = 0; i < KBD_READ_DELAY; i++)
+        mon_in8(0xA0);
+}
+
+/*
  * ホットキーを拾ったら、CTRL・GRPH・そのキーが全部離されるまでここで待つ (離した符号をここで読み捨てる)。
  * 待たずにホストへ戻ると、押した符号はゲストに、離した符号だけがホストに届く。ホストの BIOS によっては、押して
  * いないキーが離されるとシフト状態が反転したままになる (実機の報告: PC-9801RA2。design.md §9)。
- * 割り込みは禁止のままなので、キーボードの受信はポーリングで読む (43h の bit 1 が受信あり)。押し続けられても
- * 固まらないよう、VSYNC (A0h の bit 5) を約 3 秒ぶん数えたら打ち切る。VSYNC が来ない場合に備えて回数でも打ち切る
+ * 離した符号は、キーボード割り込みとして受けてから読む: 割り込みマスクをキーボード (IR1) だけ開けた形にして、
+ * 割り込みを一瞬ずつ許可する (mon_irq_window)。状態のポートを見張って受信の直後に読む形 (ポーリング) にすると、
+ * 実機でそのあとキーボードが止まった (design.md §12。PC-9821Ap2)。割り込みで受けて読んだ符号 (ホットキーのキー
+ * 自体) のあとは止まっていないので、同じ受け方にそろえる。ほかの割り込みは、閉じている間は要求が残り、マスクを
+ * 戻したあとで届く。
+ * 押し続けられても固まらないよう、VSYNC (A0h の bit 5) を約 3 秒ぶん数えたら打ち切る。VSYNC が来ない場合に
+ * 備えて回数でも打ち切る
  */
 static void kbd_wait_release(u8 key)
 {
-    u8 down = 1, vs = 0, v, sc, k, bytes = 0;
-    u16 frames = 0;
+    u8 down = 1, vs = 0, v, sc, k, bytes = 0, imr;
+    u16 frames = 0, vec;
     u32 n = 0;
 
+    imr = mon_in8(PIC_M_IMR);
+    mon_out8(PIC_M_IMR, (u8)~0x02);
     while ((kbd_ctrl || kbd_grph || down) && frames < 170 && n < 3000000UL) {
         n++;
-        if (mon_in8(KBD_STAT) & 0x02) {
+        vec = mon_irq_window();
+        if (vec == IRQ_FIRST + 1) {
+            kbd_read_delay();
             sc = mon_in8(KBD_DATA);
             if (bytes != 0xFF)
                 bytes++;
             kbd_rx_note(sc);
             kbd_ack();
+            eoi(IRQ_FIRST + 1);
             k = (u8)(sc & 0x7F);
             if (k == SC_CTRL)
                 kbd_ctrl = (u8)!(sc & SC_BREAK);
@@ -210,6 +239,7 @@ static void kbd_wait_release(u8 key)
             frames++;
         vs = v;
     }
+    mon_out8(PIC_M_IMR, imr);
     kbd_rel_bytes = bytes;
     kbd_rel_frames = frames;
     kbd_rel_left = (u8)((kbd_ctrl ? 1 : 0) | (kbd_grph ? 2 : 0) | (down ? 4 : 0));

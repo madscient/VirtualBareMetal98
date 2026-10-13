@@ -2091,40 +2091,68 @@ static FARTEXT void __far kbd_guest_note(void)
              kbd_cmd_mode ? ", 8251 waits for a mode byte" : "", tap_fed, tap_dropped);
 }
 
+
+/* ホスト世界で数 ms 置く (グラフィック GDC の状態のポートを読んで時間をつぶす。1 回 0.5〜3µs と見た。未計測) */
+static FARTEXT void __far kbd_settle(void)
+{
+    u16 i;
+
+    for (i = 0; i < 4000; i++)
+        pio_in8(0xA0);
+}
+
+/* キーボードへの RDY# をいったん「待て」に固定し、数 ms 置いて、平常時の値へ戻す (vbm.h の KBD_CMD_*) */
+static FARTEXT void __far kbd_rdy_pulse(void)
+{
+    pio_out8(0x43, KBD_CMD_HOLD);
+    kbd_settle();
+    pio_out8(0x43, KBD_CMD_READY);
+}
+
 /*
- * 開発用 (-kbdprobe): キーが来ないまま待ちが続いたら、キーボードの 8251 を 2 段で立て直してみる。どちらの段のあとで
- * キーが届くようになったかで、止まっていた所が分かる。1 段目はコマンドのポートに 16h (エラーリセット・受信許可・
- * キーボードへの送信許可) を書く。2 段目は BIOS にキーボードインタフェースを初期化させる (INT 18h AH=03h)。
- * 16h の意味は 8251 のコマンドのビット割り当て (bit 1 DTR、bit 2 RxE、bit 4 ER) と、PC-98 では DTR がキーボードへの
- * 送信許可に当たることから (推測: 記憶による。このセッションでは資料で確かめていない)
+ * 開発用 (-kbdprobe): キーが来ないまま待ちが続いたら、キーボードを 3 段で立て直してみる。どの段のあとでキーが
+ * 届くようになったかで、止まっていた所が分かる (design.md §19)。コマンドのビットの意味は資料から (design.md §12)。
+ *   1 段目: RDY# を「待て」に固定して戻す。キーボードが「待て → 送ってよい」の変化を待って止まっているなら動き出す
+ *   2 段目: RTY# を落として戻す (再送の要求)
+ *   3 段目: BIOS にキーボードインタフェースを初期化させる (INT 18h AH=03h。キーボードのリセットを含む)。実機で、
+ *           このあとはキーが届いている
+ * 段の時機は、キーの有無を聞いた回数で決める (PC-9821Ap2 の EMM386 の下で 1 秒に約 1.7 万回と見て、5 秒あまりごと)
  */
-#define KBD_PROBE_AT 0x80000UL
+#define KBD_PROBE_AT     0x18000UL
+#define KBD_PROBE_STAGES 3
 
 static FARTEXT void __far kbd_probe(u32 polls)
 {
-    if (!dev_kbdprobe || kbd_probe_stage >= 2 || polls < KBD_PROBE_AT * (kbd_probe_stage + 1UL))
+    if (!dev_kbdprobe || kbd_probe_stage >= KBD_PROBE_STAGES || polls < KBD_PROBE_AT * (kbd_probe_stage + 1UL))
         return;
     if (kbd_probe_stage == 0) {
+        kbd_rdy_pulse();
+        log_line("VBM98: key wait: -kbdprobe 1: wrote 36h, then 16h to port 43h (RDY# held, then released) after %lu polls\n",
+                 (unsigned long)polls);
+    } else if (kbd_probe_stage == 1) {
+        pio_out8(0x43, KBD_CMD_RETRY);
+        kbd_settle();
         pio_out8(0x43, KBD_CMD_READY);
-        log_line("VBM98: key wait: -kbdprobe: wrote 16h to port 43h after %lu polls\n", (unsigned long)polls);
+        log_line("VBM98: key wait: -kbdprobe 2: wrote 14h, then 16h to port 43h (RTY# pulled low, then released) after %lu polls\n",
+                 (unsigned long)polls);
     } else {
         int18(0x03, 0, 0);
-        log_line("VBM98: key wait: -kbdprobe: called INT 18h AH=03h after %lu polls\n", (unsigned long)polls);
+        log_line("VBM98: key wait: -kbdprobe 3: called INT 18h AH=03h after %lu polls\n", (unsigned long)polls);
     }
     kbd_probe_stage++;
 }
 
 /*
- * ホスト世界でキーを待つ前に、キーボードの 8251 のコマンドを、ホストの BIOS が置く値 (KBD_CMD_READY) に書き直す。
- * モニタがホットキーを読み捨てたあと、実機ではキーボードが送信を止めたままになっていて、この書き込みで再開した
- * (design.md §12)。ring 0 側でも読み捨てるたびに書いている (vbm_r0.c の kbd_ack) ので、これは二重の備え:
- * ホスト世界に戻ってから止まる場合と、ゲストがコマンドを別の値にしていた場合を受ける。
+ * ホスト世界でキーを待つ前に、キーボードの 8251 のコマンドをホストの BIOS が置く値にする。そのとき RDY# をいったん
+ * 「待て」に固定してから戻す (kbd_rdy_pulse)。モニタが読み捨てた符号の「待て」をキーボードが見落として止まって
+ * いても、はっきりした「待て → 送ってよい」を 1 回見せれば動き出す、という見込みの備え (未検証。止まらないように
+ * する本筋は vbm_r0.c の kbd_wait_release の受け方)。ゲストがコマンドを別の値にしていた場合も、ここでホストの値になる。
  * 8251 がモード指定を待っている間は書かない (vbm.h の kbd_cmd_mode)
  */
 FARTEXT void __far vm_kbd_host(void)
 {
     if (!kbd_cmd_mode)
-        pio_out8(0x43, KBD_CMD_READY);
+        kbd_rdy_pulse();
 }
 
 FARTEXT void __far vm_kbd_guest(void)

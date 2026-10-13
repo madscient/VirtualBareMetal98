@@ -227,7 +227,14 @@ extern u16 kbd_rx_n;
  * KBD_CMD_READY。kbd_cmd_mode が 0 でない間は、8251 が内部リセットのあとでモード指定を待っている (次に書く値は
  * コマンドとして扱われない)。kbd_ack_n は、モニタが読み捨てたスキャンコードのあとでコマンドを書き直した回数
  */
-#define KBD_CMD_READY 0x16      /* エラーリセット・受信許可・キーボードへの送信許可。BIOS が初期化の最後と、キーを受けるたびに書く値 (design.md §12) */
+/*
+ * コマンドのビット (design.md §12 の資料): bit 5 が 1 でキーボードへの RDY# を常に「待て」にし、0 で RxRDY に従わせる。
+ * bit 4 エラーフラグのクリア、bit 3 が 1 でキーボードのリセット、bit 2 受信許可、bit 1 が 0 でキーボードに再送を要求
+ * (RTY#)、bit 0 キーボードへのコマンド送信
+ */
+#define KBD_CMD_READY 0x16      /* 平常時の値。BIOS が初期化の最後と、キーを受けるたびに書く (実機のログ。design.md §12) */
+#define KBD_CMD_HOLD  0x36      /* RDY# を「待て」に固定する */
+#define KBD_CMD_RETRY 0x14      /* 再送を要求する */
 extern u8 kbd_cmd, kbd_cmd_mode;
 extern u16 kbd_ack_n;
 extern u8 kbd_rel_bytes, kbd_rel_left, kbd_rel_stat;

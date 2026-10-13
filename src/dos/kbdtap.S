@@ -29,6 +29,15 @@ tap_buf:        .space  TAP_MAX
 tap_entry:
         push    ax
         push    bx
+        /*
+         * データを読む前に間を空ける。キーボードへの「送ってよい」は、受信したデータを読むまで落ちている
+         * (design.md §12)。割り込みの直後に読むと、その時間が短すぎてキーボードが止まることがある。消してはいけない
+         */
+        push    cx
+        mov     cx, 256
+3:      in      al, 0xA0
+        loop    3b
+        pop     cx
         in      al, 0x41
         xor     bx, bx
         mov     bl, cs:[tap_n]

@@ -599,6 +599,27 @@ mon_halt_wait:
         ret
 
 /*
+ * u16 mon_irq_window(void)  ring 0 専用
+ * 割り込みを一瞬だけ許可し、その間に来た割り込みのベクタ番号を返す。来なければ 0。mon_halt_wait の待たない版で、
+ * 割り込み自体は取り込まずに戻る (EOI を出さない)。呼び出し側が処理して EOI を出す。入口・出口とも割り込み禁止。
+ * 受け付けたくない割り込みは、呼ぶ前に割り込みマスクで閉じておく。
+ * STI の効果は次の命令の後なので、割り込みが入れるのは 1 つめの NOP のあとから CLI の前まで
+ */
+        .global mon_irq_window
+mon_irq_window:
+        mov     ax, sp
+        sub     ax, 12 + 2 + 32
+        mov     [mon_halt_bp], ax
+        mov     word ptr [mon_halt_vec], 0
+        sti
+        nop
+        nop
+        cli
+        mov     word ptr [mon_halt_bp], 0
+        mov     ax, [mon_halt_vec]
+        ret
+
+/*
  * u32 mon_lin(u16 seg, u16 off)
  * 出口: DX:AX = seg * 16 + off。壊す: EAX, EDX。
  * C で書くと 32 ビットのシフトがコンパイラの補助関数の呼び出しになり、ring 0 から使えない。

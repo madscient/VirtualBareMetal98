@@ -122,9 +122,12 @@ VBM98 のスクリーンショット（`shot`・`menu` の試験が見るもの�
 起動して同じ撮り方をし、開く前と閉じたあとの絵が一致すること、メニューが 25 行の配置で欠けずに出ることを見る。
 
 実物のキーで押したホットキー（モニタがスキャンコードを読み捨てる経路。`vbm_r0.c` の `kbd_irq`・`kbd_wait_release`・
-`kbd_ack`）も、自動試験は通らない（試験は開発用の `-menuat` などで開く）。そこを変えたら、NP21/W の窓のメニューから
-CTRL + GRPH + DEL を送り（Device → Keyboard の mechanical CTRL・mechanical GRPH と Send Ctrl+Alt+Del。キーボード割り込みと
-して届く）、ログに `reset (hotkey)` が出ることと、止めたときの表示の `command rewritten by the monitor` の回数を見る。
+`kbd_ack`、`monasm.S` の `mon_irq_window`）も、自動試験は通らない（試験は開発用の `-menuat` などで開く）。そこを変えたら、
+NP21/W の窓のメニューから CTRL + GRPH + DEL を送り（Device → Keyboard の mechanical CTRL・mechanical GRPH と
+Send Ctrl+Alt+Del。キーボード割り込みとして届く）、ログに `reset (hotkey)` が出ることと、止めたときの表示が
+`6 scancodes received, command rewritten by the monitor 4 times`（DEL と、離した符号 3 つを読み捨てた）になることを、
+EMM386 の下とリアルモードの両方で見る。離した符号は割り込みで受けてから読む。8251 の状態のポートを見張って読む形
+（ポーリング）に戻さない（実機でキーボードが止まる。design.md §9・§12）。
 
 検査和や一致で中身を確かめる試験は、何も届いていないとき（ゼロ埋め）の値が期待値と違うことを先に確かめる
 （`run_dos_tests.py` の `word_sum` は 0 になるパターンを受け付けない）。
