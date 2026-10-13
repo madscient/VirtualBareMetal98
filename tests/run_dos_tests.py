@@ -913,13 +913,37 @@ def menu_real_keys(work):
     for line in log:
         if 'key wait' in line or 'VM menu' in line or 'stopped after' in line:
             print('  ' + line[:150])
-    checks = (
+    checks = [
         ('VM menu, real keys: batch finished', finished),
         ('VM menu, real keys: the log has the state at the start of the key wait',
          any('key wait, 0 polls: PIC ' in l and 'INT 09h ' in l for l in log)),
+        ('VM menu, real keys: the log has what the guest wrote to the keyboard ports and how the release wait ended',
+         any('key wait: guest writes to port 43h: ' in l and 'Scancodes received: ' in l for l in log) and
+         any('key wait: hotkey release wait: ' in l for l in log)),
         ('VM menu, real keys: ESC from the keyboard closed the menu', any('VM menu (hotkey): resumed' in l for l in log)),
         ('VM menu, real keys: the guest went on after the menu', any('stopped after 150' in l for l in log)),
-    )
+    ]
+    # 開発用の -kbdprobe: キーが来ないまま待ちが続くと、8251 のコマンドの書き直しと、BIOS によるキーボード
+    # インタフェースの初期化を順に行う。両方が済んでから ESC を送り、そのあともキーが届くことを見る
+    for name in ('KP.OUT', 'KP.LOG'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    finished = dosenv.run_batch(['AUTOTYPE -w 20 -p 3 esc esc esc',
+                                 'VBM98.EXE -fdd0 KM.IMG -tick -menuat 50 -stopafter 150 -kbdprobe -log KP.LOG > KP.OUT'],
+                                90, core='normal')
+    log = imgtests.read_lines(work, 'KP.LOG') or []
+    for line in log:
+        if 'kbdprobe' in line or 'arrived' in line or 'VM menu' in line:
+            print('  ' + line[:150])
+    wrote = [i for i, l in enumerate(log) if '-kbdprobe: wrote 16h to port 43h' in l]
+    init = [i for i, l in enumerate(log) if '-kbdprobe: called INT 18h AH=03h' in l]
+    got = [i for i, l in enumerate(log) if 'key wait: key 00' in l and 'arrived after' in l]
+    checks += [
+        ('VM menu, -kbdprobe: batch finished', finished),
+        ('VM menu, -kbdprobe: both steps ran, in order, before the key', bool(wrote and init and got) and wrote[0] < init[0] < got[0]),
+        ('VM menu, -kbdprobe: ESC still arrived after them and closed the menu',
+         any('VM menu (hotkey): resumed' in l for l in log) and any('stopped after 150' in l for l in log)),
+    ]
     ok = True
     for name, c in checks:
         print('%s %s' % ('ok  ' if c else 'FAIL', name))

@@ -136,6 +136,7 @@ static u8 dev_feed[KBD_TAP_MAX];    /* 開発用 (-feedkeys): ゲストへ渡す
 static u8 dev_feed_n, dev_feed_i;
 static u8 dev_feed_ok;      /* ゲストから 1 回戻ったあとで渡し始める (最初に入る時点では、IPL がまだ何も置いていない) */
 static u8 dev_nopage0;
+static u8 dev_kbdprobe;
 static u8 guest_imr_m, guest_imr_s;
 /* 開発用: ホストへ戻るたびのゲストの割り込みマスクと、そのときの evlog_n */
 #define IMRLOG_SIZE 24
@@ -241,6 +242,8 @@ static FARTEXT int __far parse_args(int argc, char **argv, struct opts *o)
         } else if (eq(a, "-nopage0")) {
             /* 開発用: ゲストの 0 番ページを実メモリの 0 番ページに置かない (design.md §3 の入れ替えを外して切り分ける) */
             dev_nopage0 = 1;
+        } else if (eq(a, "-kbdprobe")) {
+            dev_kbdprobe = 1;
         } else if (eq(a, "-nocache")) {
             dev_nocache = 1;
         } else if (eq(a, "-tick")) {
@@ -2041,22 +2044,97 @@ struct kbd_seen {
     u8 wa[KBD_WATCH_LEN];
 };
 
+static const char kbd_hex[] = "0123456789ABCDEF";
+static u8 kbd_watch_lines;      /* いまの待ちで残した行数 */
+static u8 kbd_probe_stage;      /* いまの待ちで -kbdprobe が済ませた段 */
+
+/* ring 0 側の記録 (vbm.h の kbd_wr_last など。n 個めまで書かれた輪) を、古い順の 16 進にする。out は KBD_WR_KEEP * 3 + 1 バイト以上 */
+static FARTEXT void __far kbd_ring_text(const u8 *ring, u16 n, char *out)
+{
+    u8 have = (u8)(n < KBD_WR_KEEP ? n : KBD_WR_KEEP), i, v;
+
+    for (i = 0; i < have; i++) {
+        v = ring[(n - have + i) & (KBD_WR_KEEP - 1)];
+        *out++ = ' ';
+        *out++ = kbd_hex[v >> 4];
+        *out++ = kbd_hex[v & 15];
+    }
+    *out = 0;
+}
+
+/*
+ * キー待ちに入る前にゲストの側で起きたことを、前に出した行から変わっていれば残す: ゲストがキーボードの 8251 に
+ * 書いた値 (コマンドのポート 43h で受信を止めたり、キーボードに送信を待たせたりできる)、ring 0 がキーボードから
+ * 受け取った直近のスキャンコード、ホットキーを離すのを待つ処理 (vbm_r0.c の kbd_wait_release) の終わり方
+ * (その時点でもうキーボードが黙っていたかが分かる)
+ */
+static FARTEXT void __far kbd_guest_note(void)
+{
+    static u16 seen_n[3] = { 0xFFFF, 0xFFFF, 0xFFFF };
+    static char text[3][KBD_WR_KEEP * 3 + 1];
+
+    if (seen_n[0] == kbd_wr_n[0] && seen_n[1] == kbd_wr_n[1] && seen_n[2] == kbd_rx_n)
+        return;
+    seen_n[0] = kbd_wr_n[0];
+    seen_n[1] = kbd_wr_n[1];
+    seen_n[2] = kbd_rx_n;
+    kbd_ring_text(kbd_wr_last[0], kbd_wr_n[0], text[0]);
+    kbd_ring_text(kbd_wr_last[1], kbd_wr_n[1], text[1]);
+    kbd_ring_text(kbd_rx_last, kbd_rx_n, text[2]);
+    log_line("VBM98: key wait: guest writes to port 43h: %u, last:%s; to port 41h: %u, last:%s. Scancodes received: %u, last:%s\n",
+             kbd_wr_n[0], text[0], kbd_wr_n[1], text[1], kbd_rx_n, text[2]);
+    log_line("VBM98: key wait: hotkey release wait: %u bytes read in %u frames, still down %X (1 CTRL, 2 GRPH, 4 the key), "
+             "8251 %02X after it. Keys taken in the host world: %u passed, %u dropped\n",
+             kbd_rel_bytes, kbd_rel_frames, kbd_rel_left, kbd_rel_stat, tap_fed, tap_dropped);
+}
+
+/*
+ * 開発用 (-kbdprobe): キーが来ないまま待ちが続いたら、キーボードの 8251 を 2 段で立て直してみる。どちらの段のあとで
+ * キーが届くようになったかで、止まっていた所が分かる。1 段目はコマンドのポートに 16h (エラーリセット・受信許可・
+ * キーボードへの送信許可) を書く。2 段目は BIOS にキーボードインタフェースを初期化させる (INT 18h AH=03h)。
+ * 16h の意味は 8251 のコマンドのビット割り当て (bit 1 DTR、bit 2 RxE、bit 4 ER) と、PC-98 では DTR がキーボードへの
+ * 送信許可に当たることから (推測: 記憶による。このセッションでは資料で確かめていない)
+ */
+#define KBD_PROBE_AT 0x80000UL
+
+static FARTEXT void __far kbd_probe(u32 polls)
+{
+    if (!dev_kbdprobe || kbd_probe_stage >= 2 || polls < KBD_PROBE_AT * (kbd_probe_stage + 1UL))
+        return;
+    if (kbd_probe_stage == 0) {
+        pio_out8(0x43, 0x16);
+        log_line("VBM98: key wait: -kbdprobe: wrote 16h to port 43h after %lu polls\n", (unsigned long)polls);
+    } else {
+        int18(0x03, 0, 0);
+        log_line("VBM98: key wait: -kbdprobe: called INT 18h AH=03h after %lu polls\n", (unsigned long)polls);
+    }
+    kbd_probe_stage++;
+}
+
+FARTEXT void __far vm_kbd_got(u32 polls, u16 key)
+{
+    if (kbd_watch_lines > 1 || kbd_probe_stage)
+        log_line("VBM98: key wait: key %04X arrived after %lu polls\n", key, (unsigned long)polls);
+}
+
 FARTEXT void __far vm_kbd_watch(u32 polls)
 {
-    static const char hex[] = "0123456789ABCDEF";
     static struct kbd_seen last;
     static char wa_hex[KBD_WATCH_LEN * 3 + 1];
     static u32 next;
-    static u8 lines;
     struct kbd_seen now, cmp;
     u8 i;
 
+    if (!polls)
+        kbd_probe_stage = 0;
+    kbd_probe(polls);
     if (!log_is_open())
         return;
     if (!polls) {
-        lines = 0;
+        kbd_watch_lines = 0;
         next = 0x4000;
-    } else if (lines >= KBD_WATCH_MAX) {
+        kbd_guest_note();
+    } else if (kbd_watch_lines >= KBD_WATCH_MAX) {
         return;
     }
     /* 読み出し選択 (OCW3) を書いてから読むまでの間に、同じことをするホストのハンドラを挟まない */
@@ -2083,11 +2161,11 @@ FARTEXT void __far vm_kbd_watch(u32 polls)
     while (polls >= next)
         next <<= 2;
     last = cmp;
-    lines++;
+    kbd_watch_lines++;
     for (i = 0; i < KBD_WATCH_LEN; i++) {
         wa_hex[i * 3] = ' ';
-        wa_hex[i * 3 + 1] = hex[now.wa[i] >> 4];
-        wa_hex[i * 3 + 2] = hex[now.wa[i] & 15];
+        wa_hex[i * 3 + 1] = kbd_hex[now.wa[i] >> 4];
+        wa_hex[i * 3 + 2] = kbd_hex[now.wa[i] & 15];
     }
     log_line("VBM98: key wait, %lu polls: PIC %02X %02X %02X / %02X %02X %02X (IMR IRR ISR, master / slave), 8251 %02X, "
              "INT 09h %02X%02X:%02X%02X, work %04Xh:%s\n", (unsigned long)polls,

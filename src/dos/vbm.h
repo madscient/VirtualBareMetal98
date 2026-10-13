@@ -209,6 +209,21 @@ extern u8 kbd_pending, kbd_code;
  * ハンドラが IRET で戻ってきた所 (割り込まれた側の FLAGS に戻っている) で X_KBD_FEED を返す
  */
 extern u8 kbd_feed_wait;
+/*
+ * キーボードの 8251 まわりの記録 (ring 0 側が持つ。キー待ちのログに出す。design.md §19)。
+ *   kbd_wr_last / kbd_wr_n  ゲストが書いた値の直近 KBD_WR_KEEP 個 (回数 % KBD_WR_KEEP の位置が次に書く所) と回数。
+ *                           [0] はコマンドのポート 43h、[1] はデータのポート 41h。書き込みは実物へも通る
+ *   kbd_rel_*               ホットキーを離すのを待つ処理の終わり方: 読んだバイト数 (255 で止まる)、数えた VSYNC、
+ *                           離されないまま残ったキー (bit 0 CTRL、bit 1 GRPH、bit 2 ホットキーのキー)、終わった時点の
+ *                           8251 の状態 (ポート 43h)
+ */
+#define KBD_WR_KEEP 8
+extern u8 kbd_wr_last[2][KBD_WR_KEEP];
+extern u16 kbd_wr_n[2];
+extern u8 kbd_rx_last[KBD_WR_KEEP];
+extern u16 kbd_rx_n;
+extern u8 kbd_rel_bytes, kbd_rel_left, kbd_rel_stat;
+extern u16 kbd_rel_frames;
 /* スキャンコードを 1 つ見て修飾キーの状態を追う。ホットキーが成立したら X_HOTKEY_*、そうでなければ 0 (vbm_r0.c) */
 u16 kbd_note(u8 sc);
 /* ホスト世界にいる間に控えるキーの数の上限 (kbdtap.S の TAP_MAX と同じ値) */
@@ -222,6 +237,7 @@ FARTEXT int __far vm_shot(char *gname);                              /* スク�
 FARTEXT void __far vm_screen_pause(void);                            /* メニューを開く: グラフィック表示を消し、テキストを 25 行・80 桁にする (VRAM には触らない) */
 FARTEXT void __far vm_screen_resume(void);                           /* メニューを閉じる: 表示系をゲストが設定していた状態へ戻す */
 FARTEXT void __far vm_kbd_watch(u32 polls);                          /* キー待ちの間の、キーボードの割り込みまわりの様子をログに残す。polls は待ち始めてから BIOS にキーの有無を聞いた回数 */
+FARTEXT void __far vm_kbd_got(u32 polls, u16 key);                   /* 待ちが長引いたあとでキーが届いたことをログに残す (key は ui_getkey の戻り値) */
 
 /* 開発用: モニタに届いたものの記録 (ring 0 側が書き、ホストが止めたときに表示する) */
 #define EVLOG_SIZE 32

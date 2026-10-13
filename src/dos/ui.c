@@ -175,6 +175,7 @@ FARTEXT u16 __far ui_getkey(void)
     r.h.ah = 0x00;
     int86(0x18, &r, &r);
     vm_prog('k');
+    vm_kbd_got(polls, (u16)((r.h.ah << 8) | r.h.al));
     return (u16)((r.h.ah << 8) | r.h.al);
 }
 

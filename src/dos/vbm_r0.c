@@ -85,6 +85,12 @@ u8 kbd_stop_alt, kbd_shot_alt;
 u8 kbd_hot;
 /* 0 = なし、1 = 次のハードウェア割り込みで戻り先を差し替える (vbm.h)、2 = 差し替えてあって、戻ってくるのを待っている */
 u8 kbd_feed_wait;
+u8 kbd_wr_last[2][KBD_WR_KEEP];
+u16 kbd_wr_n[2];
+u8 kbd_rx_last[KBD_WR_KEEP];
+u16 kbd_rx_n;
+u8 kbd_rel_bytes, kbd_rel_left, kbd_rel_stat;
+u16 kbd_rel_frames;
 static u16 feed_ip, feed_cs;    /* 差し替えたハンドラの、本来の戻り先 */
 u8 prog_on;
 u8 dev_tick, guest_imr0;
@@ -146,6 +152,12 @@ static void prog_spin(u8 col, u8 *n)
     mon_poke16(at + 0x2000, 0x00E1);
 }
 
+static void kbd_rx_note(u8 sc)
+{
+    kbd_rx_last[kbd_rx_n & (KBD_WR_KEEP - 1)] = sc;
+    kbd_rx_n++;
+}
+
 /*
  * ホットキーを拾ったら、CTRL・GRPH・そのキーが全部離されるまでここで待つ (離した符号をここで読み捨てる)。
  * 待たずにホストへ戻ると、押した符号はゲストに、離した符号だけがホストに届く。ホストの BIOS によっては、押して
@@ -155,7 +167,7 @@ static void prog_spin(u8 col, u8 *n)
  */
 static void kbd_wait_release(u8 key)
 {
-    u8 down = 1, vs = 0, v, sc, k;
+    u8 down = 1, vs = 0, v, sc, k, bytes = 0;
     u16 frames = 0;
     u32 n = 0;
 
@@ -163,6 +175,9 @@ static void kbd_wait_release(u8 key)
         n++;
         if (mon_in8(KBD_STAT) & 0x02) {
             sc = mon_in8(KBD_DATA);
+            if (bytes != 0xFF)
+                bytes++;
+            kbd_rx_note(sc);
             k = (u8)(sc & 0x7F);
             if (k == SC_CTRL)
                 kbd_ctrl = (u8)!(sc & SC_BREAK);
@@ -176,6 +191,10 @@ static void kbd_wait_release(u8 key)
             frames++;
         vs = v;
     }
+    kbd_rel_bytes = bytes;
+    kbd_rel_frames = frames;
+    kbd_rel_left = (u8)((kbd_ctrl ? 1 : 0) | (kbd_grph ? 2 : 0) | (down ? 4 : 0));
+    kbd_rel_stat = mon_in8(KBD_STAT);
 }
 
 /*
@@ -208,6 +227,8 @@ static u16 kbd_irq(void)
 {
     u8 sc = mon_in8(KBD_DATA);
     u16 x = kbd_note(sc);
+
+    kbd_rx_note(sc);
 
     if (x) {
         eoi(IRQ_FIRST + 1);
@@ -611,6 +632,12 @@ u16 mon_on_out(u16 port, u8 size, u32 val)
             *disp = 1;
         else if (v == 0x0C || v == 0x0E)
             *disp = 0;
+    }
+    if ((port == KBD_STAT || port == KBD_DATA) && size == 1) {
+        u8 w = (u8)(port == KBD_DATA);
+
+        kbd_wr_last[w][kbd_wr_n[w] & (KBD_WR_KEEP - 1)] = (u8)v;
+        kbd_wr_n[w]++;
     }
     mon_out8(port, (u8)v);
     if (size >= 2)
