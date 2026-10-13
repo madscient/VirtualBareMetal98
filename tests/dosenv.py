@@ -78,6 +78,9 @@ def workdir():
 
 
 def _dosboxx(target, wd, timeout, core):
+    # 実行ファイルが無いと、試験は 1 項目も出さずに終わる。起動の失敗としてではなく、理由が分かる形で止める
+    if not os.path.isfile(target):
+        raise RuntimeError('DOSBox-X の実行ファイルが無い (環境変数 VBM_DOSBOXX の指す先を確かめる)')
     conf = os.path.join(wd, 'dosboxx.conf')
     with open(conf, 'w') as f:
         f.write(DOSBOXX_CONF % (core if core != 'auto' else 'normal', wd, BATCH))
