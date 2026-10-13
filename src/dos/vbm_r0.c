@@ -89,6 +89,9 @@ u8 kbd_wr_last[2][KBD_WR_KEEP];
 u16 kbd_wr_n[2];
 u8 kbd_rx_last[KBD_WR_KEEP];
 u16 kbd_rx_n;
+u8 kbd_cmd = KBD_CMD_READY;
+u8 kbd_cmd_mode;
+u16 kbd_ack_n;
 u8 kbd_rel_bytes, kbd_rel_left, kbd_rel_stat;
 u16 kbd_rel_frames;
 static u16 feed_ip, feed_cs;    /* 差し替えたハンドラの、本来の戻り先 */
@@ -159,6 +162,21 @@ static void kbd_rx_note(u8 sc)
 }
 
 /*
+ * ゲストのハンドラへ渡さずにここで読み捨てたスキャンコードの後始末。実機の BIOS のキーボード割り込みは、1 つ受ける
+ * たびに 8251 のコマンドのポートへ 16h を書く。読むだけでこれを書かないでいると、キーボードが送信を止めたままに
+ * なる (design.md §12。実機の報告: PC-9821Ap2)。ゲストが最後に書いたコマンド (vbm.h の kbd_cmd) を書き直す。
+ * 8251 が内部リセットのあとでモード指定を待っている間は書かない (書いた値がモード指定として取られる)
+ */
+static void kbd_ack(void)
+{
+    if (kbd_cmd_mode)
+        return;
+    mon_out8(KBD_STAT, kbd_cmd);
+    if (kbd_ack_n != 0xFFFF)
+        kbd_ack_n++;
+}
+
+/*
  * ホットキーを拾ったら、CTRL・GRPH・そのキーが全部離されるまでここで待つ (離した符号をここで読み捨てる)。
  * 待たずにホストへ戻ると、押した符号はゲストに、離した符号だけがホストに届く。ホストの BIOS によっては、押して
  * いないキーが離されるとシフト状態が反転したままになる (実機の報告: PC-9801RA2。design.md §9)。
@@ -178,6 +196,7 @@ static void kbd_wait_release(u8 key)
             if (bytes != 0xFF)
                 bytes++;
             kbd_rx_note(sc);
+            kbd_ack();
             k = (u8)(sc & 0x7F);
             if (k == SC_CTRL)
                 kbd_ctrl = (u8)!(sc & SC_BREAK);
@@ -231,6 +250,7 @@ static u16 kbd_irq(void)
     kbd_rx_note(sc);
 
     if (x) {
+        kbd_ack();
         eoi(IRQ_FIRST + 1);
         kbd_wait_release((u8)(sc & ~SC_BREAK));
         kbd_hot = 1;
@@ -632,6 +652,15 @@ u16 mon_on_out(u16 port, u8 size, u32 val)
             *disp = 1;
         else if (v == 0x0C || v == 0x0E)
             *disp = 0;
+    }
+    /* 8251 のコマンドの写し (vbm.h の kbd_cmd)。内部リセット (bit 6) の次の 1 バイトはモード指定で、コマンドではない */
+    if (port == KBD_STAT && size == 1) {
+        if (kbd_cmd_mode)
+            kbd_cmd_mode = 0;
+        else if (v & 0x40)
+            kbd_cmd_mode = 1;
+        else
+            kbd_cmd = (u8)v;
     }
     if ((port == KBD_STAT || port == KBD_DATA) && size == 1) {
         u8 w = (u8)(port == KBD_DATA);

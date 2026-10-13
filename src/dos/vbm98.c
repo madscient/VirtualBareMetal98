@@ -2070,11 +2070,12 @@ static FARTEXT void __far kbd_ring_text(const u8 *ring, u16 n, char *out)
  */
 static FARTEXT void __far kbd_guest_note(void)
 {
-    static u16 seen_n[3] = { 0xFFFF, 0xFFFF, 0xFFFF };
+    static u16 seen_n[3] = { 0xFFFF, 0xFFFF, 0xFFFF }, seen_ack = 0xFFFF;
     static char text[3][KBD_WR_KEEP * 3 + 1];
 
-    if (seen_n[0] == kbd_wr_n[0] && seen_n[1] == kbd_wr_n[1] && seen_n[2] == kbd_rx_n)
+    if (seen_n[0] == kbd_wr_n[0] && seen_n[1] == kbd_wr_n[1] && seen_n[2] == kbd_rx_n && seen_ack == kbd_ack_n)
         return;
+    seen_ack = kbd_ack_n;
     seen_n[0] = kbd_wr_n[0];
     seen_n[1] = kbd_wr_n[1];
     seen_n[2] = kbd_rx_n;
@@ -2084,8 +2085,10 @@ static FARTEXT void __far kbd_guest_note(void)
     log_line("VBM98: key wait: guest writes to port 43h: %u, last:%s; to port 41h: %u, last:%s. Scancodes received: %u, last:%s\n",
              kbd_wr_n[0], text[0], kbd_wr_n[1], text[1], kbd_rx_n, text[2]);
     log_line("VBM98: key wait: hotkey release wait: %u bytes read in %u frames, still down %X (1 CTRL, 2 GRPH, 4 the key), "
-             "8251 %02X after it. Keys taken in the host world: %u passed, %u dropped\n",
-             kbd_rel_bytes, kbd_rel_frames, kbd_rel_left, kbd_rel_stat, tap_fed, tap_dropped);
+             "8251 %02X after it. Command rewritten by the monitor: %u times (%02X%s). "
+             "Keys taken in the host world: %u passed, %u dropped\n",
+             kbd_rel_bytes, kbd_rel_frames, kbd_rel_left, kbd_rel_stat, kbd_ack_n, kbd_cmd,
+             kbd_cmd_mode ? ", 8251 waits for a mode byte" : "", tap_fed, tap_dropped);
 }
 
 /*
@@ -2102,13 +2105,32 @@ static FARTEXT void __far kbd_probe(u32 polls)
     if (!dev_kbdprobe || kbd_probe_stage >= 2 || polls < KBD_PROBE_AT * (kbd_probe_stage + 1UL))
         return;
     if (kbd_probe_stage == 0) {
-        pio_out8(0x43, 0x16);
+        pio_out8(0x43, KBD_CMD_READY);
         log_line("VBM98: key wait: -kbdprobe: wrote 16h to port 43h after %lu polls\n", (unsigned long)polls);
     } else {
         int18(0x03, 0, 0);
         log_line("VBM98: key wait: -kbdprobe: called INT 18h AH=03h after %lu polls\n", (unsigned long)polls);
     }
     kbd_probe_stage++;
+}
+
+/*
+ * ホスト世界でキーを待つ前に、キーボードの 8251 のコマンドを、ホストの BIOS が置く値 (KBD_CMD_READY) に書き直す。
+ * モニタがホットキーを読み捨てたあと、実機ではキーボードが送信を止めたままになっていて、この書き込みで再開した
+ * (design.md §12)。ring 0 側でも読み捨てるたびに書いている (vbm_r0.c の kbd_ack) ので、これは二重の備え:
+ * ホスト世界に戻ってから止まる場合と、ゲストがコマンドを別の値にしていた場合を受ける。
+ * 8251 がモード指定を待っている間は書かない (vbm.h の kbd_cmd_mode)
+ */
+FARTEXT void __far vm_kbd_host(void)
+{
+    if (!kbd_cmd_mode)
+        pio_out8(0x43, KBD_CMD_READY);
+}
+
+FARTEXT void __far vm_kbd_guest(void)
+{
+    if (!kbd_cmd_mode && kbd_cmd != KBD_CMD_READY)
+        pio_out8(0x43, kbd_cmd);
 }
 
 FARTEXT void __far vm_kbd_got(u32 polls, u16 key)
@@ -2254,6 +2276,7 @@ static FARTEXT void __far dump_guest(const struct mon_guest *g, int fault)
             say(" %02X=%u", i + 8, irq_hits[i]);
     say("\nVBM98: keys taken in the host world: %u passed to the guest, %u dropped (queue full), %u hotkeys ignored",
         tap_fed, tap_dropped, tap_hot);
+    say("\nVBM98: keyboard: %u scancodes received, command rewritten by the monitor %u times", kbd_rx_n, kbd_ack_n);
     say("\nVBM98: V30 instructions emulated: %u", v30_emul_n);
     if (v30_emul_n)
         say(" (first at %04X:%04X: %02X %02X %02X %02X)", (unsigned)(v30_emul_first >> 16), (unsigned)(u16)v30_emul_first,
@@ -2466,6 +2489,7 @@ static FARTEXT void __far stop_wait(u16 rc)
         ui_debug_dump(1, 72);
         say_sink(0);
     }
+    vm_kbd_host();
     ui_flush_keys();
     ui_getkey();
 }

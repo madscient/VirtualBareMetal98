@@ -222,6 +222,14 @@ extern u8 kbd_wr_last[2][KBD_WR_KEEP];
 extern u16 kbd_wr_n[2];
 extern u8 kbd_rx_last[KBD_WR_KEEP];
 extern u16 kbd_rx_n;
+/*
+ * キーボードの 8251 のコマンド (ポート 43h。読み出せない) の写し。ゲストが最後に書いたコマンドで、書いていなければ
+ * KBD_CMD_READY。kbd_cmd_mode が 0 でない間は、8251 が内部リセットのあとでモード指定を待っている (次に書く値は
+ * コマンドとして扱われない)。kbd_ack_n は、モニタが読み捨てたスキャンコードのあとでコマンドを書き直した回数
+ */
+#define KBD_CMD_READY 0x16      /* エラーリセット・受信許可・キーボードへの送信許可。BIOS が初期化の最後と、キーを受けるたびに書く値 (design.md §12) */
+extern u8 kbd_cmd, kbd_cmd_mode;
+extern u16 kbd_ack_n;
 extern u8 kbd_rel_bytes, kbd_rel_left, kbd_rel_stat;
 extern u16 kbd_rel_frames;
 /* スキャンコードを 1 つ見て修飾キーの状態を追う。ホットキーが成立したら X_HOTKEY_*、そうでなければ 0 (vbm_r0.c) */
@@ -237,6 +245,8 @@ FARTEXT int __far vm_shot(char *gname);                              /* スク�
 FARTEXT void __far vm_screen_pause(void);                            /* メニューを開く: グラフィック表示を消し、テキストを 25 行・80 桁にする (VRAM には触らない) */
 FARTEXT void __far vm_screen_resume(void);                           /* メニューを閉じる: 表示系をゲストが設定していた状態へ戻す */
 FARTEXT void __far vm_kbd_watch(u32 polls);                          /* キー待ちの間の、キーボードの割り込みまわりの様子をログに残す。polls は待ち始めてから BIOS にキーの有無を聞いた回数 */
+FARTEXT void __far vm_kbd_host(void);                                 /* メニューを開く: キーボードの 8251 のコマンドを、ホストの BIOS が置く値にする */
+FARTEXT void __far vm_kbd_guest(void);                                /* メニューを閉じる: ゲストが最後に書いたコマンドへ戻す */
 FARTEXT void __far vm_kbd_got(u32 polls, u16 key);                   /* 待ちが長引いたあとでキーが届いたことをログに残す (key は ui_getkey の戻り値) */
 
 /* 開発用: モニタに届いたものの記録 (ring 0 側が書き、ホストが止めたときに表示する) */

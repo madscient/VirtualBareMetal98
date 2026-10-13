@@ -121,6 +121,11 @@ VBM98 のスクリーンショット（`shot`・`menu` の試験が見るもの�
 いないことを見る。テキストの行数・桁数の戻し方を変えたときは、`TEXT20.BIN` と `TEXT20D.BIN`（`tests/boot/textipl.S`）を
 起動して同じ撮り方をし、開く前と閉じたあとの絵が一致すること、メニューが 25 行の配置で欠けずに出ることを見る。
 
+実物のキーで押したホットキー（モニタがスキャンコードを読み捨てる経路。`vbm_r0.c` の `kbd_irq`・`kbd_wait_release`・
+`kbd_ack`）も、自動試験は通らない（試験は開発用の `-menuat` などで開く）。そこを変えたら、NP21/W の窓のメニューから
+CTRL + GRPH + DEL を送り（Device → Keyboard の mechanical CTRL・mechanical GRPH と Send Ctrl+Alt+Del。キーボード割り込みと
+して届く）、ログに `reset (hotkey)` が出ることと、止めたときの表示の `command rewritten by the monitor` の回数を見る。
+
 検査和や一致で中身を確かめる試験は、何も届いていないとき（ゼロ埋め）の値が期待値と違うことを先に確かめる
 （`run_dos_tests.py` の `word_sum` は 0 になるパターンを受け付けない）。
 

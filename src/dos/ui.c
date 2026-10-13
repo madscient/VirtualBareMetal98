@@ -61,10 +61,12 @@ FARTEXT void __far ui_open(void)
     ui_fill(0, 0, UI_COLS, UI_ROWS, UI_WHITE);
     int18(0x0C);    /* テキスト表示 ON。ゲストが消していても見えるように (戻すときは触らない。design.md §9) */
     int18(0x12);    /* カーソルを消す */
+    vm_kbd_host();
 }
 
 FARTEXT void __far ui_close(void)
 {
+    vm_kbd_guest();
     if (saved) {
         stash_read(STASH_MENU, TVRAM_SEG, 0, SHOWN);
         stash_read(STASH_MENU + SHOWN, TVRAM_SEG, TVRAM_ATTR, SHOWN);
