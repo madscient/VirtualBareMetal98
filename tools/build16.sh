@@ -11,6 +11,9 @@ set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
 out="$root/build/dos"
 mkdir -p "$out"
+# 前のビルドの実行ファイルを先に消す。途中で失敗したとき古いものが残っていると、試験がそれで黙って走る
+# (run_dos_tests.py は実行ファイルが無ければ止まる)
+rm -f "$out/IMGDUMP.EXE" "$out/FDBTEST.EXE" "$out/IMGDUMPM.EXE" "$out/FDBTESTM.EXE" "$out/MONPROBE.EXE" "$out/VBM98.EXE"
 
 # アセンブリの式に / を書くと、この GNU as は / から行末までをコメントとして捨てる (警告は出ない)。
 # C のコメントの外に / がある行があれば止める

@@ -96,8 +96,9 @@ extern struct vid_text vid_text;
 extern u8 kbd_shot_alt;
 /*
  * ホスト側の大きな控えの置き場 (XMS。ゲスト用メモリの後ろに STASH_KB ぶん確保する。design.md §3)。データセグメントは
- * スタックと同居しているので、まとめて書いてまとめて読み戻すだけの置き場はここに出す。XMS ドライバの転送で、1MB 未満の
- * 任意の seg:off (VRAM を含む) と直接写せる。長さは偶数であること。0 で成功。ring 0 からは使えない
+ * スタックと同居しているので、まとめて書いてまとめて読み戻すだけの置き場はここに出す。長さは偶数であること。0 で成功。
+ * ring 0 からは使えない。stash_write は XMS ドライバの転送で seg:soff (VRAM を含む) から直接写す。stash_read は
+ * 転送バッファの先頭 len バイトに受けてから seg:soff へ写すので、その範囲を壊す (スクリーンショットの溜め場と重なる)
  */
 #define STASH_KB     32
 #define STASH_TVRAM  0x0000UL      /* ホストのテキスト画面 (文字 8KB + 属性 8KB。vbm98.c) */
