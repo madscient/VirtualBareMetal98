@@ -250,6 +250,14 @@ FARTEXT void __far vm_eject(int unit);
 FARTEXT const char * __far vm_drive_name(int unit);                   /* 入っているイメージのパス (複数ディスクの D88 なら ",<番号>" 付き)。空なら "" */
 /* path の D88 に連なるディスクの名前を names (DIMG_D88_NAME バイト × max) に入れ、枚数を返す。D88 でなければ 1、開けなければ 0 */
 FARTEXT u16 __far vm_disk_list(const char *path, char *names, u16 max);
+/*
+ * ブランクディスク (RAW。全セクタ E5h) を path に作り、ドライブ unit に入れる (spec.md)。kind は VM_BLANK_*。
+ * 0 で成功、1 = 同じ名前のファイルがある、2 = 作れない・書けない・入らない (作りかけのファイルは消す)
+ */
+#define VM_BLANK_2HD 0
+#define VM_BLANK_2DD 1
+#define VM_BLANK_144 2
+FARTEXT int __far vm_blank(int unit, const char *path, u8 kind);
 FARTEXT int __far vm_shot(char *gname);                              /* スクリーンショット。gname (13 バイト以上) に G 側のファイル名。0 なら名前はいらない */
 FARTEXT void __far vm_screen_pause(void);                            /* メニューを開く: グラフィック表示を消し、テキストを 25 行・80 桁にする (VRAM には触らない) */
 FARTEXT void __far vm_screen_resume(void);                           /* メニューを閉じる: 表示系をゲストが設定していた状態へ戻す */

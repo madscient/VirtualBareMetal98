@@ -619,6 +619,44 @@ FARTEXT int __far vm_mount(int unit, const char *path, u16 index, int quiet)
     return 0;
 }
 
+FARTEXT int __far vm_blank(int unit, const char *path, u8 kind)
+{
+    static const u32 sizes[] = { 1261568UL, 655360UL, 1474560UL };
+    union REGS r;
+    unsigned rc, put;
+    u32 left;
+    u16 n;
+    int h;
+
+    /* 同名の有無は、開けるかどうかで見る (「作るだけ」の呼び出しが既存のファイルに返す誤りの番号は DOS の実装で違う) */
+    if (_dos_open(path, 0, &h) == 0) {
+        _dos_close(h);
+        log_line("VBM98: %s: already exists; not created\n", path);
+        return 1;
+    }
+    rc = _dos_creatnew(path, _A_NORMAL, &h);
+    if (rc != 0) {
+        log_line("VBM98: %s: cannot create (DOS error %u)\n", path, rc);
+        return 2;
+    }
+    /* 転送バッファの前半はメニューの間は空いている (写しの読み込みと同じ使い方) */
+    _fmemset(MK_FP(xfer_seg(), 0), 0xE5, 0x8000);
+    for (left = sizes[kind]; left; left -= n) {
+        n = (u16)(left < 0x8000UL ? left : 0x8000UL);
+        if (_dos_write(h, MK_FP(xfer_seg(), 0), n, &put) != 0 || put != n) {
+            _dos_close(h);
+            r.h.ah = 0x41;
+            r.x.dx = (unsigned)path;
+            intdos(&r, &r);
+            log_line("VBM98: %s: cannot write; removed\n", path);
+            return 2;
+        }
+    }
+    _dos_close(h);
+    log_line("VBM98: drive %d: created %s (%lu KB, filled with E5h)\n", unit, path, (unsigned long)(sizes[kind] >> 10));
+    return vm_mount(unit, path, 0, 1) ? 2 : 0;
+}
+
 FARTEXT u16 __far vm_disk_list(const char *path, char *names, u16 max)
 {
     dos_file f;

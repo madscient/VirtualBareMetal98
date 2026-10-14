@@ -181,6 +181,77 @@ FARTEXT u16 __far ui_getkey(void)
     return (u16)((r.h.ah << 8) | r.h.al);
 }
 
+/*
+ * 開発用のキー列 (-menukeys) はスキャンコードだけで文字を持たないので、ui_getline のために文字を引く。
+ * 数字と英字だけ (PC-98 のスキャンコード。Y と N は ui.h と同じ。ほかの英字は同じ配列表によるもので、実物のキーでは
+ * BIOS が文字を返すので使わない)
+ */
+static FARTEXT u8 __far dev_char(u8 sc)
+{
+    static const char row1[] = "1234567890";
+    static const char rowq[] = "QWERTYUIOP";
+    static const char rowa[] = "ASDFGHJKL";
+    static const char rowz[] = "ZXCVBNM";
+
+    if (sc >= 0x01 && sc <= 0x0A)
+        return (u8)row1[sc - 0x01];
+    if (sc >= 0x10 && sc <= 0x19)
+        return (u8)rowq[sc - 0x10];
+    if (sc >= 0x1D && sc <= 0x25)
+        return (u8)rowa[sc - 0x1D];
+    if (sc >= 0x29 && sc <= 0x2F)
+        return (u8)rowz[sc - 0x29];
+    return 0;
+}
+
+static FARTEXT int __far name_char(u8 c)
+{
+    static const char bad[] = "\"*+,/:;<=>?[\\]|";
+    const char *p;
+
+    if (c <= 0x20 || c >= 0x7F)
+        return 0;
+    for (p = bad; *p; p++)
+        if ((u8)*p == c)
+            return 0;
+    return 1;
+}
+
+FARTEXT int __far ui_getline(u8 row, u8 col, u8 attr, char *buf, u8 max)
+{
+    u8 n = (u8)strlen(buf), sc, ch;
+    u16 k;
+
+    for (;;) {
+        ui_fill(row, col, (u8)(max + 1), 1, attr);
+        ui_puts(row, col, attr, buf);
+        put_cell(row, (u8)(col + n), 0x20, (u8)(attr | UI_REV));    /* カーソルの代わり */
+        k = ui_getkey();
+        sc = UI_KEY_SC(k);
+        ch = UI_KEY_CH(k);
+        if (dev_keys && !ch)
+            ch = dev_char(sc);
+        if (sc == UI_SC_ESC || ch == 0x1B)
+            return 0;
+        if (sc == UI_SC_RETURN || ch == 0x0D) {
+            if (n)
+                return 1;
+            continue;
+        }
+        if (sc == UI_SC_BS || ch == 0x08) {
+            if (n)
+                buf[--n] = 0;
+            continue;
+        }
+        if (ch >= 'a' && ch <= 'z')
+            ch = (u8)(ch - 'a' + 'A');
+        if (n < max && name_char(ch)) {
+            buf[n++] = (char)ch;
+            buf[n] = 0;
+        }
+    }
+}
+
 FARTEXT void __far ui_flush_keys(void)
 {
     union REGS r;

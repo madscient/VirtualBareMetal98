@@ -30,6 +30,7 @@
 #define UI_SC_3        0x03
 #define UI_SC_4        0x04
 #define UI_SC_5        0x05
+#define UI_SC_BS       0x0E
 #define UI_SC_TAB      0x0F
 #define UI_SC_RETURN   0x1C
 #define UI_SC_Y        0x15
@@ -51,6 +52,12 @@ FARTEXT u8 __far ui_puts(u8 row, u8 col, u8 attr, const char *s);
 FARTEXT void __far ui_box(u8 row, u8 col, u8 w, u8 h, u8 attr);
 /* キーを 1 つ待つ */
 FARTEXT u16 __far ui_getkey(void);
+/*
+ * 1 行の入力 (ファイル名など)。row・col から max 文字まで。buf は max + 1 バイトで、初期の中身から始める。
+ * 英字は大文字にし、受け付けるのは ASCII の印字可能文字 (空白と、DOS のファイル名に使えない記号を除く)。
+ * BS で消す。RETURN で 1 (空のときは受け付けない)、ESC で 0
+ */
+FARTEXT int __far ui_getline(u8 row, u8 col, u8 attr, char *buf, u8 max);
 /* 溜まっているキーを捨てる */
 FARTEXT void __far ui_flush_keys(void);
 /* 開発用: キー入力の代わりに使うスキャンコードの列。尽きたら ESC を返し続ける */

@@ -26,6 +26,10 @@ def main(argv):
                 return 1
             name, text = line.split('\t', 1)
             sjis = text.encode('shift_jis')
+            # 画面は 80 桁で、文言は 2 桁目から書く (ui_puts は右端で切る)。全角は 2 桁
+            if len(sjis) > 78:
+                sys.stderr.write('%s:%d: %s は %d 桁で、78 桁を越える\n' % (argv[1], n, name, len(sjis)))
+                return 1
             # 8 進 3 桁にする。\x は直後に 16 進数字 (0-9, A-F) が続くと 1 つの長いエスケープとして読まれて壊れる
             lines.append('#define %s "%s"' % (name.strip(), ''.join('\\%03o' % b for b in sjis)))
     lines += ['', '#endif', '']

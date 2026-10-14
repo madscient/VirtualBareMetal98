@@ -1,6 +1,6 @@
 # VM メニューなどの文言。tools/mktext.py が Shift-JIS に変換して build/dos/ui_text.h を作る。
 # 1 行 1 項目: 名前<TAB>文言。名前は T_ で始める (C の他の名前とぶつけない)。%s / %d は sprintf の書式。
-# 画面は 80 桁なので 1 行は 76 桁まで (全角は 2 桁)
+# 画面は 80 桁で、文言は 2 桁目から書くので 1 行は 78 桁まで (全角は 2 桁。mktext.py が数えて止める)
 T_MENU_TITLE	VBM98 メニュー
 T_MENU_FDD0	1. ドライブ 0 のディスク交換
 T_MENU_FDD1	2. ドライブ 1 のディスク交換
@@ -13,8 +13,18 @@ T_SEL_NONE	なし
 T_SEL_EJECT	(取り出す)
 T_SEL_UPDIR	.. (上のディレクトリ)
 T_SEL_DIR	<DIR>
-T_SEL_HELP_IMG	↑↓ ROLL: 選ぶ  RETURN: 決定  TAB: 全ファイル表示  ESC: 戻る
-T_SEL_HELP_ALL	↑↓ ROLL: 選ぶ  RETURN: 決定  TAB: イメージだけ表示  ESC: 戻る
+T_SEL_HELP_IMG	↑↓ ROLL: 選ぶ  RETURN: 決定  TAB: 全ファイル表示  N: 新規作成  ESC: 戻る
+T_SEL_HELP_ALL	↑↓ ROLL: 選ぶ  RETURN: 決定  TAB: イメージだけ表示  N: 新規作成  ESC: 戻る
+T_NEW_TITLE	ブランクディスクを作ってドライブ %d に入れる: 大きさを選ぶ
+T_NEW_2HD	2HD 1.25MB  (1024 バイト × 8 セクタ × 77 シリンダ × 2 面)
+T_NEW_2DD	2DD 640KB   (512 バイト × 8 セクタ × 80 シリンダ × 2 面)
+T_NEW_144	1.44MB      (512 バイト × 18 セクタ × 80 シリンダ × 2 面)
+T_NEW_HELP	↑↓: 選ぶ  RETURN: 決定  ESC: 戻る
+T_NEW_NAME	ファイル名 (8.3 形式。拡張子を省くと .HDM):
+T_NEW_NAME_HELP	RETURN: 作る  BS: 消す  ESC: 戻る
+T_MSG_EXISTS	同じ名前のファイルがあります: %s
+T_MSG_NEW_FAIL	作れませんでした: %s
+T_MSG_NEW_OK	ドライブ %d: %s を作って入れました
 T_SEL_EMPTY	(ファイルがありません)
 T_IDX_TITLE	%s に入っているディスクを選ぶ  (%u 枚)
 T_IDX_HELP	↑↓ ROLL: 選ぶ  RETURN: 決定  ESC: 戻る

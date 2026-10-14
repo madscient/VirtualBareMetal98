@@ -164,6 +164,51 @@ static FARTEXT u16 __far index_select(const char *name, u16 count)
     }
 }
 
+/* ブランクディスクを作ってドライブ unit に入れる (spec.md)。大きさを選び、名前を入れる。入れたら 1、取り消しや失敗なら 0 */
+static FARTEXT int __far blank_select(int unit)
+{
+    static const char *const kinds[] = { T_NEW_2HD, T_NEW_2DD, T_NEW_144 };
+    char name[13];
+    u16 k;
+    u8 cur = 0, i, sc, ch;
+    int rc;
+
+    for (;;) {
+        ui_fill(0, 0, UI_COLS, UI_ROWS, UI_WHITE);
+        sprintf(msg, T_NEW_TITLE, unit);
+        ui_puts(0, 2, UI_YELLOW, msg);
+        for (i = 0; i < 3; i++)
+            ui_puts((u8)(LIST_TOP + i), 4, (u8)(i == cur ? (UI_WHITE | UI_REV) : UI_WHITE), kinds[i]);
+        ui_puts(23, 2, UI_CYAN, T_NEW_HELP);
+        k = ui_getkey();
+        sc = UI_KEY_SC(k);
+        ch = UI_KEY_CH(k);
+        if (sc == UI_SC_ESC || ch == 0x1B)
+            return 0;
+        if (sc == UI_SC_UP && cur > 0)
+            cur--;
+        else if (sc == UI_SC_DOWN && cur < 2)
+            cur++;
+        else if (sc == UI_SC_RETURN || ch == 0x0D)
+            break;
+    }
+    name[0] = 0;
+    ui_puts(LIST_TOP + 5, 4, UI_WHITE, T_NEW_NAME);
+    ui_fill(23, 2, (u8)(UI_COLS - 2), 1, UI_WHITE);
+    ui_puts(23, 2, UI_CYAN, T_NEW_NAME_HELP);
+    if (!ui_getline(LIST_TOP + 6, 4, UI_WHITE, name, 12))
+        return 0;
+    if (!strchr(name, '.') && strlen(name) <= 8)
+        strcat(name, ".HDM");
+    rc = vm_blank(unit, name, cur);
+    if (rc == 0)
+        sprintf(msg, T_MSG_NEW_OK, unit, vm_drive_name(unit));
+    else
+        sprintf(msg, rc == 1 ? T_MSG_EXISTS : T_MSG_NEW_FAIL, name);
+    notice(msg);
+    return rc == 0;
+}
+
 /* ドライブ unit のイメージを選ばせる。入れ替えか取り出しをしたら 1 */
 static FARTEXT int __far disk_select(int unit)
 {
@@ -202,6 +247,10 @@ static FARTEXT int __far disk_select(int unit)
         } else if (sc == UI_SC_TAB || ch == 0x09) {
             all = !all;
             cur = top = 0;
+            rescan = 1;
+        } else if (sc == UI_SC_N || ch == 'n' || ch == 'N') {
+            if (blank_select(unit))
+                return 1;
             rescan = 1;
         } else if (sc == UI_SC_RETURN || ch == 0x0D) {
             if (cur == 0) {

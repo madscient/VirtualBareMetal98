@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DOS 向けにビルドした試験プログラムを DOS 上で走らせる。
 
-    python tests/run_dos_tests.py [img] [fdb] [fdmem] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [d88] [shot] [con] [isr] [menu] [v86]
+    python tests/run_dos_tests.py [img] [fdb] [fdmem] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [d88] [blank] [shot] [con] [isr] [menu] [v86]
 
     img      ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
     fdb      INT 1Bh の意味論 (fdbios)。同上
@@ -13,6 +13,7 @@
     nfdid    ID の C がシリンダ番号と違う NFD からの起動と、IPL が読めないときの表示
     boot2dd  2DD のイメージからの起動
     d88      複数ディスク入りの D88 から番号で選んで起動 (コマンドラインと起動前のファイル選択) と、HDB からの起動
+    blank    メニューからブランクディスクを作ってドライブに入れる
     shot     スクリーンショット。試験用の IPL が書いた文字と色の帯が、-shotat で撮った PNG に写るか
     con      出力をファイルに向けずに走らせたとき、DOS に戻ったあとの画面に残る表示
     isr      ゲストが割り込みの処理の途中のまま離れたとき、割り込みコントローラを片付けて DOS に戻るか
@@ -313,6 +314,50 @@ def test_d88(work):
         print('%s %s' % ('ok  ' if c else 'FAIL', name))
         ok = ok and c
     print('D88 と HDB の起動: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
+def test_blank(work):
+    """メニューからブランクディスクを作る。起動試験の IPL を動かし、-menuat で開いたメニューから開発用のキー列で
+    「ドライブ 0 の交換 → N → 2DD 640KB → 名前 U1 → RETURN」と操作し、できたファイル (U1.HDM、全バイト E5h) がドライブ 0 に
+    入ることを見る。同じ名前でもう一度作ろうとすると、作らずに知らせることも見る"""
+    with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = f.read()
+    with open(os.path.join(work, 'BL.IMG'), 'wb') as f:
+        f.write(img)
+    for name in ('U1.HDM', 'BL1.OUT', 'BL1.LOG', 'BL2.OUT', 'BL2.LOG'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    # 1 (ドライブ 0)、N、下 (2DD 640KB)、RETURN、U、1、RETURN、知らせを閉じる。入ったらメニューに戻るので 4 (終了)、Y。
+    # 作れなかったときはファイル選択に戻るので、ESC で抜けてから 4、Y
+    keys = '01,2E,3D,1C,16,01,1C,1C'
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 BL.IMG -menuat 30 -menukeys %s,04,15 -log BL1.LOG > BL1.OUT' % keys,
+                                 'VBM98.EXE -fdd0 BL.IMG -menuat 30 -menukeys %s,00,04,15 -log BL2.LOG > BL2.OUT' % keys],
+                                240, core='normal')
+    log1 = imgtests.read_lines(work, 'BL1.LOG') or []
+    log2 = imgtests.read_lines(work, 'BL2.LOG') or []
+    for name in ('BL1.LOG', 'BL2.LOG'):
+        for line in imgtests.read_lines(work, name) or []:
+            if 'created' in line or 'U1.HDM' in line:
+                print('  %s: %s' % (name[:3], line))
+    path = os.path.join(work, 'U1.HDM')
+    data = open(path, 'rb').read() if os.path.exists(path) else b''
+    checks = (
+        ('batch finished', finished),
+        ('the file was created with the 2DD 640KB size and filled with E5h', len(data) == 655360 and data == b'\xE5' * 655360),
+        ('the log records the creation', any('drive 0: created U1.HDM (640 KB, filled with E5h)' in l for l in log1)),
+        ('the new disk went into drive 0 as a RAW 2DD image', any('drive 0: U1.HDM (RAW, 80 cylinders)' in l for l in log1)),
+        ('the second run with the same name did not create it',
+         any('U1.HDM: already exists; not created' in l for l in log2) and not any('created ' in l for l in log2)),
+        ('both runs ended through the menu and returned to DOS',
+         all(any('back to DOS' in l for l in imgtests.read_lines(work, n) or []) for n in ('BL1.OUT', 'BL2.OUT'))),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('ブランクディスク: %s' % ('通過' if ok else '失敗'))
     return ok
 
 
@@ -1592,7 +1637,7 @@ def test_fdmem(work):
 
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('fdmem', 'VBM98.EXE', test_fdmem), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
          ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos), ('nfdid', 'VBM98.EXE', test_nfdid),
-         ('boot2dd', 'VBM98.EXE', test_boot2dd), ('d88', 'VBM98.EXE', test_d88),
+         ('boot2dd', 'VBM98.EXE', test_boot2dd), ('d88', 'VBM98.EXE', test_d88), ('blank', 'VBM98.EXE', test_blank),
          ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('isr', 'VBM98.EXE', test_isr), ('menu', 'VBM98.EXE', test_menu), ('page0', 'VBM98.EXE', test_page0), ('kdefer', 'VBM98.EXE', test_kdefer),
          ('keys', 'VBM98.EXE', test_keys),
          ('v86', 'VBM98.EXE', test_v86))
