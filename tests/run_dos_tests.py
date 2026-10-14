@@ -654,7 +654,17 @@ def test_shot(work):
     for name in ('S4A001G.PNG', 'S4A001T.PNG', 'S4B001G.PNG', 'S4B001T.PNG', 'SHOT4A.OUT', 'SHOT4B.OUT'):
         if os.path.exists(os.path.join(work, name)):
             os.remove(os.path.join(work, name))
-    for name in ('SHOT.OUT', 'S.LOG', 'S001G.PNG', 'S001T.PNG', 'S002G.PNG', 'S002T.PNG'):
+    for name in ('SHOT.OUT', 'S.LOG', 'S001G.PNG', 'S001T.PNG', 'S002G.PNG', 'S002T.PNG',
+                 'SHOTL.OUT', 'SL.LOG', 'SL001G.PNG', 'SL001T.PNG', 'SL002G.PNG', 'SL002T.PNG'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    # 文字フォントを 6x8 ドットにして待つ IPL (SHOTF6.BIN)。テキストの PNG は文字のライン 0〜7 を縦 2 倍で描く
+    with open(os.path.join(BUILT, 'SHOTF6.BIN'), 'rb') as f:
+        imgf = bytearray(77 * 2 * 8 * 1024)
+        imgf[0:1024] = f.read()
+    with open(os.path.join(work, 'SF.IMG'), 'wb') as f:
+        f.write(imgf)
+    for name in ('SHOTF.OUT', 'SF.LOG', 'SF001G.PNG', 'SF001T.PNG'):
         if os.path.exists(os.path.join(work, name)):
             os.remove(os.path.join(work, name))
     # グラフィックチャージャーを比較読み出しのモードにして回り続ける IPL。その間は、どのプレーンの番地を読んでも
@@ -694,8 +704,10 @@ def test_shot(work):
                                  'VBM98.EXE -fdd0 S7.IMG -tick -shotat 50 -stopafter 100 -ss S7 -log S7.LOG > SHOT7.OUT',
                                  'VBM98.EXE -fdd0 S8.IMG -tick -shotat 50 -stopafter 150 -ss S8 -log S8.LOG > SHOT8.OUT',
                                  'PLANERD.COM > PLANE.OUT',
-                                 'VBM98.EXE -fdd0 S9.IMG -tick -shotat 50 -stopafter 100 -ss S9 -log S9.LOG > SHOT9.OUT'],
-                                360, core='normal')
+                                 'VBM98.EXE -fdd0 S9.IMG -tick -shotat 50 -stopafter 100 -ss S9 -log S9.LOG > SHOT9.OUT',
+                                 'VBM98.EXE -fdd0 S.IMG -tick -shotat 50,150 -stopafter 200 -ss SL -ankslow -log SL.LOG > SHOTL.OUT',
+                                 'VBM98.EXE -fdd0 SF.IMG -tick -shotat 50 -stopafter 100 -ss SF -log SF.LOG > SHOTF.OUT'],
+                                420, core='normal')
     for line in imgtests.read_lines(work, 'SHOT.OUT') or []:
         print('  ' + line)
     if not finished:
@@ -763,12 +775,31 @@ def test_shot(work):
     def alike(log):
         return any('all bit planes read the same. If' in l for l in log)
 
-    def ank_ok(log):
-        """'ANK patterns: N codes, M read in a vsync window, K retried' の行 (2 枚ぶん) で、コードが 1 つ以上あり、
-        全部が VSYNC の期間の中で読めていること。実機 (BX・RA2) では期間の外で読むと文字の形にならないので、エミュレータでも
-        期間の中で読んでいることを行で確かめる (エミュレータの CG は期間に依らないので、絵では分からない)"""
-        found = re.findall(r'ANK patterns: (\d+) codes, (\d+) read in a vsync window, (\d+) retried', '\n'.join(log))
-        return len(found) == 2 and all(int(n) > 0 and int(n) == int(m) for n, m, k in found)
+    def ank_lines(log):
+        """'ANK patterns: N codes from the F font, M read now in vsync (K line retries, L lines past the limit)' の行を
+        (N, F, M, L) の並びにする"""
+        return [(int(n), f, int(m), int(miss)) for n, f, m, k, miss in re.findall(
+            r'ANK patterns: (\d+) codes from the (\S+) font, (\d+) read now in vsync \((\d+) line retries, (\d+) lines past',
+            '\n'.join(log))]
+
+    slog = imgtests.read_lines(work, 'S.LOG') or []
+    sllog = imgtests.read_lines(work, 'SL.LOG') or []
+    sflog = imgtests.read_lines(work, 'SF.LOG') or []
+    for line in slog + sllog + sflog:
+        if 'ANK' in line:
+            print('  ' + line[:150])
+    ank_s, ank_sl, ank_sf = ank_lines(slog), ank_lines(sllog), ank_lines(sflog)
+    tl1 = read_png4(os.path.join(work, 'SL001T.PNG'))
+    tl2 = read_png4(os.path.join(work, 'SL002T.PNG'))
+    tf = read_png4(os.path.join(work, 'SF001T.PNG'))
+
+    def doubled(p):
+        """各テキスト行 (16 ライン) の中で、ライン 2k と 2k+1 が同じ。空でない行が少なくとも 1 つある"""
+        if p is None or len(p['rows']) != 400:
+            return False
+        rows = p['rows']
+        pairs = all(rows[r * 16 + 2 * k] == rows[r * 16 + 2 * k + 1] for r in range(25) for k in range(8))
+        return pairs and any(v != 8 for y in range(16) for v in rows[y])
 
     checks = (
         ('batch finished', finished),
@@ -812,8 +843,22 @@ def test_shot(work):
              for l in imgtests.read_lines(work, 'S.LOG') or [])),
         ('the log records the text layout of that shot: 25 rows of 16 lines',
          any('screenshot: text: 25 rows of 16 lines, glyphs 0 lines down' in l for l in imgtests.read_lines(work, 'S.LOG') or [])),
-        ('ANK patterns were read inside vsync windows: the log counts the codes, and every one was read in a window',
-         ank_ok(imgtests.read_lines(work, 'S.LOG') or [])),
+        # 実機 (BX・RA2) では ANK のパターンが VSYNC の期間の中でしか読めない。エミュレータの CG は期間に依らないので、
+        # どの道を通ったかはログの行で見る (design.md §12)
+        ('ANK fonts were read at startup with the display off, after the reads matched those taken in vsync',
+         any('ANK fonts: read with the display off (8 codes matched the reads in vsync)' in l for l in slog)),
+        ('both text shots drew the ANK patterns from that startup copy of the 7x13 font: none read at shot time',
+         len(ank_s) == 2 and all(n > 0 and f == '7x13' and m == 0 for n, f, m, miss in ank_s)),
+        ('-ankslow (no startup copy): the first shot read every ANK code it needed in vsync, the second reused them',
+         any('ANK fonts: -ankslow' in l for l in sllog) and len(ank_sl) == 2 and
+         ank_sl[0][0] > 0 and ank_sl[0][2] == ank_sl[0][0] and ank_sl[1][2] == 0 and
+         all(miss == 0 for n, f, m, miss in ank_sl)),
+        ('-ankslow: both text PNGs are identical, pixel for pixel, to those drawn from the startup copy',
+         t1 is not None and t2 is not None and tl1 is not None and tl2 is not None and
+         tl1['rows'] == t1['rows'] and tl2['rows'] == t2['rows']),
+        ('guest that selected the 6x8 font (68h <- 06h): the log names that font, and each text row is glyph lines 0-7 '
+         'drawn twice (the 7x13 shot of the same text is not)',
+         len(ank_sf) == 1 and ank_sf[0][1] == '6x8' and doubled(tf) and not doubled(t1)),
         ('guest that set 20 lines through the BIOS: the text shot has 20 rows of 20 lines, glyphs 2 lines down, gaps transparent',
          text20('SA') and any('screenshot: text: 20 rows of 20 lines, glyphs 2 lines down' in l
                               for l in imgtests.read_lines(work, 'SA.LOG') or [])),

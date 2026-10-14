@@ -227,6 +227,9 @@ ls -l "$out/SHOTTCRK.BIN" | awk '{print $5, "bytes  SHOTTCRK.BIN"}'
 ia16-elf-gcc -c -DKAC "$root/tests/boot/shotipl.S" -o "$out/shotkac.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTKAC.BIN" "$out/shotkac.o"
 ls -l "$out/SHOTKAC.BIN" | awk '{print $5, "bytes  SHOTKAC.BIN"}'
+ia16-elf-gcc -c -DFONT6 "$root/tests/boot/shotipl.S" -o "$out/shotf6.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTF6.BIN" "$out/shotf6.o"
+ls -l "$out/SHOTF6.BIN" | awk '{print $5, "bytes  SHOTF6.BIN"}'
 ia16-elf-gcc -c -DMONO "$root/tests/boot/shotipl.S" -o "$out/shotmono.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/SHOTMONO.BIN" "$out/shotmono.o"
 ls -l "$out/SHOTMONO.BIN" | awk '{print $5, "bytes  SHOTMONO.BIN"}'

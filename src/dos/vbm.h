@@ -99,9 +99,10 @@ extern u8 kbd_shot_alt;
  * スタックと同居しているので、まとめて書いてまとめて読み戻すだけの置き場はここに出す。XMS ドライバの転送で、1MB 未満の
  * 任意の seg:off (VRAM を含む) と直接写せる。長さは偶数であること。0 で成功。ring 0 からは使えない
  */
-#define STASH_KB     24
+#define STASH_KB     32
 #define STASH_TVRAM  0x0000UL      /* ホストのテキスト画面 (文字 8KB + 属性 8KB。vbm98.c) */
 #define STASH_MENU   0x4000UL      /* メニューのあいだのゲストの画面 (見えている 4000 バイト × 2。ui.c) */
+#define STASH_ANK    0x6000UL      /* ANK のフォントの控え 2 組 (7x13、6x8 の順に 256 コード × 16 ライン。shot.c) */
 int stash_write(u32 off, u16 seg, u16 soff, u16 len);
 int stash_read(u32 off, u16 seg, u16 soff, u16 len);
 /*

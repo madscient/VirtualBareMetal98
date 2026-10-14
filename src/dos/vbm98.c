@@ -129,6 +129,7 @@ static dimg_io ios[DRIVES];
 static imgcache caches[DRIVES];     /* イメージの写し (拡張メモリ。design.md §8)。ios はこれを通してファイルに届く */
 static u8 xms_ready;                /* ゲスト用メモリを確保し終えた。ここから先は、入れたイメージの写しを取る */
 static u8 dev_nocache;              /* 開発用 (-nocache): 写しを取らない (置き場が取れなかったときと同じ経路を通す) */
+static u8 dev_ankslow;              /* 開発用 (-ankslow): 起動時に ANK のフォントを控えない (確かめが一致しなかった機械と同じ経路) */
 static u16 xms_handle;
 static u32 guest_off;       /* ゲストの線形番地 0 に当たる、XMS ブロック内の位置 */
 static struct mon_paging pg;
@@ -315,6 +316,8 @@ static FARTEXT int __far parse_one(int argc, char **argv, struct opts *o)
             dev_kbdprobe = 1;
         } else if (eq(a, "-nocache")) {
             dev_nocache = 1;
+        } else if (eq(a, "-ankslow")) {
+            dev_ankslow = 1;
         } else if (eq(a, "-tick")) {
             dev_tick = 1;
         } else if (eq(a, "-progress")) {
@@ -1028,8 +1031,9 @@ static FARTEXT void __far video_guest(void)
     text_mode((u8)(0x04 | crt_lo));
     text_forget();
     /* BIOS が 68h に書く項目のうち、モードの値から決まるもの (参考実装の bios0x18_0a): 項目 0 (簡易グラフィック属性) = ON、
-       項目 2 (40 桁) = モードの bit 1、項目 5 (KAC) = モードの bit 3 (OFF)。項目 3 はディスプレイの設定で決まり、ここでは追わない */
-    vid_mode68 = (u8)(0x01 | ((crt_lo & 0x02) ? 0x04 : 0));
+       項目 2 (40 桁) = モードの bit 1、項目 5 (KAC) = モードの bit 3 (OFF)。項目 3 (文字フォント) はモードの設定では
+       変わらないので、起動時にホストの状態から決めた値 (vm_setup) か、ゲストが書いた値のまま */
+    vid_mode68 = (u8)((vid_mode68 & 0x08) | 0x01 | ((crt_lo & 0x02) ? 0x04 : 0));
     int18(0x0C, 0, 0);
     vid_tdisp = 1;
     int18(0x12, 0, 0);
@@ -2088,12 +2092,21 @@ static FARTEXT int __far shot_take(char *gname, u8 how)
      */
     gmode = guest_crt_mode();
     si.text_pitch = (u8)((vid_text.csrform_seen & 1) ? (vid_text.csrform[0] & 0x1F) + 1 : (gmode & 0x01) ? 20 : 16);
-    if (si.text_pitch < 16)
-        si.text_pitch = 16;
     if (vid_text.crtc_seen & 1)
         si.text_top = (u8)((vid_text.crtc[0] & 0x10) ? 32 - (vid_text.crtc[0] & 0x1F) : 0);
     else
-        si.text_top = (u8)((si.text_pitch - 16) >> 1);
+        si.text_top = (u8)(si.text_pitch >= 16 ? (si.text_pitch - 16) >> 1 : 0);
+    /*
+     * 16 ラインより短い行は 200 ラインの画面 (15kHz) の行と見て、PNG (400 ライン) では縦 2 倍にする (推測: 200 ラインの
+     * 画面のテキスト GDC の設定は、実機の報告 1 件 (PC-9801RA2 の 15kHz のモード) の絵からの見立てで、ログは無い)
+     */
+    if (si.text_pitch < 16) {
+        si.text_pitch = (u8)(si.text_pitch * 2);
+        si.text_top = (u8)(si.text_top * 2);
+    }
+    if (si.text_pitch < 16)
+        si.text_pitch = 16;
+    si.text_small = (u8)!(vid_mode68 & 0x08);
     /*
      * 撮るのは表示しているページ。VRAM の窓に見えているのは描画ページなので、違っていれば撮る間だけ合わせる
      * (2 つのページを切り替えながら描くソフトでは、描きかけや作業用のページが窓に出ている)。
@@ -2125,9 +2138,10 @@ static FARTEXT int __far shot_take(char *gname, u8 how)
                      (unsigned)(400 / si.text_pitch), si.text_pitch, si.text_top, gmode);
             log_line("VBM98: screenshot: text attributes: %u of %u cells reversed, %u hidden, cell 0 attr %02X\n",
                      shot_rev_cells, (unsigned)(80 * (400 / si.text_pitch)), shot_hidden_cells, shot_attr0);
-            /* ANK の読み出しが VSYNC の期間に入れたか (design.md §12)。実機でまだ崩れるときの切り分けの材料 */
-            log_line("VBM98: screenshot: text: ANK patterns: %u codes, %u read in a vsync window, %u retried\n",
-                     shot_ank_codes, shot_ank_windows, shot_ank_retries);
+            /* ANK のパターンを控えから描いたか、その場で読んだか (design.md §12)。実機でまだ崩れるときの切り分けの材料 */
+            log_line("VBM98: screenshot: text: ANK patterns: %u codes from the %s font, %u read now in vsync "
+                     "(%u line retries, %u lines past the limit)\n", shot_ank_codes, si.text_small ? "6x8" : "7x13",
+                     shot_ank_read, shot_ank_retries, shot_ank_missed);
             /* 色の写し (ポート 6Ah・A8h〜AEh への書き込みから)。絵の色が合わないときの切り分けの材料 */
             log_line("VBM98: screenshot: %s mode, mode flip-flop %02X, palette (GRB):", vid_color16 ? "16-color" : "8-color", vid_mode68);
             for (k = 0; k < 16; k++)
@@ -2725,6 +2739,30 @@ static FARTEXT void __far stop_wait(u16 rc)
  * 起動の前半: 引数、ログ、ホストの検査、ドライブ、ゲストの器、トラップするポート、割り込みマスク、スイッチ。
  * 0 で続行。0 以外は、そのまま終了コードにする
  */
+/*
+ * ANK のフォントを起動時に控える (shot.c、design.md §12)。ホストの文字フォント (68h の FONT SEL) は読み出せず、BIOS
+ * ワークエリアにも無いので、CRT の種類 (053Ch の bit 7。0 が 15kHz の標準ディスプレイ) から決める: 15kHz なら 6x8、
+ * それ以外は 7x13 (推測。資料の 68h の項は 6x8 を「CRT 解像度 200 ライン時」、7x13 を「400 ライン時」とし、参考実装の
+ * リセット処理も同じ値にしている)。ゲストの初期値もこれにする (vid_mode68 の bit 3。1 が 7x13)
+ */
+static FARTEXT void __far ank_fonts(void)
+{
+    u8 crt = wa_peek(WA_CRT_MODE), small = (u8)!(crt & 0x80);
+
+    vid_mode68 = (u8)(small ? (vid_mode68 & ~0x08) : (vid_mode68 | 0x08));
+    shot_font_init(small, (u8)((crt & 0x08) != 0), dev_ankslow);
+    if (shot_font_how == SHOT_FONT_FILLED)
+        say("VBM98: ANK fonts: read with the display off (%u codes matched the reads in vsync%s)\n",
+            shot_probe_n, shot_probe_vsync ? "" : "; no vsync seen");
+    else if (shot_font_how == SHOT_FONT_DIFFER)
+        say("VBM98: ANK fonts: reads with the display off differed in %u of %u codes (%u line retries in vsync); "
+            "read in vsync when a screenshot needs them\n", shot_probe_differ, shot_probe_n, shot_probe_retries);
+    else if (shot_font_how == SHOT_FONT_NOFONT)
+        say("VBM98: ANK fonts: the reads in vsync did not look like a font; read in vsync when a screenshot needs them\n");
+    else
+        say("VBM98: ANK fonts: -ankslow; read in vsync when a screenshot needs them\n");
+}
+
 static FARTEXT NOINLINE int __far vm_setup(int argc, char **argv, struct opts *o)
 {
     u32 tables;
@@ -2806,6 +2844,7 @@ static FARTEXT NOINLINE int __far vm_setup(int argc, char **argv, struct opts *o
     for (i = 0; i < DRIVES; i++)
         if (fb.img[i])
             hold_image(i, say);
+    ank_fonts();
     for (i = 0; i < ntrace_ports; i++)
         mon_trap_port(trace_ports[i], 1);
     /* キーボードはホットキーを見るためにモニタが先に読むので、ゲストにはトラップ経由で見せる (vbm_r0.c) */

@@ -188,31 +188,72 @@ static u8 cellpat[COLS][CELL_H];                /* 1 行ぶんの、桁ごとの
 static u8 spill[CELL_H];                        /* 右端の桁にある漢字の右半分 (描く場所がない) */
 
 /*
- * ANK (1 バイト文字) のパターンは、VSYNC の期間の中で読む (design.md §12)。実機 (PC-9801BX・RA2) では、KAC を
- * ドットアクセスのモードにしても、1 バイト文字の読み出しが文字の形を返すのは垂直同期の期間だけだった (報告者の
- * 画像で、正しく読めたのが 2〜4 文字の連なりでだけ現れる。PC-9821Ap2・Cr13、EPSON 機ではいつでも読める)。
- * 読む前に VSYNC (テキスト GDC の状態 60h の bit 5) が立つのを待ち、16 ライン読んだあとにまだ立っていれば期間の中で
- * 読めたとみなし、落ちていれば次の期間で読み直す。1 期間 (1〜2 ms) に数十文字は読めるので、コードごとに控えて
- * 同じコードは 1 回だけ読む。VSYNC が来ない環境 (回数で打ち切る) では、待たずに読む。
- * 控え (256 コード × 16 ライン = 4KB) はデータセグメントに置くとスタックの残りが下限を切るので、転送バッファの末尾
- * (溜め場 SINK_MAX から先の 4KB) に置く。far ポインタに添字で触ると gcc-ia16 6.3 が内部エラーを起こすので _fmemcpy で写す
+ * ANK (1 バイト文字) のパターン (design.md §12)。実機 (PC-9801BX・RA2) では、KAC をドットアクセスのモードにしても、
+ * 1 バイト文字の読み出しが文字の形を返すのは垂直同期の期間だけで、RA2 では 1 期間に 16 ライン読み切れなかった
+ * (報告者のログ。上半分だけが正しかった)。ANK は ROM で途中で変わらないので、起動時に 2 組 (7x13 と 6x8) を読んで
+ * XMS に控え、撮るときはそこから描く。
+ * 起動時は、表示を止めて (68h ← 0Eh) 表示期間の中で読んだものが、VSYNC の期間の中で読んだものと一致するかを数文字で
+ * 確かめ、一致したときだけ表示を止めたまま全部を読む。表示を止めれば期間の外でも読めるかは資料に無い (推測) ので、
+ * 機械ごとに確かめてから使う。一致しなければ、撮るときに控えに無いコードだけを 1 ラインずつ VSYNC の期間の中で読み、
+ * 控えに足す。
+ * 撮る間は、控えの 1 組を転送バッファの末尾 (溜め場 SINK_MAX から先の 4KB) に写して使う。far ポインタに添字で
+ * 触ると gcc-ia16 6.3 が内部エラーを起こすので _fmemcpy で写す
  */
 #define ANK_PAT_OFF     SINK_MAX
-static u8 ank_have[256 / 8];
+#define ANK_BYTES       (256U * CELL_H)
+static u8 ank_have[2][256 / 8];     /* 控えにあるコード。[0] が 7x13、[1] が 6x8 */
+static u8 ank_seen[256 / 8];        /* この撮影で描いたコード */
+static u8 ank_font, ank_dirty;
 static u8 vsync_absent;
-u16 shot_ank_codes, shot_ank_windows, shot_ank_retries;
-#define VSYNC_POLL_MAX  400000UL    /* 立ち上がりを待つ回数の上限。IN が 1 µs でも 1 フレーム (17 ms) の 20 倍以上 */
-#define ANK_RETRY_MAX   8           /* 期間の中で読み切れなかったときに読み直す回数。越えたら最後に読んだものを使う */
+u16 shot_ank_codes, shot_ank_read, shot_ank_retries, shot_ank_missed;
+u8 shot_font_how, shot_probe_n, shot_probe_differ, shot_probe_vsync;
+u16 shot_probe_retries;
+#define VSYNC_POLL_MAX  400000UL    /* 待つ回数の上限。IN が 1 µs でも 1 フレーム (17 ms) の 20 倍以上 */
+#define ANK_RETRY_MAX   8           /* 1 ラインを読み直す回数の上限。越えたら最後に読んだものを使う */
 
-/* VSYNC が立つまで待つ。すでに立っていればそのまま。0 で立っている、1 で来なかった */
-static FARTEXT int __far vsync_wait(void)
+/* テキスト GDC の状態 (60h) の bit 5 (VSYNC) が want になるまで待つ。0 でなった、1 で来なかった */
+static FARTEXT int __far vsync_until(u8 want)
 {
     u32 n;
 
     for (n = 0; n < VSYNC_POLL_MAX; n++)
-        if (pio_in8(0x60) & 0x20)
+        if ((u8)(pio_in8(0x60) & 0x20) == want)
             return 0;
     return 1;
+}
+
+/*
+ * 1 ライン読む。CG のポートへの書き込みから読み出しまでの前後で VSYNC が立っていれば、その間ずっと期間の中だった
+ * (期間は 1 回の読み出しより十分長い)。落ちていたら、次の期間の立ち上がりを待って読み直す
+ */
+static FARTEXT u8 __far ank_line_vsync(u8 code, u8 line)
+{
+    u8 tries, v;
+
+    for (tries = 0; ; tries++) {
+        if (!vsync_absent && vsync_until(0x20))
+            vsync_absent = 1;
+        pio_out8(0xA1, 0);
+        pio_out8(0xA3, code);
+        pio_out8(0xA5, (u8)(0x20 | line));
+        v = pio_in8(0xA9);
+        if (vsync_absent || (pio_in8(0x60) & 0x20))
+            return v;
+        if (tries >= ANK_RETRY_MAX) {
+            shot_ank_missed++;
+            return v;
+        }
+        shot_ank_retries++;
+    }
+}
+
+static FARTEXT void __far ank_read_vsync(u8 code, u8 *pat)
+{
+    u8 line;
+
+    pio_out8(0x68, 0x0B);
+    for (line = 0; line < CELL_H; line++)
+        pat[line] = ank_line_vsync(code, line);
 }
 
 static FARTEXT u8 __far * __far ank_slot(u8 code)
@@ -220,33 +261,117 @@ static FARTEXT u8 __far * __far ank_slot(u8 code)
     return MK_FP(xfer_seg(), (u16)(ANK_PAT_OFF + (u16)code * (u16)CELL_H));
 }
 
+/* 確かめに使う文字。先頭は空白 (どのフォントでも点が無いはず)。残りは上から下まで点のあるものを選んだ */
+static const u8 probe_codes[] = { 0x20, 0x41, 0x57, 0x67, 0x5F, 0x40, 0x7C, 0xB1 };
+#define PROBE_N ((u8)sizeof probe_codes)
+
+FARTEXT void __far shot_font_init(u8 small, u8 kac, u8 slow_only)
+{
+    u8 slow[PROBE_N][CELL_H], fast[PROBE_N][CELL_H], pat[CELL_H];
+    u8 i, k, f, tries, ink = 0, blank = 1;
+    u16 code;
+
+    memset(ank_have, 0, sizeof ank_have);
+    /*
+     * XMS の中身は終了しても消えず、次に走った VBM98 が同じ所を受け取ることがある。控えを作らない経路でも、前の中身で
+     * 描けてしまわないよう空にしておく
+     */
+    _fmemset(ank_slot(0), 0, ANK_BYTES);
+    for (f = 0; f < 2; f++)
+        stash_write(STASH_ANK + (u32)f * ANK_BYTES, xfer_seg(), ANK_PAT_OFF, ANK_BYTES);
+    shot_probe_n = PROBE_N;
+    shot_probe_differ = 0;
+    shot_probe_retries = 0;
+    shot_probe_vsync = 0;
+    if (slow_only) {
+        shot_font_how = SHOT_FONT_SLOW;
+        return;
+    }
+    vsync_absent = 0;
+    shot_ank_retries = shot_ank_missed = 0;
+    for (i = 0; i < PROBE_N; i++)
+        ank_read_vsync(probe_codes[i], slow[i]);
+    shot_probe_retries = shot_ank_retries;
+    shot_probe_vsync = (u8)!vsync_absent;
+    /*
+     * 表示を止めて、表示期間の中で読む: VSYNC が落ちるのを待ってから読み、読み終わってもまだ立っていないことを
+     * 確かめる。期間の中で読んでしまうと、表示を止めた効果を確かめたことにならない
+     */
+    pio_out8(0x68, 0x0E);
+    for (tries = 0; tries < ANK_RETRY_MAX; tries++) {
+        if (!vsync_absent && (vsync_until(0x20) || vsync_until(0)))
+            vsync_absent = 1;
+        for (i = 0; i < PROBE_N; i++)
+            cg_read(0, probe_codes[i], fast[i], 0);
+        if (vsync_absent || !(pio_in8(0x60) & 0x20))
+            break;
+    }
+    for (i = 0; i < PROBE_N; i++) {
+        if (memcmp(slow[i], fast[i], CELL_H))
+            shot_probe_differ++;
+        for (k = 0; k < CELL_H; k++) {
+            ink |= slow[i][k];
+            if (i == 0 && slow[i][k])
+                blank = 0;
+        }
+    }
+    if (!blank || !ink) {
+        shot_font_how = SHOT_FONT_NOFONT;
+    } else if (shot_probe_differ) {
+        shot_font_how = SHOT_FONT_DIFFER;
+    } else {
+        /* 68h の FONT SEL: 07h が 7x13 (400 ライン用)、06h が 6x8 (200 ライン用)。CG のポートで読めるのも選んだほう (資料) */
+        for (f = 0; f < 2; f++) {
+            pio_out8(0x68, (u8)(f ? 0x06 : 0x07));
+            for (code = 0; code < 256; code++) {
+                cg_read(0, (u8)code, pat, 0);
+                _fmemcpy(ank_slot((u8)code), pat, CELL_H);
+            }
+            if (stash_write(STASH_ANK + (u32)f * ANK_BYTES, xfer_seg(), ANK_PAT_OFF, ANK_BYTES) == 0)
+                memset(ank_have[f], 0xFF, sizeof ank_have[f]);
+        }
+        pio_out8(0x68, (u8)(small ? 0x06 : 0x07));
+        shot_font_how = SHOT_FONT_FILLED;
+    }
+    pio_out8(0x68, 0x0F);
+    pio_out8(0x68, (u8)(kac ? 0x0B : 0x0A));
+}
+
 static FARTEXT void __far ank_read(u8 code, u8 *pat)
 {
-    u8 tries, in_window;
+    u8 bit = (u8)(1 << (code & 7));
 
-    if (ank_have[code >> 3] & (u8)(1 << (code & 7))) {
+    if (!(ank_seen[code >> 3] & bit)) {
+        ank_seen[code >> 3] |= bit;
+        shot_ank_codes++;
+    }
+    if (ank_have[ank_font][code >> 3] & bit) {
         _fmemcpy(pat, ank_slot(code), CELL_H);
         return;
     }
-    for (tries = 0; ; tries++) {
-        in_window = 0;
-        if (!vsync_absent) {
-            if (vsync_wait())
-                vsync_absent = 1;
-            else
-                in_window = 1;
-        }
-        cg_read(0, code, pat, 0);
-        if (!in_window || (pio_in8(0x60) & 0x20) || tries >= ANK_RETRY_MAX)
-            break;
-        /* 読んでいる間に期間が終わった。次の期間の立ち上がりまで待つ (いま落ちているので、次に立つのは立ち上がり) */
-        shot_ank_retries++;
-    }
-    if (in_window)
-        shot_ank_windows++;
+    ank_read_vsync(code, pat);
     _fmemcpy(ank_slot(code), pat, CELL_H);
-    ank_have[code >> 3] |= (u8)(1 << (code & 7));
-    shot_ank_codes++;
+    ank_have[ank_font][code >> 3] |= bit;
+    ank_dirty = 1;
+    shot_ank_read++;
+}
+
+/* 撮影の前後: 使う組の控えを XMS から写し、撮る間に足したものがあれば書き戻す */
+static FARTEXT void __far ank_load(u8 font)
+{
+    ank_font = font;
+    ank_dirty = 0;
+    if (stash_read(STASH_ANK + (u32)font * ANK_BYTES, xfer_seg(), ANK_PAT_OFF, ANK_BYTES))
+        memset(ank_have[font], 0, sizeof ank_have[font]);
+    memset(ank_seen, 0, sizeof ank_seen);
+    shot_ank_codes = shot_ank_read = shot_ank_retries = shot_ank_missed = 0;
+    vsync_absent = 0;
+}
+
+static FARTEXT void __far ank_store(void)
+{
+    if (ank_dirty && stash_write(STASH_ANK + (u32)ank_font * ANK_BYTES, xfer_seg(), ANK_PAT_OFF, ANK_BYTES))
+        memset(ank_have[ank_font], 0, sizeof ank_have[ank_font]);
 }
 
 /*
@@ -325,6 +450,8 @@ static FARTEXT int __far save_text(struct sink_ctx *s, const struct shot_info *s
     u16 r, off, y = 0;
     u8 line, rows = (u8)(HEIGHT / si->text_pitch);
 
+    /* PNG を書き始める前に: stash_read は転送バッファの先頭 (溜め場) を通して写す */
+    ank_load(si->text_small);
     text_palette(rgb, alpha);
     if (png_begin(&w, sink, s, WIDTH, HEIGHT, rgb, 9, alpha))
         return 1;
@@ -336,9 +463,6 @@ static FARTEXT int __far save_text(struct sink_ctx *s, const struct shot_info *s
      */
     pio_out8(0x68, 0x0B);
     shot_rev_cells = shot_hidden_cells = 0;
-    shot_ank_codes = shot_ank_windows = shot_ank_retries = 0;
-    vsync_absent = 0;
-    memset(ank_have, 0, sizeof ank_have);
     for (r = 0; r < rows; r++) {
         u16 c;
 
@@ -356,14 +480,24 @@ static FARTEXT int __far save_text(struct sink_ctx *s, const struct shot_info *s
         gather_patterns();
         for (line = 0; line < si->text_pitch; line++, y++) {
             /* 文字より上のラインでは、引き算が 0 を下回って CELL_H 以上になる (空くラインとして扱われる) */
-            pack_text_line((u8)(line - si->text_top), (u8)(line == si->text_pitch - 1));
+            u8 glyph = (u8)(line - si->text_top);
+
+            /*
+             * 6x8 のフォントでは 1 行に文字の 8 ラインが出る。漢字も上半分だけが出る (資料の 68h の FONT SEL)。
+             * 縦 2 倍で描くので、行の最後のライン (下線) も 2 ラインになる
+             */
+            if (si->text_small && glyph < CELL_H)
+                glyph >>= 1;
+            pack_text_line(glyph, (u8)(si->text_small ? line + 2 >= si->text_pitch : line == si->text_pitch - 1));
             if (png_row(&w, packed)) {
                 pio_out8(0x68, (u8)((vid_mode68 & 0x20) ? 0x0B : 0x0A));
+                ank_store();
                 return 1;
             }
         }
     }
     pio_out8(0x68, (u8)((vid_mode68 & 0x20) ? 0x0B : 0x0A));
+    ank_store();
     /* 1 行のライン数で 400 が割り切れないときの残りは、何も描かない */
     memset(packed, (TRANSPARENT << 4) | TRANSPARENT, sizeof packed);
     for (; y < HEIGHT; y++)
