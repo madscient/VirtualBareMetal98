@@ -25,4 +25,11 @@ FARTEXT int __far optval_iotrap_list(const char *s, u16 *guest, u16 *host, u8 *n
 /* 定義ファイルの 1 行 "<guest> <host>" (区切りは空白かタブ。末尾の CR / LF と空白は無視。空行は何もしない) */
 FARTEXT int __far optval_iotrap_line(const char *line, u16 *guest, u16 *host, u8 *n, u8 max);
 
+/*
+ * プロファイル (@<ファイル>) の中身を、コマンド行の引数の並びに分ける。text は書き換える (区切りを 0 にする)。
+ * 区切りは空白・タブ・CR・LF。項目の頭の '#' から行末まではコメント ('#' を含む名前は、頭でなければそのまま)。
+ * argv に max 個まで入れ、個数を返す。max を越えたら -1
+ */
+FARTEXT int __far optval_split(char *text, char **argv, int max);
+
 #endif

@@ -129,3 +129,28 @@ FARTEXT int __far optval_iotrap_line(const char *line, u16 *guest, u16 *host, u8
         return 1;
     return add(g, h, guest, host, n, max);
 }
+
+FARTEXT int __far optval_split(char *text, char **argv, int max)
+{
+    char *p = text;
+    int n = 0;
+
+    for (;;) {
+        while (blank(*p))
+            p++;
+        if (*p == '#') {
+            while (*p && *p != '\n')
+                p++;
+            continue;
+        }
+        if (*p == 0)
+            return n;
+        if (n == max)
+            return -1;
+        argv[n++] = p;
+        while (*p && !blank(*p))
+            p++;
+        if (*p)
+            *p++ = 0;
+    }
+}

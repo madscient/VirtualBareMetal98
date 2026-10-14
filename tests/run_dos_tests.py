@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DOS 向けにビルドした試験プログラムを DOS 上で走らせる。
 
-    python tests/run_dos_tests.py [img] [fdb] [fdmem] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [d88] [blank] [shot] [con] [isr] [menu] [v86]
+    python tests/run_dos_tests.py [img] [fdb] [fdmem] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [d88] [blank] [profile] [shot] [con] [isr] [menu] [v86]
 
     img      ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
     fdb      INT 1Bh の意味論 (fdbios)。同上
@@ -14,6 +14,7 @@
     boot2dd  2DD のイメージからの起動
     d88      複数ディスク入りの D88 から番号で選んで起動 (コマンドラインと起動前のファイル選択) と、HDB からの起動
     blank    メニューからブランクディスクを作ってドライブに入れる
+    profile  プロファイル @<ファイル> からのオプションの読み込みと、コマンド行との前後関係
     shot     スクリーンショット。試験用の IPL が書いた文字と色の帯が、-shotat で撮った PNG に写るか
     con      出力をファイルに向けずに走らせたとき、DOS に戻ったあとの画面に残る表示
     isr      ゲストが割り込みの処理の途中のまま離れたとき、割り込みコントローラを片付けて DOS に戻るか
@@ -358,6 +359,55 @@ def test_blank(work):
         print('%s %s' % ('ok  ' if c else 'FAIL', name))
         ok = ok and c
     print('ブランクディスク: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
+def test_profile(work):
+    """プロファイル @<ファイル> (spec.md)。コマンド行と同じ書き方の項目を並べたファイルから起動し、-dipsw の値が起動時の表示に
+    出ることで、ファイルの中身が読まれたこと、後に書いたもの (コマンド行でもファイルでも) が有効なことを見る。
+    無いファイル、ファイルの中の @ は、理由を出して起動しない"""
+    with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = f.read()
+    with open(os.path.join(work, 'PF.IMG'), 'wb') as f:
+        f.write(img)
+    with open(os.path.join(work, 'P1.PRO'), 'wb') as f:
+        f.write(b'# profile for the test\r\n-fdd0 PF.IMG\r\n-dipsw 12F4FB   # overridden by a later -dipsw\r\n\t-menukeys\t04,15\r\n')
+    with open(os.path.join(work, 'P2.PRO'), 'wb') as f:
+        f.write(b'@P1.PRO\r\n')
+    outs = ('PR1.OUT', 'PR2.OUT', 'PR3.OUT', 'PR4.OUT', 'PR5.OUT')
+    for name in outs:
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    finished = dosenv.run_batch(['VBM98.EXE @P1.PRO > PR1.OUT',
+                                 'VBM98.EXE @P1.PRO -dipsw 34F4FB > PR2.OUT',
+                                 'VBM98.EXE -dipsw 34F4FB @P1.PRO > PR3.OUT',
+                                 'VBM98.EXE @NOPE.PRO -fdd0 PF.IMG -menukeys 04,15 > PR4.OUT',
+                                 'VBM98.EXE @P2.PRO > PR5.OUT'], 300, core='normal')
+    out = {n: imgtests.read_lines(work, n) or [] for n in outs}
+    for n in outs:
+        for line in out[n]:
+            if 'dipsw SW1-3' in line or 'profile' in line or 'halted' in line or 'bad' in line:
+                print('  %s: %s' % (n[:3], line))
+
+    def booted(lines):
+        return any('halted' in l for l in lines) and any('back to DOS' in l for l in lines)
+
+    checks = (
+        ('batch finished', finished),
+        ('@P1.PRO alone: booted from the image named in the profile with its -dipsw',
+         booted(out['PR1.OUT']) and any('guest dipsw SW1-3: 12 F4 FB' in l for l in out['PR1.OUT'])),
+        ('-dipsw after @P1.PRO on the command line wins', booted(out['PR2.OUT']) and any('guest dipsw SW1-3: 34 F4 FB' in l for l in out['PR2.OUT'])),
+        ('-dipsw before @P1.PRO: the profile, being later, wins', booted(out['PR3.OUT']) and any('guest dipsw SW1-3: 12 F4 FB' in l for l in out['PR3.OUT'])),
+        ('a missing profile is reported and nothing runs',
+         any('cannot open profile NOPE.PRO' in l for l in out['PR4.OUT']) and not booted(out['PR4.OUT'])),
+        ('@ inside a profile is refused', any('P1.PRO: @ inside a profile is not allowed' in l for l in out['PR5.OUT']) and not booted(out['PR5.OUT'])),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('プロファイル: %s' % ('通過' if ok else '失敗'))
     return ok
 
 
@@ -1637,7 +1687,7 @@ def test_fdmem(work):
 
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('fdmem', 'VBM98.EXE', test_fdmem), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
          ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos), ('nfdid', 'VBM98.EXE', test_nfdid),
-         ('boot2dd', 'VBM98.EXE', test_boot2dd), ('d88', 'VBM98.EXE', test_d88), ('blank', 'VBM98.EXE', test_blank),
+         ('boot2dd', 'VBM98.EXE', test_boot2dd), ('d88', 'VBM98.EXE', test_d88), ('blank', 'VBM98.EXE', test_blank), ('profile', 'VBM98.EXE', test_profile),
          ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('isr', 'VBM98.EXE', test_isr), ('menu', 'VBM98.EXE', test_menu), ('page0', 'VBM98.EXE', test_page0), ('kdefer', 'VBM98.EXE', test_kdefer),
          ('keys', 'VBM98.EXE', test_keys),
          ('v86', 'VBM98.EXE', test_v86))

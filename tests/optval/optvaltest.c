@@ -64,10 +64,33 @@ static void iotrap(void)
     check("line: table full", optval_iotrap_line("1 2", g, h, &n, 4) == 0 && n == 4 && optval_iotrap_line("3 4", g, h, &n, 4) != 0);
 }
 
+static void split(void)
+{
+    char t1[] = "-fdd0 GAME.NFD\r\n# a comment line\r\n-dipsw 12F4FB   # trailing comment\r\n\t-memsw\t******08********\r\n";
+    char t2[] = "GAME#1.NFD -v30 off";
+    char t3[] = "";
+    char t4[] = "   \r\n# only a comment\r\n";
+    char t5[] = "a b c d e";
+    char *v[8];
+    int n;
+
+    n = optval_split(t1, v, 8);
+    check("split: lines, CRLF, tabs, comment lines and trailing comments", n == 6 &&
+          strcmp(v[0], "-fdd0") == 0 && strcmp(v[1], "GAME.NFD") == 0 && strcmp(v[2], "-dipsw") == 0 &&
+          strcmp(v[3], "12F4FB") == 0 && strcmp(v[4], "-memsw") == 0 && strcmp(v[5], "******08********") == 0);
+    n = optval_split(t2, v, 8);
+    check("split: '#' inside a name is not a comment; no line end at the end", n == 3 &&
+          strcmp(v[0], "GAME#1.NFD") == 0 && strcmp(v[1], "-v30") == 0 && strcmp(v[2], "off") == 0);
+    check("split: empty text", optval_split(t3, v, 8) == 0);
+    check("split: only blanks and a comment", optval_split(t4, v, 8) == 0);
+    check("split: more items than fit", optval_split(t5, v, 4) == -1);
+}
+
 int main(void)
 {
     hexmask();
     iotrap();
+    split();
     printf("END %d %d\n", fails, count);
     return fails != 0;
 }

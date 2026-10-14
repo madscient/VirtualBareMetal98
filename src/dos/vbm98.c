@@ -191,17 +191,70 @@ static FARTEXT int __far parse_sbrom(const char *v, struct opts *o)
     return 0;
 }
 
+static FARTEXT int __far parse_one(int argc, char **argv, struct opts *o);
+
+/*
+ * プロファイル @<ファイル> (spec.md): コマンド行と同じ書き方の項目を空白・改行で区切って並べたテキスト。'#' から行末は
+ * コメント。中身はその位置に展開したのと同じ扱い (後に書いたものが有効)。オプションの値は中身を指したままにするので、
+ * 置き場は静的に持つ。プロファイルの中の @ は受け付けない (入れ子の置き場を増やさない)
+ */
+#define PROFILE_MAX  1023
+#define PROFILE_ARGS 32
+static char prof_text[PROFILE_MAX + 1];
+static char *prof_argv[PROFILE_ARGS + 1];
+static u8 in_profile;
+
+static FARTEXT int __far load_profile(const char *name, struct opts *o)
+{
+    unsigned got, err;
+    int h, n, rc;
+
+    if (in_profile) {
+        say("VBM98: profile %s: @ inside a profile is not allowed\n", name);
+        return 1;
+    }
+    if (_dos_open(name, 0, &h) != 0) {
+        say("VBM98: cannot open profile %s\n", name);
+        return 1;
+    }
+    err = _dos_read(h, (void __far *)prof_text, PROFILE_MAX + 1, &got);
+    _dos_close(h);
+    if (err != 0 || got > PROFILE_MAX) {
+        say("VBM98: profile %s: cannot read, or longer than %u bytes\n", name, PROFILE_MAX);
+        return 1;
+    }
+    prof_text[got] = 0;
+    n = optval_split(prof_text, prof_argv + 1, PROFILE_ARGS);
+    if (n < 0) {
+        say("VBM98: profile %s: more than %u items\n", name, PROFILE_ARGS);
+        return 1;
+    }
+    prof_argv[0] = prof_text;   /* 0 番はプログラム名の位置。見ない */
+    in_profile = 1;
+    rc = parse_one(n + 1, prof_argv, o);
+    in_profile = 0;
+    return rc;
+}
+
 static FARTEXT int __far parse_args(int argc, char **argv, struct opts *o)
+{
+    memset(o, 0, sizeof *o);
+    o->v30 = 1;
+    return parse_one(argc, argv, o);
+}
+
+static FARTEXT int __far parse_one(int argc, char **argv, struct opts *o)
 {
     int i;
 
-    memset(o, 0, sizeof *o);
-    o->v30 = 1;
     for (i = 1; i < argc; i++) {
         const char *a = argv[i];
         const char *v = i + 1 < argc ? argv[i + 1] : 0;
 
-        if ((eq(a, "-fdd0") || eq(a, "-fdd1")) && v) {
+        if (a[0] == '@') {
+            if (load_profile(a + 1, o))
+                return 1;
+        } else if ((eq(a, "-fdd0") || eq(a, "-fdd1")) && v) {
             /* <ファイル>[,<番号>]。番号は D88 のファイルに連なるディスクのうちどれか (1 から。spec.md) */
             char *end;
             long idx = 0;
