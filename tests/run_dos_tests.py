@@ -29,6 +29,7 @@ DOS の実行環境は環境変数で選ぶ (tests/dosenv.py)。DOSBox-X と NP2
 (BIOS と DOS の実装が違うので、片方の振る舞いに頼った箇所を見つけるために両方で走らせる)。
 """
 import os
+import re
 import shutil
 import sys
 
@@ -761,6 +762,13 @@ def test_shot(work):
     def alike(log):
         return any('all bit planes read the same. If' in l for l in log)
 
+    def ank_ok(log):
+        """'ANK patterns: N codes, M read in a vsync window, K retried' の行 (2 枚ぶん) で、コードが 1 つ以上あり、
+        全部が VSYNC の期間の中で読めていること。実機 (BX・RA2) では期間の外で読むと文字の形にならないので、エミュレータでも
+        期間の中で読んでいることを行で確かめる (エミュレータの CG は期間に依らないので、絵では分からない)"""
+        found = re.findall(r'ANK patterns: (\d+) codes, (\d+) read in a vsync window, (\d+) retried', '\n'.join(log))
+        return len(found) == 2 and all(int(n) > 0 and int(n) == int(m) for n, m, k in found)
+
     checks = (
         ('batch finished', finished),
         ('four PNG files, 640x400, 4-bit indexed, CRCs good',
@@ -803,6 +811,8 @@ def test_shot(work):
              for l in imgtests.read_lines(work, 'S.LOG') or [])),
         ('the log records the text layout of that shot: 25 rows of 16 lines',
          any('screenshot: text: 25 rows of 16 lines, glyphs 0 lines down' in l for l in imgtests.read_lines(work, 'S.LOG') or [])),
+        ('ANK patterns were read inside vsync windows: the log counts the codes, and every one was read in a window',
+         ank_ok(imgtests.read_lines(work, 'S.LOG') or [])),
         ('guest that set 20 lines through the BIOS: the text shot has 20 rows of 20 lines, glyphs 2 lines down, gaps transparent',
          text20('SA') and any('screenshot: text: 20 rows of 20 lines, glyphs 2 lines down' in l
                               for l in imgtests.read_lines(work, 'SA.LOG') or [])),

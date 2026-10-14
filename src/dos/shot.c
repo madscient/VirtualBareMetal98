@@ -44,12 +44,15 @@ void pio_out8(u16 port, u8 val);
 /*
  * CG ROM をポートで読む (design.md §12)。A1h にテキスト VRAM の奇数バイト (漢字の JIS 第 2 バイト。
  * ANK なら 0)、A3h に偶数バイト (ANK のコード、または JIS 第 1 バイト − 20h)、A5h にライン番号
- * (bit 5 を立てると左半分)、A9h からパターン (bit 7 が左端)。right が 0 なら左半分 (8 ドット幅) だけ読む
+ * (bit 5 を立てると左半分)、A9h からパターン (bit 7 が左端)。right が 0 なら左半分 (8 ドット幅) だけ読む。
+ * KAC のドットアクセスのモード (68h ← 0Bh) は save_text が入れてあるが、文字ごとにも書く: 実機 (PC-9801BX・RA2) で、
+ * 文字ごとに書く版でだけ漢字が読めたとの報告が 1 件ある (design.md §12)。1 回で足りない理由は分かっていない
  */
 static FARTEXT void __far cg_read(u8 odd, u8 even, u8 *left, u8 *right)
 {
     u8 line;
 
+    pio_out8(0x68, 0x0B);
     pio_out8(0xA1, odd);
     pio_out8(0xA3, even);
     for (line = 0; line < CELL_H; line++) {
@@ -185,6 +188,68 @@ static u8 cellpat[COLS][CELL_H];                /* 1 行ぶんの、桁ごとの
 static u8 spill[CELL_H];                        /* 右端の桁にある漢字の右半分 (描く場所がない) */
 
 /*
+ * ANK (1 バイト文字) のパターンは、VSYNC の期間の中で読む (design.md §12)。実機 (PC-9801BX・RA2) では、KAC を
+ * ドットアクセスのモードにしても、1 バイト文字の読み出しが文字の形を返すのは垂直同期の期間だけだった (報告者の
+ * 画像で、正しく読めたのが 2〜4 文字の連なりでだけ現れる。PC-9821Ap2・Cr13、EPSON 機ではいつでも読める)。
+ * 読む前に VSYNC (テキスト GDC の状態 60h の bit 5) が立つのを待ち、16 ライン読んだあとにまだ立っていれば期間の中で
+ * 読めたとみなし、落ちていれば次の期間で読み直す。1 期間 (1〜2 ms) に数十文字は読めるので、コードごとに控えて
+ * 同じコードは 1 回だけ読む。VSYNC が来ない環境 (回数で打ち切る) では、待たずに読む。
+ * 控え (256 コード × 16 ライン = 4KB) はデータセグメントに置くとスタックの残りが下限を切るので、転送バッファの末尾
+ * (溜め場 SINK_MAX から先の 4KB) に置く。far ポインタに添字で触ると gcc-ia16 6.3 が内部エラーを起こすので _fmemcpy で写す
+ */
+#define ANK_PAT_OFF     SINK_MAX
+static u8 ank_have[256 / 8];
+static u8 vsync_absent;
+u16 shot_ank_codes, shot_ank_windows, shot_ank_retries;
+#define VSYNC_POLL_MAX  400000UL    /* 立ち上がりを待つ回数の上限。IN が 1 µs でも 1 フレーム (17 ms) の 20 倍以上 */
+#define ANK_RETRY_MAX   8           /* 期間の中で読み切れなかったときに読み直す回数。越えたら最後に読んだものを使う */
+
+/* VSYNC が立つまで待つ。すでに立っていればそのまま。0 で立っている、1 で来なかった */
+static FARTEXT int __far vsync_wait(void)
+{
+    u32 n;
+
+    for (n = 0; n < VSYNC_POLL_MAX; n++)
+        if (pio_in8(0x60) & 0x20)
+            return 0;
+    return 1;
+}
+
+static FARTEXT u8 __far * __far ank_slot(u8 code)
+{
+    return MK_FP(xfer_seg(), (u16)(ANK_PAT_OFF + (u16)code * (u16)CELL_H));
+}
+
+static FARTEXT void __far ank_read(u8 code, u8 *pat)
+{
+    u8 tries, in_window;
+
+    if (ank_have[code >> 3] & (u8)(1 << (code & 7))) {
+        _fmemcpy(pat, ank_slot(code), CELL_H);
+        return;
+    }
+    for (tries = 0; ; tries++) {
+        in_window = 0;
+        if (!vsync_absent) {
+            if (vsync_wait())
+                vsync_absent = 1;
+            else
+                in_window = 1;
+        }
+        cg_read(0, code, pat, 0);
+        if (!in_window || (pio_in8(0x60) & 0x20) || tries >= ANK_RETRY_MAX)
+            break;
+        /* 読んでいる間に期間が終わった。次の期間の立ち上がりまで待つ (いま落ちているので、次に立つのは立ち上がり) */
+        shot_ank_retries++;
+    }
+    if (in_window)
+        shot_ank_windows++;
+    _fmemcpy(ank_slot(code), pat, CELL_H);
+    ank_have[code >> 3] |= (u8)(1 << (code & 7));
+    shot_ank_codes++;
+}
+
+/*
  * 1 行ぶんの文字コードからパターンを集める。桁の 2 バイトは、偶数バイトが ANK のコードか漢字の
  * JIS 第 1 バイト − 20h (bit 7 が立っていれば右半分で、左の桁で描いてある)、奇数バイトが ANK なら 0、
  * 漢字なら JIS 第 2 バイト (jis.h)。偶数バイトが 09h〜0Bh なら 8 ドット幅の文字 (JIS の 29h〜2Bh 区)、
@@ -204,7 +269,7 @@ static FARTEXT void __far gather_patterns(void)
         if (even & 0x80)
             continue;
         if (odd == 0)
-            cg_read(0, even, cellpat[c], 0);
+            ank_read(even, cellpat[c]);
         else if (even >= 0x09 && even <= 0x0B)
             cg_read(odd, even, cellpat[c], 0);
         else
@@ -271,6 +336,9 @@ static FARTEXT int __far save_text(struct sink_ctx *s, const struct shot_info *s
      */
     pio_out8(0x68, 0x0B);
     shot_rev_cells = shot_hidden_cells = 0;
+    shot_ank_codes = shot_ank_windows = shot_ank_retries = 0;
+    vsync_absent = 0;
+    memset(ank_have, 0, sizeof ank_have);
     for (r = 0; r < rows; r++) {
         u16 c;
 

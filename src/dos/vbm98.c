@@ -31,7 +31,7 @@
 #include "log.h"
 
 /* 版。GitHub のリリースのタグに合わせ、リリース後の master では末尾に + を付ける (動作報告で版を見分けるため。README) */
-#define VBM98_VERSION   "0.1.19+"
+#define VBM98_VERSION   "0.1.20"
 #define GUEST_KB        640
 #define DRIVES          2
 #define RESET_LIN       0xFFFF0UL
@@ -2125,6 +2125,9 @@ static FARTEXT int __far shot_take(char *gname, u8 how)
                      (unsigned)(400 / si.text_pitch), si.text_pitch, si.text_top, gmode);
             log_line("VBM98: screenshot: text attributes: %u of %u cells reversed, %u hidden, cell 0 attr %02X\n",
                      shot_rev_cells, (unsigned)(80 * (400 / si.text_pitch)), shot_hidden_cells, shot_attr0);
+            /* ANK の読み出しが VSYNC の期間に入れたか (design.md §12)。実機でまだ崩れるときの切り分けの材料 */
+            log_line("VBM98: screenshot: text: ANK patterns: %u codes, %u read in a vsync window, %u retried\n",
+                     shot_ank_codes, shot_ank_windows, shot_ank_retries);
             /* 色の写し (ポート 6Ah・A8h〜AEh への書き込みから)。絵の色が合わないときの切り分けの材料 */
             log_line("VBM98: screenshot: %s mode, mode flip-flop %02X, palette (GRB):", vid_color16 ? "16-color" : "8-color", vid_mode68);
             for (k = 0; k < 16; k++)

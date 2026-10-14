@@ -23,5 +23,7 @@ FARTEXT int __far shot_save(const struct shot_info *si, char *gname);
 /* 直前のテキストの撮影で見た属性の内訳 (反転のセルの数、非表示のセルの数、0 行 0 桁の属性)。ログに残す材料 */
 extern u16 shot_rev_cells, shot_hidden_cells;
 extern u8 shot_attr0;
+/* 同じ撮影で読んだ ANK のコードの数、そのうち VSYNC の期間の中で読めた数、期間の中で読み切れず読み直した回数 */
+extern u16 shot_ank_codes, shot_ank_windows, shot_ank_retries;
 
 #endif
