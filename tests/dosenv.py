@@ -11,6 +11,7 @@
 import os
 import shutil
 import subprocess
+import threading
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BATCH = 'RUN.BAT'
@@ -148,7 +149,7 @@ def _msdos_floppy(src_image, share, dst, emm, config_tail=None):
     return path
 
 
-def _np21w(src, share, timeout, core, emm=False, msdos=False, msdos_config=None):
+def _np21w(src, share, timeout, core, emm=False, msdos=False, msdos_config=None, during=None):
     """スターターセット一式を build/np2 に複製し、その share をバッチの置き場にして走らせる。
 
     利用者の一式には書き込まない。起動イメージと設定ファイルは実行のたびに複製し直す
@@ -157,6 +158,7 @@ def _np21w(src, share, timeout, core, emm=False, msdos=False, msdos_config=None)
     msdos なら、FreeDOS の起動イメージではなく実物の MS-DOS の起動ディスク (VBM_MSDOS) の写しをドライブに入れて
     起動する (emm なら MS-DOS の EMM386.EXE も読み込む。msdos_config は _msdos_floppy の config_tail)。
     窓は出るが操作は要らない。core は使わない。
+    during があれば、エミュレータを起動したあと別のスレッドで during(プロセス番号) を呼ぶ (窓を操作する試験)。
     """
     dst = os.path.dirname(share)
     exe = next((n for n in ('np21x64w.exe', 'np21w.exe') if os.path.exists(os.path.join(src, n))), None)
@@ -177,22 +179,36 @@ def _np21w(src, share, timeout, core, emm=False, msdos=False, msdos_config=None)
     if msdos:
         # 実行ファイルにイメージを渡すと、ドライブ 1 に入れて起動する (フロッピーが先に起動される)
         args.append(_msdos_floppy(msdos_image(), share, dst, emm, msdos_config))
-    subprocess.run(args, cwd=dst, stdin=subprocess.DEVNULL, timeout=timeout)
+    if during is None:
+        subprocess.run(args, cwd=dst, stdin=subprocess.DEVNULL, timeout=timeout)
+        return
+    proc = subprocess.Popen(args, cwd=dst, stdin=subprocess.DEVNULL)
+    th = threading.Thread(target=during, args=(proc.pid,), daemon=True)
+    th.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise
+    finally:
+        th.join(timeout=30)
 
 
-def run_batch(commands, timeout, core='auto', emm=False, msdos=False, msdos_config=None):
+def run_batch(commands, timeout, core='auto', emm=False, msdos=False, msdos_config=None, during=None):
     """commands を順に実行する。最後まで走ったら True。
 
     core は DOSBox-X の CPU の再現方式 ('auto' なら 'normal' = 命令を逐次解釈する方式にする。NP21/W では使わない)。
     emm は NP21/W だけ: EMM386 (VCPI あり) を読み込んだ DOS で走らせる。
     msdos は NP21/W だけ: 実物の MS-DOS の起動ディスク (VBM_MSDOS) から起動した DOS で走らせる。
     msdos_config は msdos のときだけ: CONFIG.SYS の HIMEM.SYS の行のあとに置く行の並び (EMM386.EXE のオプションや DOS=)。
+    during は NP21/W だけ: 走っている間に別のスレッドで呼ぶ関数 (引数はエミュレータのプロセス番号)。
     """
     env, target = _select()
     if not env:
         raise RuntimeError('DOS の実行環境が未指定: ' + variables())
-    if (emm or msdos) and env != 'np21w':
-        raise RuntimeError('EMM 環境と MS-DOS の試験は NP21/W だけ')
+    if (emm or msdos or during) and env != 'np21w':
+        raise RuntimeError('EMM 環境と MS-DOS の試験、窓を操作する試験は NP21/W だけ')
     if msdos and not msdos_image():
         raise RuntimeError('MS-DOS の起動ディスクが未指定: VBM_MSDOS')
     wd = workdir()
@@ -206,7 +222,7 @@ def run_batch(commands, timeout, core='auto', emm=False, msdos=False, msdos_conf
         if env == 'dosboxx':
             _dosboxx(target, wd, timeout, core)
         else:
-            _np21w(target, wd, timeout, core, emm, msdos, msdos_config)
+            _np21w(target, wd, timeout, core, emm, msdos, msdos_config, during)
     except subprocess.TimeoutExpired:
         pass
     return os.path.exists(done)

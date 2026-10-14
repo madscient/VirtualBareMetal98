@@ -64,7 +64,7 @@ sh tools/build16.sh
 | --- | --- | --- |
 | `python tests/run_host_tests.py` | ディスクイメージ層（ホスト OS 上） | gcc、Python |
 | `sh tools/build16.sh` | DOS 向けのビルド | gcc-ia16 |
-| `python tests/run_dos_tests.py` | ディスクイメージ層と INT 1Bh の意味論（16 ビット）、モニタ核、本体の起動、スクリーンショット、VM メニュー、EMM386 の下での起動を DOS 上で | 上のビルド結果、DOSBox-X か NP21/W |
+| `python tests/run_dos_tests.py` | ディスクイメージ層と INT 1Bh の意味論（16 ビット）、モニタ核、本体の起動、スクリーンショット、VM メニュー、実物のキーのホットキー、EMM386 の下での起動を DOS 上で | 上のビルド結果、DOSBox-X か NP21/W |
 
 `run_dos_tests.py` の実行環境は環境変数で選ぶ（`tests/dosenv.py`）。EMM386 の下での試験（`v86`）は、複製した
 起動イメージの中の FDCONFIG.SYS を同じ長さで書き換えて HIMEMX と EMM386 を読み込ませる（利用者の一式には書かない。
@@ -87,7 +87,7 @@ NP21/W を利用者自身が起動している間は、起動イメージが使�
 
 | エミュレータ | 分かっていること |
 | --- | --- |
-| NP21/W スターターセット | FreeDOS(98) の起動イメージ、ホストのフォルダを Z: として見せる HOSTDRV、エミュレータを終了させる `PWOFF.COM` が入っている。設定ファイルは実行ファイルと同名の `.ini`（UTF-16）で、起動イメージ（`HDD1FILE`）と共有フォルダ（`hdrvroot`）を相対パスで指している。起動イメージの AUTOEXEC.BAT は `HOSTDRV Z` のあと `Z:\AUTOEXEC.BAT` を呼ぶので、そこを差し替えれば無人で任意のバッチを流せる。FDCONFIG.SYS が FDXMS286.SYS を読むので XMS が使える。起動中は起動イメージが排他ロックされ、他から読めない |
+| NP21/W スターターセット | FreeDOS(98) の起動イメージ、ホストのフォルダを Z: として見せる HOSTDRV、エミュレータを終了させる `PWOFF.COM` が入っている。設定ファイルは実行ファイルと同名の `.ini`（UTF-16）で、起動イメージ（`HDD1FILE`）と共有フォルダ（`hdrvroot`）を相対パスで指している。起動イメージの AUTOEXEC.BAT は `HOSTDRV Z` のあと `Z:\AUTOEXEC.BAT` を呼ぶので、そこを差し替えれば無人で任意のバッチを流せる。FDCONFIG.SYS が FDXMS286.SYS を読むので XMS が使える。起動中は起動イメージが排他ロックされ、他から読めない。窓のメニュー Device → Keyboard の mechanical CTRL・mechanical GRPH・Send Ctrl+Alt+Del は、窓にメニューのメッセージ（WM_COMMAND）を送るだけで、ゲストにキーボード割り込みとして届く。試験 `hotkey` はこれで CTRL + GRPH + DEL を押す（`tests/np2win.py`。項目は英語の表記の文字列で探す） |
 | DOSBox-X（2026.10.01 の Windows 向けビルド、通常版） | `-conf <設定> -nopromptfolder -silent` で、窓なしの無人実行ができる（`tests/dosenv.py` の `dosboxx`）。PC-98（machine=pc98）として本体の試験まで通り、モニタ核の試験は V30 の 9 断片すべてが届く（`cputype=486`）。全試験で 3 分ほど（イメージ層が 2 分強、ほかは 15 秒）。マウスの割り込み（IRQ13）が開いたまま起動する。配布物には内蔵の DOS を持たない OSFREE 版もあり（ファイル名に osfree。ゲスト OS の起動しかできない）、そちらでは試験は走らない。新しい未署名の実行ファイルなので、セキュリティソフトが起動を保留することがある（プロセスはできるが窓が出ず、`-version` でも戻らない。許可が要る） |
 | NP21/W + 実物の MS-DOS | スターターセットの NP21/W は、実行ファイルにフロッピーのイメージを渡すとドライブ 1 に入れてそこから起動する。HOSTDRV と PWOFF は MS-DOS 5.00A でも動く（起動ディスクの写しに置いて AUTOEXEC.BAT から呼ぶ。`tests/dosenv.py` の `_msdos_floppy`）。配布ディスクの HIMEM.SY_・EMM386.EX_ は SZDD 形式の圧縮で、`tests/fat12.py` が展開する |
 | MS-DOS Player | DOS の実行ファイルをコンソールで直接走らせるもの。標準入出力をパイプにして起動すると戻ってこなかった。原因は調べていない。使っていない |

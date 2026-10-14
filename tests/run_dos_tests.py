@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DOS 向けにビルドした試験プログラムを DOS 上で走らせる。
 
-    python tests/run_dos_tests.py [img] [fdb] [fdmem] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [d88] [blank] [profile] [shot] [con] [isr] [menu] [v86]
+    python tests/run_dos_tests.py [img] [fdb] [fdmem] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [d88] [blank] [profile] [shot] [con] [isr] [menu] [page0] [kdefer] [keys] [hotkey] [v86]
 
     img      ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
     fdb      INT 1Bh の意味論 (fdbios)。同上
@@ -22,6 +22,7 @@
     page0    ゲストが BIOS のワークエリアに書いたものを BIOS が使うか (ゲストの 0 番ページの置き場)
     kdefer   ゲストが割り込み禁止のままホスト世界へ行った間のキーが、あとで届くか
     keys     ホスト世界にいる間 (INT 1Bh の処理中) に押されたキーがゲストに届くか、VM メニューが実物のキーで閉じるか (DOSBox-X だけ)
+    hotkey   実物のキーで押したホットキー (CTRL + GRPH + DEL を NP21/W の窓のメニューから送る。NP21/W だけ)
     v86      EMM386 (VCPI) の下での起動 (NP21/W だけ)
 
 引数を省くと全部を走らせる。事前に tools/build16.sh でビルドしておく。
@@ -1269,6 +1270,88 @@ def test_v86(work):
     return ok
 
 
+def hotkey_run(work, emm):
+    """hotkey の 1 回分。ログのファイルができてから 5 秒後と、その 6 秒後に、NP21/W の窓のメニューから
+    CTRL + GRPH + DEL を送る。(合否の並び, 見出し) を返す"""
+    import threading
+    import time
+    import np2win
+    tag = 'EMM386' if emm else 'real mode'
+    with open(os.path.join(BUILT, 'SHOTIPL.BIN'), 'rb') as f:
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = f.read()
+    with open(os.path.join(work, 'HK.IMG'), 'wb') as f:
+        f.write(img)
+    for name in ('HK.OUT', 'HK.LOG'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    sent = {'n': 0, 'error': None, 'log_at': None}
+
+    def send(pid):
+        try:
+            hwnd = np2win.main_window(pid)
+            if not hwnd:
+                raise RuntimeError('NP21/W の窓が見つからない')
+            ids = np2win.find_ids(hwnd, (np2win.CTRL, np2win.GRPH, np2win.CAD))
+            if len(ids) != 3:
+                raise RuntimeError('メニューの項目が見つからない: %s' % ', '.join(
+                    l for l in (np2win.CTRL, np2win.GRPH, np2win.CAD) if l not in ids))
+            # HOSTDRV の上で DOS が開いているファイルは中身を読めないが、できたことは分かる
+            end = time.monotonic() + 170
+            while not os.path.exists(os.path.join(work, 'HK.LOG')):
+                if time.monotonic() > end:
+                    raise RuntimeError('ログのファイルができない')
+                time.sleep(0.5)
+            sent['log_at'] = time.monotonic()
+            time.sleep(5)
+            for i in range(2):
+                np2win.ctrl_grph_del(hwnd, ids)
+                sent['n'] += 1
+                time.sleep(6)
+        except Exception as e:      # 試験の項目として出す
+            sent['error'] = str(e)
+
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 HK.IMG -tick -stopafter 4000 -log HK.LOG > HK.OUT'],
+                                240, core='normal', emm=emm, during=send)
+    took = time.monotonic() - sent['log_at'] if sent['log_at'] else None
+    log = imgtests.read_lines(work, 'HK.LOG') or []
+    out = imgtests.read_lines(work, 'HK.OUT') or []
+    if sent['error']:
+        print('  ' + sent['error'])
+    print('  (%s) ログができてから終わるまで %s 秒' % (tag, '%.0f' % took if took else '?'))
+    for line in log:
+        if 'reset' in line or 'scancodes' in line or 'keys taken' in line or 'stopped after' in line:
+            print('  ' + line[:150])
+    checks = (
+        ('%s: batch finished, and the guest ran until -stopafter after the resets' % tag,
+         finished and any('stopped after 4000' in l for l in log)),
+        ('%s: CTRL + GRPH + DEL was sent twice from the NP21/W menu' % tag, sent['n'] == 2 and not sent['error']),
+        ('%s: both were taken as the reset hotkey' % tag, sum('reset (hotkey)' in l for l in log) == 2),
+        # 1 回につき、CTRL・GRPH・DEL を押した符号と離した符号の 6 つを受け、DEL と離した符号 3 つをモニタが読み捨てて
+        # そのたびに 8251 のコマンドを書き直す (vbm_r0.c の kbd_irq・kbd_wait_release)。2 回目が届くことで、
+        # 1 回目の読み捨てのあともキーボード割り込みが来る (割り込みコントローラに処理中が残っていない) ことも見る
+        ('%s: the monitor received 12 scancodes and rewrote the 8251 command 8 times' % tag,
+         any('keyboard: 12 scancodes received, command rewritten by the monitor 8 times' in l for l in log + out)),
+    )
+    return checks
+
+
+def test_hotkey(work):
+    """実物のキー (キーボード割り込み) で押したホットキー。NP21/W の窓のメニューから CTRL + GRPH + DEL を送り、
+    モニタがスキャンコードを読み捨てる経路 (vbm_r0.c の kbd_irq・kbd_wait_release) を通す。ほかの試験は
+    開発用の -menuat などで開くので、この経路を通らない。リアルモードと EMM386 の下の 2 とおり"""
+    if dosenv.name() != 'np21w':
+        print('ホットキー: NP21/W でだけ走らせる (窓のメニューからハードウェアの段のキーを送る)')
+        return True
+    ok = True
+    for emm in (False, True):
+        for name, c in hotkey_run(work, emm):
+            print('%s %s' % ('ok  ' if c else 'FAIL', name))
+            ok = ok and c
+    print('ホットキー: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
 def boot_rec(path):
     """起動試験の IPL が自分のイメージ (セクタ 3) に書いた記録のうち、ホストの状態に関わるもの"""
     with open(path, 'rb') as f:
@@ -1699,7 +1782,7 @@ TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('f
          ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos), ('nfdid', 'VBM98.EXE', test_nfdid),
          ('boot2dd', 'VBM98.EXE', test_boot2dd), ('d88', 'VBM98.EXE', test_d88), ('blank', 'VBM98.EXE', test_blank), ('profile', 'VBM98.EXE', test_profile),
          ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('isr', 'VBM98.EXE', test_isr), ('menu', 'VBM98.EXE', test_menu), ('page0', 'VBM98.EXE', test_page0), ('kdefer', 'VBM98.EXE', test_kdefer),
-         ('keys', 'VBM98.EXE', test_keys),
+         ('keys', 'VBM98.EXE', test_keys), ('hotkey', 'VBM98.EXE', test_hotkey),
          ('v86', 'VBM98.EXE', test_v86))
 
 

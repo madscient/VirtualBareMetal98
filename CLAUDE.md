@@ -119,6 +119,13 @@ DOS 向けにビルドして DOS 上で走らせる。ビルドは `ia16-elf-gcc
   ここで見る（ホストの BIOS がキーボード割り込みで受け取ったキーを待つ経路は、ほかの試験では通らない）。開発用の
   `-kbdprobe`（design.md §19）でキーボードの 8251 を立て直したあとも、キーが届くことも見る。
   メニューのキー待ち（`ui.c` の `ui_getkey`、`vbm98.c` の `vm_kbd_watch`）を変えたら走らせる
+- `hotkey`: 実物のキーで押したホットキー。NP21/W の窓のメニュー（Device → Keyboard の mechanical CTRL・mechanical GRPH と
+  Send Ctrl+Alt+Del。キーボード割り込みとして届く）から CTRL + GRPH + DEL を 2 回送り（`tests/np2win.py`）、2 回とも
+  `reset (hotkey)` になること、モニタが 12 個のスキャンコードを受けて 8251 のコマンドを 8 回書き直したこと（1 回につき
+  DEL と離した符号 3 つを読み捨てる）を、リアルモードと EMM386 の下で確かめる。2 回目が届くことで、読み捨てのあとに
+  キーボード割り込みが止まっていないことも見る。モニタがスキャンコードを読み捨てる経路（`vbm_r0.c` の `kbd_irq`・
+  `kbd_wait_release`・`kbd_ack`、`monasm.S` の `mon_irq_window`）を変えたら走らせる。ほかの試験は開発用の `-menuat` などで
+  開くので、この経路を通らない。NP21/W だけ
 - `v86`: EMM386（VCPI）を読み込んだ FreeDOS で起動し、仮想86 の判定と VCPI 経由の切替で起動試験の IPL が動くことを
   確かめる。複製した起動イメージの FDCONFIG.SYS を書き換えて走らせる。`src/mon/` を変えたら走らせる。NP21/W だけ
 
@@ -136,13 +143,9 @@ VBM98 のスクリーンショット（`shot`・`menu` の試験が見るもの�
 いないことを見る。テキストの行数・桁数の戻し方を変えたときは、`TEXT20.BIN` と `TEXT20D.BIN`（`tests/boot/textipl.S`）を
 起動して同じ撮り方をし、開く前と閉じたあとの絵が一致すること、メニューが 25 行の配置で欠けずに出ることを見る。
 
-実物のキーで押したホットキー（モニタがスキャンコードを読み捨てる経路。`vbm_r0.c` の `kbd_irq`・`kbd_wait_release`・
-`kbd_ack`、`monasm.S` の `mon_irq_window`）も、自動試験は通らない（試験は開発用の `-menuat` などで開く）。そこを変えたら、
-NP21/W の窓のメニューから CTRL + GRPH + DEL を送り（Device → Keyboard の mechanical CTRL・mechanical GRPH と
-Send Ctrl+Alt+Del。キーボード割り込みとして届く）、ログに `reset (hotkey)` が出ることと、止めたときの表示が
-`6 scancodes received, command rewritten by the monitor 4 times`（DEL と、離した符号 3 つを読み捨てた）になることを、
-EMM386 の下とリアルモードの両方で見る。離した符号は割り込みで受けてから読む。8251 の状態のポートを見張って読む形
-（ポーリング）に戻さない（実機でキーボードが止まる。design.md §9・§12）。
+ホットキーのあとに実機でキーボードが止まる現象は、エミュレータでは起きないので `hotkey` でも見えない。離した符号は
+割り込みで受けてから読む。8251 の状態のポートを見張って読む形（ポーリング）に戻さない（実機でキーボードが止まる。
+design.md §9・§12）。
 
 検査和や一致で中身を確かめる試験は、何も届いていないとき（ゼロ埋め）の値が期待値と違うことを先に確かめる
 （`run_dos_tests.py` の `word_sum` は 0 になるパターンを受け付けない）。
