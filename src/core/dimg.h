@@ -14,8 +14,13 @@ enum {
     DIMG_FMT_FDI,
     DIMG_FMT_NFD0,
     DIMG_FMT_NFD1,
-    DIMG_FMT_VFDD
+    DIMG_FMT_VFDD,
+    DIMG_FMT_D88,
+    DIMG_FMT_HDB
 };
+
+/* D88 のディスク名 (16 文字と終端) */
+#define DIMG_D88_NAME 17
 
 enum {
     DIMG_OK = 0,
@@ -92,6 +97,7 @@ typedef struct dimg {
     u8  heads;
     u8  readonly;
     u8  u_spt, u_n;
+    u8  u_t0spt, u_t0n, u_t0mfm;    /* 一様な形式でトラック 0 だけ構成が違うとき (HDB)。u_t0spt が 0 なら全トラック同じ */
     u32 u_base;
     u32 trk_hdr[DIMG_MAX_TRACKS];
     u32 trk_data[DIMG_MAX_TRACKS];
@@ -102,6 +108,14 @@ typedef struct dimg {
 FARTEXT u32 __far dimg_sect_size(u8 n);
 
 FARTEXT int __far dimg_mount(dimg *img, const dimg_io *io, u32 fsize);
+
+/*
+ * D88 のファイルに連なるディスクを数え、index 番目 (0 から) の位置と大きさ、名前を返す。count には枚数。
+ * D88 でなければ DIMG_E_FORMAT (count は 0)、index が枚数以上なら DIMG_E_PARAM (count は入る)。
+ * 呼ぶ側は返った範囲だけを見せる io で dimg_mount する (dimg_mount 自身は io の先頭のディスクを開く)
+ */
+FARTEXT int __far dimg_d88_find(const dimg_io *io, u32 fsize, u16 index, u32 *off, u32 *len,
+                                char *name, u16 *count);
 
 /* 何も記録されていないトラックは nsect=0, ndiag=0 で成功を返す */
 FARTEXT int __far dimg_get_track(dimg *img, u8 cyl, u8 head, const dimg_track **trk);

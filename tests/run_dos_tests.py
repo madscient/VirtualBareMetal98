@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DOS 向けにビルドした試験プログラムを DOS 上で走らせる。
 
-    python tests/run_dos_tests.py [img] [fdb] [fdmem] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [shot] [con] [isr] [menu] [v86]
+    python tests/run_dos_tests.py [img] [fdb] [fdmem] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [d88] [shot] [con] [isr] [menu] [v86]
 
     img      ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
     fdb      INT 1Bh の意味論 (fdbios)。同上
@@ -12,6 +12,7 @@
     msdos    実物の MS-DOS の上での本体の動作 (NP21/W で、VBM_MSDOS を指定したときだけ)
     nfdid    ID の C がシリンダ番号と違う NFD からの起動と、IPL が読めないときの表示
     boot2dd  2DD のイメージからの起動
+    d88      複数ディスク入りの D88 から番号で選んで起動 (コマンドラインと起動前のファイル選択) と、HDB からの起動
     shot     スクリーンショット。試験用の IPL が書いた文字と色の帯が、-shotat で撮った PNG に写るか
     con      出力をファイルに向けずに走らせたとき、DOS に戻ったあとの画面に残る表示
     isr      ゲストが割り込みの処理の途中のまま離れたとき、割り込みコントローラを片付けて DOS に戻るか
@@ -45,7 +46,8 @@ def test_img(work, exe='IMGDUMP.EXE'):
 
 # fdbtest が引数に取るイメージ (tools/mkimg.py のケース名) と、DOS 側での 8.3 形式の名前
 FDB_IMAGES = (('raw_2hd.hdm', 'FDB1.IMG'), ('raw_640.img', 'FDB2.IMG'), ('nfd0_ro.nfd', 'FDB3.IMG'),
-              ('nfd1_prot.nfd', 'FDB4.IMG'), ('vfdd_fill.fdd', 'FDB5.IMG'))
+              ('nfd1_prot.nfd', 'FDB4.IMG'), ('vfdd_fill.fdd', 'FDB5.IMG'), ('hdb_2hd.hdb', 'FDB6.IMG'),
+              ('d88_mix.d88', 'FDB7.IMG'))
 
 
 def test_fdb(work, exe='FDBTEST.EXE'):
@@ -190,6 +192,127 @@ def test_boot2dd(work):
         print('%s %s' % ('ok  ' if c else 'FAIL', name))
         ok = ok and c
     print('2DD の起動: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
+def test_d88(work):
+    """D88 (複数ディスク入り) と HDB からの起動。
+    D88: 3 枚入りのファイルで、-fdd0 の ",<番号>" で選んだディスクから起動すること (番号なしは 1 枚目)、番号が枚数を越えたら
+    理由を出して起動しないこと、起動前のファイル選択から選ぶとディスクの選択が出て、選んだディスクから起動すること、
+    拡張メモリへの写しが選んだディスクのぶんだけであること。起動した IPL (tests/boot/ipl.S) は自分を R=3 に書き、R=2 の和を残す。
+    HDB: トラック 0 の表が単密 128 バイト × 26 のイメージから、512 バイトの IPL (tests/boot/hdbipl.S) が 1FE0:0000 に置かれて
+    動き、単密の読み書きと READ ID (単密で ID が返り、倍密で E0h)、倍密のトラックの読み込みが通ること"""
+    import mkimg
+    with open(os.path.join(BUILT, 'IPL.BIN'), 'rb') as f:
+        ipl = f.read()
+    with open(os.path.join(BUILT, 'HDBIPL.BIN'), 'rb') as f:
+        hipl = f.read()
+    if len(hipl) != 512:
+        print('HDBIPL.BIN が 512 バイトでない')
+        return False
+    # ディスクごとに違う中身 (和でどのディスクから起動したかを見分ける)
+    pats = [mkimg.pattern('d88boot%d' % i, 1024) for i in range(3)]
+    sums = [word_sum(p) for p in pats]
+    assert len(set(sums)) == 3
+    disks = [(mkimg.uniform('x%d' % i, 4, 2, 8, 3), 'DISK%d' % (i + 1), mkimg.D88_TYPE_2HD, 0, None, False)
+             for i in range(3)]
+    blob = bytearray(mkimg.write_d88(disks, 1)[0])
+    dsize = len(blob) // 3
+
+    def data_at(disk, r):
+        return disk * dsize + 0x2B0 + (r - 1) * (16 + 1024) + 16
+
+    for i in range(3):
+        blob[data_at(i, 1):data_at(i, 1) + 1024] = ipl
+        blob[data_at(i, 2):data_at(i, 2) + 1024] = pats[i]
+    orig = bytes(blob)
+    for name in ('M1.D88', 'M2.D88', 'M4.D88'):
+        with open(os.path.join(work, name), 'wb') as f:
+            f.write(orig)
+    # 起動前のファイル選択から選ぶ。一覧に何が並ぶかを決めるため、別のフォルダで走らせる (boot2dd と同じ)
+    pick = os.path.join(work, 'PICKD')
+    os.makedirs(pick, exist_ok=True)
+    for name in os.listdir(pick):
+        os.remove(os.path.join(pick, name))
+    with open(os.path.join(pick, 'M.D88'), 'wb') as f:
+        f.write(orig)
+    shutil.copy2(os.path.join(BUILT, 'VBM98.EXE'), os.path.join(pick, 'VBM98.EXE'))
+
+    hdb = bytearray(mkimg.write_hdb(mkimg.hdb_disk('hb'))[0])
+    hdb[0:512] = hipl
+    hp = bytes((i * 3 + 1) & 0xFF for i in range(512))
+    hq = bytes((i * 9 + 4) & 0xFF for i in range(256))
+    cyl1 = 26 * 128 + 26 * 256
+    hdb[512:1024] = hp
+    hdb[cyl1:cyl1 + 256] = hq
+    with open(os.path.join(work, 'H.HDB'), 'wb') as f:
+        f.write(hdb)
+    for name in ('D1.OUT', 'D2.OUT', 'D4.OUT', 'H.OUT'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    # 一覧は「取り出す」、「..」、M.D88 の順 (下へ 2 回)。ファイルを決めるとディスクの一覧が出るので、下へ 2 回で 3 枚目。
+    # 決めたあとの知らせを 1 回のキーで閉じ、IPL が止まったら開くメニューで終了 (4 → Y)
+    finished = dosenv.run_batch(['VBM98.EXE -fdd0 M1.D88 -menukeys 04,15 > D1.OUT',
+                                 'VBM98.EXE -fdd0 M2.D88,2 -menukeys 04,15 > D2.OUT',
+                                 'VBM98.EXE -fdd0 M4.D88,4 -menukeys 04,15 > D4.OUT',
+                                 'VBM98.EXE -fdd0 H.HDB -menukeys 04,15 > H.OUT',
+                                 'CD PICKD', 'VBM98.EXE -menukeys 3D,3D,1C,3D,3D,1C,1C,04,15 -log P.LOG > PICK.OUT', 'CD ..'],
+                                300, core='normal')
+    out = {}
+    for name in ('D1.OUT', 'D2.OUT', 'D4.OUT', 'H.OUT'):
+        out[name] = imgtests.read_lines(work, name) or []
+        for line in out[name]:
+            print('  %s: %s' % (name[:2], line))
+    picklog = imgtests.read_lines(pick, 'P.LOG') or []
+    for line in imgtests.read_lines(pick, 'PICK.OUT') or []:
+        print('  PICK: ' + line)
+
+    def booted(path, disk, want):
+        with open(path, 'rb') as f:
+            d = f.read()
+        rec = d[data_at(disk, 3):data_at(disk, 3) + 1024]
+        return rec[0x300:0x308] == b'VBM98IPL' and int.from_bytes(rec[0x30A:0x30C], 'little') == want
+
+    def untouched(path, disk):
+        with open(path, 'rb') as f:
+            d = f.read()
+        return d[data_at(disk, 3):data_at(disk, 3) + 1024] == orig[data_at(disk, 3):data_at(disk, 3) + 1024]
+
+    with open(os.path.join(work, 'H.HDB'), 'rb') as f:
+        hrec = f.read()[1024 + 0x100:1024 + 0x116]
+    d1, d2, d4, h = out['D1.OUT'], out['D2.OUT'], out['D4.OUT'], out['H.OUT']
+    kb = (dsize + 1023) >> 10
+    checks = (
+        ('batch finished', finished),
+        ('no number: the first disk is named in the output', any('M1.D88 (D88, disk 1 of 3 "DISK1", 4 cylinders)' in l for l in d1)),
+        ('no number: the IPL of the first disk ran and wrote itself into the first disk',
+         booted(os.path.join(work, 'M1.D88'), 0, sums[0]) and untouched(os.path.join(work, 'M1.D88'), 1)),
+        (',2: the second disk is named in the output', any('M2.D88 (D88, disk 2 of 3 "DISK2", 4 cylinders)' in l for l in d2)),
+        (',2: the IPL of the second disk ran and wrote itself into the second disk; the first is untouched',
+         booted(os.path.join(work, 'M2.D88'), 1, sums[1]) and untouched(os.path.join(work, 'M2.D88'), 0)),
+        (',2: the copy in extended memory is one disk, not the file (%u KB)' % kb,
+         any('reading the image into memory (%u KB)' % kb in l for l in d2)),
+        (',4: refused with the number of disks in the file, and the guest did not run',
+         any('disk 4 was asked for, but the file holds 3' in l for l in d4) and not any('halted' in l for l in d4)),
+        ('picked before the boot: the third disk was chosen from the list and is named in the log',
+         any('M.D88 (D88, disk 3 of 3 "DISK3", 4 cylinders)' in l for l in picklog)),
+        ('picked before the boot: the IPL of the third disk ran', booted(os.path.join(pick, 'M.D88'), 2, sums[2])),
+        ('HDB: named in the output as HDB with 77 cylinders', any('H.HDB (HDB, 77 cylinders)' in l for l in h)),
+        ('HDB: the 512-byte IPL ran from the FM track and wrote itself to R=9', hrec[0:8] == b'VBM98HDB'),
+        ('HDB: booted as 2HD (AL=90h, equipment 03 00, boot device 90h)',
+         hrec[8] == 0x90 and hrec[0x12:0x15] == bytes((0x03, 0x00, 0x90))),
+        ('HDB: FM read of R=5-8: status 00h and the contents', hrec[9] == 0 and int.from_bytes(hrec[0x0A:0x0C], 'little') == word_sum(hp)),
+        ('HDB: MFM read of cylinder 1 (256 bytes): status 00h and the contents',
+         hrec[0x0C] == 0 and int.from_bytes(hrec[0x0D:0x0F], 'little') == word_sum(hq)),
+        ('HDB: read ID on track 0: FM returns N=0, MFM returns E0h', hrec[0x0F] == 0 and hrec[0x10] == 0 and hrec[0x11] == 0xE0),
+        ('HDB: the FM write returned 00h', hrec[0x15] == 0),
+        ('HDB: guest halted and VBM98 returned to DOS', any('halted' in l for l in h) and any('back to DOS' in l for l in h)),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('D88 と HDB の起動: %s' % ('通過' if ok else '失敗'))
     return ok
 
 
@@ -1469,7 +1592,7 @@ def test_fdmem(work):
 
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('fdmem', 'VBM98.EXE', test_fdmem), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
          ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos), ('nfdid', 'VBM98.EXE', test_nfdid),
-         ('boot2dd', 'VBM98.EXE', test_boot2dd),
+         ('boot2dd', 'VBM98.EXE', test_boot2dd), ('d88', 'VBM98.EXE', test_d88),
          ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('isr', 'VBM98.EXE', test_isr), ('menu', 'VBM98.EXE', test_menu), ('page0', 'VBM98.EXE', test_page0), ('kdefer', 'VBM98.EXE', test_kdefer),
          ('keys', 'VBM98.EXE', test_keys),
          ('v86', 'VBM98.EXE', test_v86))

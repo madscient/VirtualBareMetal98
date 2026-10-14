@@ -7,6 +7,7 @@
 
 static dos_file file;
 static unsigned sseg;
+static u32 whole;
 
 #ifdef IMG_IN_MEMORY
 /* 本体と同じく、イメージの写しを XMS に持つ入出力 (imgcache) を通す版 */
@@ -21,14 +22,22 @@ int plat_open(const char *path, int rw, dimg_io *io, u32 *fsize)
         return 1;
     if (dosio_open(&file, path, rw, fsize))
         return 1;
+    whole = *fsize;
+    dosio_bind(io, &file);
+    return 0;
+}
+
+int plat_window(dimg_io *io, u32 off, u32 len)
+{
+    dosio_window(&file, off, len);
 #ifdef IMG_IN_MEMORY
     /* 写しが取れなければ失敗にする (ファイルの経路に落ちて通ったのでは、写しの経路を見たことにならない) */
     dosio_bind(&cache.lower, &file);
     imgcache_bind(io, &cache);
-    if (xms_init() || imgcache_reserve(&cache, *fsize) || imgcache_fill(&cache))
+    if (xms_init() || imgcache_reserve(&cache, len ? len : whole) || imgcache_fill(&cache))
         return 1;
 #else
-    dosio_bind(io, &file);
+    (void)io;
 #endif
     return 0;
 }

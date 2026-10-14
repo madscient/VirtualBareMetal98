@@ -368,15 +368,26 @@ FARTEXT void __far fdb_call(struct fdb *fb, const struct fdb_in *in, struct fdb_
     case 0x05: case 0x09:
         st = transfer(fb, img, in, out, unit, hd, OP_WRITE);
         break;
-    case 0x0A:
-        /* READ ID は MFM 指定のときだけ応える。トラック上の ID を順に返す */
-        if (!(in->ah & F_MFM) || dimg_get_track(img, fb->cyl[unit], hd, &t) || !t->nsect) {
+    case 0x0A: {
+        u8 want = (u8)((in->ah & F_MFM) ? DIMG_SF_MFM : 0), j, m = 0, k;
+
+        /* READ ID は、指定された密度 (MFM かどうか) のセクタの ID を順に返す。その密度のセクタがなければ E0h */
+        if (!dimg_get_track(img, fb->cyl[unit], hd, &t))
+            for (j = 0; j < t->nsect; j++)
+                if ((t->sect[j].flags & DIMG_SF_MFM) == want)
+                    m++;
+        if (!m) {
             st = FDB_ST_NOAM;
             result(out, unit, hd, fb->cyl[unit], in->cl, in->dh, in->dl, in->ch, st, 0);
             break;
         }
-        s = &t->sect[fb->rid % t->nsect];
+        k = (u8)(fb->rid % m);
         fb->rid++;
+        for (j = 0, s = t->sect; ; j++)
+            if ((t->sect[j].flags & DIMG_SF_MFM) == want && !k--) {
+                s = &t->sect[j];
+                break;
+            }
         out->cl = s->c;
         out->dh = s->h;
         out->dl = s->r;
@@ -384,6 +395,7 @@ FARTEXT void __far fdb_call(struct fdb *fb, const struct fdb_in *in, struct fdb_
         st = FDB_ST_OK;
         result(out, unit, hd, fb->cyl[unit], s->c, s->h, s->r, s->n, st, 0);
         break;
+    }
     case 0x0D:
         st = format(fb, img, in, out, unit, hd);
         break;

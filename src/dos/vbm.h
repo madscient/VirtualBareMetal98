@@ -245,9 +245,11 @@ u16 kbd_note(u8 sc);
 #define KBD_TAP_MAX 16
 
 /* ---- ホスト世界の仮想マシン操作 (vbm98.c)。メニュー (menu.c) から呼ぶ ---- */
-FARTEXT int __far vm_mount(int unit, const char *path, int quiet);   /* 0 で成功。前に入っていたイメージは閉じる */
+FARTEXT int __far vm_mount(int unit, const char *path, u16 index, int quiet);   /* 0 で成功。前に入っていたイメージは閉じる。index は D88 の中のディスク (1 から。0 は 1) */
 FARTEXT void __far vm_eject(int unit);
-FARTEXT const char * __far vm_drive_name(int unit);                   /* 入っているイメージのパス。空なら "" */
+FARTEXT const char * __far vm_drive_name(int unit);                   /* 入っているイメージのパス (複数ディスクの D88 なら ",<番号>" 付き)。空なら "" */
+/* path の D88 に連なるディスクの名前を names (DIMG_D88_NAME バイト × max) に入れ、枚数を返す。D88 でなければ 1、開けなければ 0 */
+FARTEXT u16 __far vm_disk_list(const char *path, char *names, u16 max);
 FARTEXT int __far vm_shot(char *gname);                              /* スクリーンショット。gname (13 バイト以上) に G 側のファイル名。0 なら名前はいらない */
 FARTEXT void __far vm_screen_pause(void);                            /* メニューを開く: グラフィック表示を消し、テキストを 25 行・80 桁にする (VRAM には触らない) */
 FARTEXT void __far vm_screen_resume(void);                           /* メニューを閉じる: 表示系をゲストが設定していた状態へ戻す */

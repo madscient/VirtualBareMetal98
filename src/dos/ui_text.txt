@@ -16,6 +16,8 @@ T_SEL_DIR	<DIR>
 T_SEL_HELP_IMG	↑↓ ROLL: 選ぶ  RETURN: 決定  TAB: 全ファイル表示  ESC: 戻る
 T_SEL_HELP_ALL	↑↓ ROLL: 選ぶ  RETURN: 決定  TAB: イメージだけ表示  ESC: 戻る
 T_SEL_EMPTY	(ファイルがありません)
+T_IDX_TITLE	%s に入っているディスクを選ぶ  (%u 枚)
+T_IDX_HELP	↑↓ ROLL: 選ぶ  RETURN: 決定  ESC: 戻る
 T_MSG_MOUNTED	ドライブ %d: %s を入れました
 T_MSG_EJECTED	ドライブ %d: 取り出しました
 T_MSG_MOUNT_FAIL	開けません、またはイメージの形式が分かりません: %s

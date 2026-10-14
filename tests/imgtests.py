@@ -16,16 +16,18 @@ TIMEOUT = 600
 
 
 class Step:
-    """1 つのイメージに対する一連のコマンド。cmds は (モード, イメージ名, 出力ファイル名) の列"""
+    """1 つのイメージに対する一連のコマンド。cmds は (モード, イメージの引数, 出力ファイル名) の列。
+    イメージの引数は名前と、D88 のディスクの番号があればそれ"""
 
     def __init__(self, base, case):
         self.base, self.case = base, case
         self.image = base + '.IMG'
-        self.cmds = [('dump', self.image, base + '.D1')]
+        arg = self.image if case.index is None else '%s %d' % (self.image, case.index)
+        self.cmds = [('dump', arg, base + '.D1')]
         if case.rw:
-            self.cmds.append(('rwtest', self.image, base + '.RW'))
+            self.cmds.append(('rwtest', arg, base + '.RW'))
         if case.after is not None:
-            self.cmds.append(('dump', self.image, base + '.D2'))
+            self.cmds.append(('dump', arg, base + '.D2'))
 
 
 def prepare(workdir):
@@ -46,7 +48,7 @@ def exec_host(exe, workdir, steps):
     for s in steps:
         for mode, image, out in s.cmds:
             with open(os.path.join(workdir, out), 'wb') as f:
-                subprocess.run([exe, mode, image], cwd=workdir, stdin=subprocess.DEVNULL,
+                subprocess.run([exe, mode] + image.split(), cwd=workdir, stdin=subprocess.DEVNULL,
                                stdout=f, stderr=subprocess.DEVNULL, timeout=TIMEOUT)
 
 

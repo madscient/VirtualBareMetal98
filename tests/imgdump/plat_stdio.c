@@ -7,11 +7,20 @@
 static u8 xfer[XFER_SIZE];
 static u8 saved[XFER_SIZE / 2];
 static FILE *file;
+static u32 wbase, wlimit;   /* 見せる範囲 (plat_window)。wlimit が 0 なら全体 */
+
+static int place(u32 *off, u16 len)
+{
+    if (wlimit && (*off > wlimit || wlimit - *off < len))
+        return 1;
+    *off += wbase;
+    return 0;
+}
 
 static int f_read(void *ctx, u32 off, void *buf, u16 len)
 {
     (void)ctx;
-    if (fseek(file, (long)off, SEEK_SET))
+    if (place(&off, len) || fseek(file, (long)off, SEEK_SET))
         return 1;
     return fread(buf, 1, len, file) != len;
 }
@@ -19,7 +28,7 @@ static int f_read(void *ctx, u32 off, void *buf, u16 len)
 static int f_write(void *ctx, u32 off, const void *buf, u16 len)
 {
     (void)ctx;
-    if (fseek(file, (long)off, SEEK_SET))
+    if (place(&off, len) || fseek(file, (long)off, SEEK_SET))
         return 1;
     return fwrite(buf, 1, len, file) != len;
 }
@@ -60,6 +69,16 @@ int plat_open(const char *path, int rw, dimg_io *io, u32 *fsize)
     io->xread = f_xread;
     io->xwrite = f_xwrite;
     io->xfill = f_xfill;
+    wbase = 0;
+    wlimit = 0;
+    return 0;
+}
+
+int plat_window(dimg_io *io, u32 off, u32 len)
+{
+    (void)io;
+    wbase = off;
+    wlimit = len;
     return 0;
 }
 

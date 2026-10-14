@@ -21,7 +21,7 @@ CFLAGS = ['-std=c99', '-O1', '-Wall', '-Wextra', '-Wconversion', '-Wshadow', '-p
 EXT = '.exe' if os.name == 'nt' else ''
 
 # fdbtest が引数に取るイメージ (tools/mkimg.py のケース名)
-FDB_IMAGES = ('raw_2hd.hdm', 'raw_640.img', 'nfd0_ro.nfd', 'nfd1_prot.nfd', 'vfdd_fill.fdd')
+FDB_IMAGES = ('raw_2hd.hdm', 'raw_640.img', 'nfd0_ro.nfd', 'nfd1_prot.nfd', 'vfdd_fill.fdd', 'hdb_2hd.hdb', 'd88_mix.d88')
 
 
 def compile_(core, sources, name):

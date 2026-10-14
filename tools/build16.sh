@@ -5,6 +5,7 @@
 #   build/dos/VBM98.EXE      本体
 #   build/dos/IPL.BIN        起動の試験に使う IPL (1024 バイトの生のバイナリ)
 #   build/dos/SHOTIPL.BIN    スクリーンショットの試験に使う IPL (同上)
+#   build/dos/HDBIPL.BIN     HDB (単密のトラック 0) からの起動の試験に使う IPL (512 バイト)
 #   build/dos/VBM98.DOC      PC-98 で読める利用者向けの文書 (README.md から作る。Shift-JIS)
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -175,6 +176,9 @@ ls -l "$out/IPL.BIN" | awk '{print $5, "bytes  IPL.BIN"}'
 ia16-elf-gcc -c -DIPL_2DD "$root/tests/boot/ipl.S" -o "$out/ipl2dd.o"
 ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/IPL2DD.BIN" "$out/ipl2dd.o"
 ls -l "$out/IPL2DD.BIN" | awk '{print $5, "bytes  IPL2DD.BIN"}'
+ia16-elf-gcc -c "$root/tests/boot/hdbipl.S" -o "$out/hdbipl.o"
+ia16-elf-ld -Ttext=0 --oformat=binary -o "$out/HDBIPL.BIN" "$out/hdbipl.o"
+ls -l "$out/HDBIPL.BIN" | awk '{print $5, "bytes  HDBIPL.BIN"}'
 ia16-elf-gcc -c "$root/tests/boot/hosttsr.S" -o "$out/hosttsr.o"
 ia16-elf-ld -Ttext=0x100 --oformat=binary -o "$out/HOSTTSR.COM" "$out/hosttsr.o"
 ls -l "$out/HOSTTSR.COM" | awk '{print $5, "bytes  HOSTTSR.COM"}'

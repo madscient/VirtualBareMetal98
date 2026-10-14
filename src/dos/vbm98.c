@@ -82,6 +82,7 @@ static FARTEXT int __far check_v86(void)
 
 struct opts {
     const char *fdd[DRIVES];
+    u16 fdd_idx[DRIVES];            /* -fddN の ",<番号>" (D88 の中のディスク。1 から)。0 なら省略 */
     int v30;
     int have_dipsw, have_memsw;
     int trace;                  /* 開発用: INT 1Bh の呼び出しを 1 行ずつ出す */
@@ -201,7 +202,22 @@ static FARTEXT int __far parse_args(int argc, char **argv, struct opts *o)
         const char *v = i + 1 < argc ? argv[i + 1] : 0;
 
         if ((eq(a, "-fdd0") || eq(a, "-fdd1")) && v) {
+            /* <ファイル>[,<番号>]。番号は D88 のファイルに連なるディスクのうちどれか (1 から。spec.md) */
+            char *end;
+            long idx = 0;
+
+            for (end = (char *)v; *end && *end != ','; end++)
+                ;
+            if (*end == ',') {
+                *end = 0;
+                idx = strtol(end + 1, &end, 10);
+                if (*end || idx < 1 || idx > 0xFFFFL) {
+                    say("VBM98: bad disk number: %s\n", a);
+                    return 1;
+                }
+            }
             o->fdd[a[4] - '0'] = v;
+            o->fdd_idx[a[4] - '0'] = (u16)idx;
             i++;
         } else if (eq(a, "-v30") && v && (eq(v, "on") || eq(v, "off"))) {
             o->v30 = eq(v, "on");
@@ -530,15 +546,32 @@ FARTEXT void __far vm_eject(int unit)
     drive_name[unit][0] = 0;
 }
 
-/* 新しいイメージが開けてから前のを閉じる (開けなければ前のが残る) */
-FARTEXT int __far vm_mount(int unit, const char *path, int quiet)
+/* D88 のディスク名を表示できる形にする (ASCII の外は '?')。名前の文字コードは決まっていない */
+static FARTEXT void __far clean_name(char *s)
+{
+    for (; *s; s++)
+        if ((u8)*s < 0x20 || (u8)*s >= 0x7F)
+            *s = '?';
+}
+
+/*
+ * 新しいイメージが開けてから前のを閉じる (開けなければ前のが残る)。index は D88 のファイルに連なるディスクの番号
+ * (1 から。0 は 1 と同じ)。D88 でないファイルに 2 以上を指定したら誤り
+ */
+FARTEXT int __far vm_mount(int unit, const char *path, u16 index, int quiet)
 {
     /* メニューから入れるとき (quiet) は、メニューの画面に重ならないようログにだけ書く */
     void (*note)(const char *, ...) = quiet ? log_line : say;
+    static const char *const fmt_names[] = { "?", "RAW", "FDI", "NFD r0", "NFD r1", "FDD", "D88", "HDB" };
     dos_file f;
-    u32 size;
+    char dname[DIMG_D88_NAME];
+    u32 size, off, len;
+    u16 count = 0;
     int rc;
+    size_t k;
 
+    if (index == 0)
+        index = 1;
     if (dosio_open(&f, path, 1, &size) && dosio_open(&f, path, 0, &size)) {
         note("VBM98: cannot open %s\n", path);
         return 1;
@@ -547,6 +580,17 @@ FARTEXT int __far vm_mount(int unit, const char *path, int quiet)
     files[unit] = f;
     dosio_bind(&caches[unit].lower, &files[unit]);
     imgcache_bind(&ios[unit], &caches[unit]);
+    /* D88 なら、連なるディスクのうち index 番目だけをここから上に見せる (写しもその範囲だけになる) */
+    rc = dimg_d88_find(&ios[unit], size, (u16)(index - 1), &off, &len, dname, &count);
+    if (rc == DIMG_OK) {
+        dosio_window(&files[unit], off, len);
+        size = len;
+        clean_name(dname);
+    } else if (rc == DIMG_E_PARAM || index > 1) {
+        note("VBM98: %s: disk %u was asked for, but the file holds %u\n", path, index, count ? count : 1);
+        dosio_close(&files[unit]);
+        return 1;
+    }
     rc = dimg_mount(&imgs[unit], &ios[unit], size);
     if (rc) {
         note("VBM98: %s: not a supported disk image (%d)\n", path, rc);
@@ -554,16 +598,44 @@ FARTEXT int __far vm_mount(int unit, const char *path, int quiet)
         return 1;
     }
     fb.img[unit] = &imgs[unit];
-    strncpy(drive_name[unit], path, sizeof drive_name[unit] - 1);
-    drive_name[unit][sizeof drive_name[unit] - 1] = 0;
-    note("VBM98: drive %d: %s (%s, %u cylinders%s)\n", unit, path,
-               imgs[unit].fmt == DIMG_FMT_RAW ? "RAW" : imgs[unit].fmt == DIMG_FMT_FDI ? "FDI" :
-               imgs[unit].fmt == DIMG_FMT_NFD0 ? "NFD r0" : imgs[unit].fmt == DIMG_FMT_NFD1 ? "NFD r1" : "FDD",
-               imgs[unit].cyls, imgs[unit].readonly ? ", write protected" : "");
+    /* 複数ディスクのファイルは、どれを入れたかが名前から分かるように ",<番号>" を付ける */
+    k = strlen(path);
+    if (k > sizeof drive_name[unit] - 8)
+        k = sizeof drive_name[unit] - 8;
+    memcpy(drive_name[unit], path, k);
+    drive_name[unit][k] = 0;
+    if (count > 1)
+        sprintf(drive_name[unit] + k, ",%u", index);
+    if (count)
+        note("VBM98: drive %d: %s (%s, disk %u of %u \"%s\", %u cylinders%s)\n", unit, path,
+             fmt_names[imgs[unit].fmt], index, count, dname, imgs[unit].cyls,
+             imgs[unit].readonly ? ", write protected" : "");
+    else
+        note("VBM98: drive %d: %s (%s, %u cylinders%s)\n", unit, path, fmt_names[imgs[unit].fmt],
+             imgs[unit].cyls, imgs[unit].readonly ? ", write protected" : "");
     true_path(path, drive_true[unit]);
     if (xms_ready)
         hold_image(unit, note);
     return 0;
+}
+
+FARTEXT u16 __far vm_disk_list(const char *path, char *names, u16 max)
+{
+    dos_file f;
+    dimg_io io;
+    u32 size, off, len;
+    u16 count = 0, i;
+
+    if (dosio_open(&f, path, 0, &size))
+        return 0;
+    dosio_bind(&io, &f);
+    for (i = 0; i < max; i++) {
+        if (dimg_d88_find(&io, size, i, &off, &len, names + i * DIMG_D88_NAME, &count) != DIMG_OK)
+            break;
+        clean_name(names + i * DIMG_D88_NAME);
+    }
+    dosio_close(&f);
+    return count ? count : 1;
 }
 
 FARTEXT const char * __far vm_drive_name(int unit)
@@ -2619,7 +2691,7 @@ static FARTEXT NOINLINE int __far vm_setup(int argc, char **argv, struct opts *o
 
     fdb_init(&fb, DRIVES);
     for (i = 0; i < DRIVES; i++)
-        if (o->fdd[i] && vm_mount(i, o->fdd[i], 0))
+        if (o->fdd[i] && vm_mount(i, o->fdd[i], o->fdd_idx[i], 0))
             return 1;
     if (xfer_alloc()) {
         say("VBM98: cannot allocate the transfer buffer\n");

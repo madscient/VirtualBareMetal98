@@ -45,22 +45,31 @@ static int seek_to(int handle, u8 whence, u32 off, u32 *pos)
     return 0;
 }
 
-static int rd_at(int handle, u32 off, void __far *buf, u16 len)
+/* 窓の外 (limit は窓がないとき 0) を断ってから、ファイル内の位置に直す */
+static int place(const dos_file *f, u32 *off, u16 len)
+{
+    if (f->limit && (*off > f->limit || f->limit - *off < len))
+        return 1;
+    *off += f->base;
+    return 0;
+}
+
+static int rd_at(const dos_file *f, u32 off, void __far *buf, u16 len)
 {
     unsigned got;
 
-    if (seek_to(handle, 0, off, 0))
+    if (place(f, &off, len) || seek_to(f->handle, 0, off, 0))
         return 1;
-    return _dos_read(handle, buf, len, &got) != 0 || got != len;
+    return _dos_read(f->handle, buf, len, &got) != 0 || got != len;
 }
 
-static int wr_at(int handle, u32 off, const void __far *buf, u16 len)
+static int wr_at(const dos_file *f, u32 off, const void __far *buf, u16 len)
 {
     unsigned put;
 
-    if (seek_to(handle, 0, off, 0))
+    if (place(f, &off, len) || seek_to(f->handle, 0, off, 0))
         return 1;
-    return _dos_write(handle, buf, len, &put) != 0 || put != len;
+    return _dos_write(f->handle, buf, len, &put) != 0 || put != len;
 }
 
 /* 転送バッファの終端を越える要求は、セグメント内で折り返して別の場所を壊すので拒否する */
@@ -71,26 +80,26 @@ static int in_xfer(u16 xoff, u16 len)
 
 static int io_read(void *ctx, u32 off, void *buf, u16 len)
 {
-    return rd_at(((dos_file *)ctx)->handle, off, (void __far *)buf, len);
+    return rd_at(ctx, off, (void __far *)buf, len);
 }
 
 static int io_write(void *ctx, u32 off, const void *buf, u16 len)
 {
-    return wr_at(((dos_file *)ctx)->handle, off, (const void __far *)buf, len);
+    return wr_at(ctx, off, (const void __far *)buf, len);
 }
 
 static int io_xread(void *ctx, u32 off, u16 xoff, u16 len)
 {
     if (!in_xfer(xoff, len))
         return 1;
-    return rd_at(((dos_file *)ctx)->handle, off, MK_FP(xseg, xoff), len);
+    return rd_at(ctx, off, MK_FP(xseg, xoff), len);
 }
 
 static int io_xwrite(void *ctx, u32 off, u16 xoff, u16 len)
 {
     if (!in_xfer(xoff, len))
         return 1;
-    return wr_at(((dos_file *)ctx)->handle, off, MK_FP(xseg, xoff), len);
+    return wr_at(ctx, off, MK_FP(xseg, xoff), len);
 }
 
 static int io_xfill(void *ctx, u16 xoff, u8 val, u16 len)
@@ -110,12 +119,20 @@ FARTEXT int __far dosio_open(dos_file *f, const char *path, int writable, u32 *s
         _dos_close(f->handle);
         return 1;
     }
+    f->base = 0;
+    f->limit = 0;
     return 0;
 }
 
 FARTEXT void __far dosio_close(dos_file *f)
 {
     _dos_close(f->handle);
+}
+
+FARTEXT void __far dosio_window(dos_file *f, u32 off, u32 len)
+{
+    f->base = off;
+    f->limit = len;
 }
 
 FARTEXT void __far dosio_bind(dimg_io *io, dos_file *f)

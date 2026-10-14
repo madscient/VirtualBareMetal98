@@ -1,6 +1,6 @@
 /*
  * fdbios (INT 1Bh の意味論) の試験。ホスト OS 上と DOS 上 (int が 16 ビット) の両方で動かす。
- *   fdbtest <raw_2hd> <raw_640> <nfd0_ro> <nfd1_prot> <vfdd_fill>
+ *   fdbtest <raw_2hd> <raw_640> <nfd0_ro> <nfd1_prot> <vfdd_fill> <hdb_2hd> <d88_mix>
  * 引数は tools/mkimg.py が作る同名のイメージ。書き込みの試験で中身を変える。
  * 出力は 1 項目 1 行の "ok <名前>" / "FAIL <名前>" と、最終行の "END <失敗数> <項目数>"。
  */
@@ -10,9 +10,9 @@
 #include "fdbios.h"
 
 #define XFER_SIZE 0x10000UL
-#define NIMG 5
+#define NIMG 7
 #define CHUNK 1024
-enum { RAW_2HD, RAW_640, NFD0_RO, NFD1_PROT, VFDD_FILL };
+enum { RAW_2HD, RAW_640, NFD0_RO, NFD1_PROT, VFDD_FILL, HDB_2HD, D88_MIX };
 
 /*
  * 転送バッファ (xfer) と期待値 (want) は 64KB ずつ。DOS (gcc-ia16、small モデル) ではデータセグメントに入らないので
@@ -495,12 +495,98 @@ static void test_vfdd(void)
     check("read back the sector that was a fill byte", st == 0 && same(1024));
 }
 
+/* HDB (N88-BASIC の 2HD): トラック 0 の表だけ単密 128 バイト × 26、ほかは倍密 256 バイト × 26 */
+static void test_hdb(void)
+{
+    u32 n;
+    u8 st, r1;
+
+    fdb_init(&fb, 2);
+    fb.img[0] = &imgs[HDB_2HD];
+
+    check("FM track 0: read ID with the MFM bit: E0h", call(0x5A, 0x90, 0, 0, 0, 0, 0) == FDB_ST_NOAM);
+    st = call(0x1A, 0x90, 0, 0, 0, 0, 0);
+    r1 = out.dl;
+    check("FM track 0: read ID without the MFM bit: C=0 H=0 N=0, R in range",
+          st == 0 && out.cl == 0 && out.dh == 0 && out.ch == 0 && r1 >= 1 && r1 <= 26);
+    st = call(0x0A, 0x90, 0, 0, 0, 0, 0);
+    check("FM track 0: read ID again: next sector", st == 0 && out.dl == (u8)(r1 % 26 + 1));
+    n = 0;
+    for (r1 = 1; r1 <= 4; r1++)
+        n += sector_want(HDB_2HD, 0, 0, r1, 0, n);
+    st = call(0x16, 0x90, 0, 0, 1, 0, 512);
+    check("FM track 0: read four 128-byte sectors (the IPL load)", st == 0 && out.xfer == 512 && same(512));
+    check("FM track 0: read with N=1: C0h", call(0x16, 0x90, 0, 0, 1, 1, 256) == FDB_ST_NODATA);
+    n = sector_want(HDB_2HD, 0, 1, 1, 0, 0);
+    st = call(0x56, 0x90, 0, 1, 1, 1, 256);
+    check("track 0 head 1 is MFM 256 bytes", st == 0 && out.xfer == 256 && same(256));
+    st = call(0x5A, 0x90, 0, 1, 0, 0, 0);
+    check("track 0 head 1: read ID with the MFM bit: N=1", st == 0 && out.dh == 1 && out.ch == 1);
+    check("track 0 head 1: read ID without the MFM bit: E0h", call(0x1A, 0x90, 0, 1, 0, 0, 0) == FDB_ST_NOAM);
+    n = sector_want(HDB_2HD, 1, 0, 26, 0, 0);
+    st = call(0x56, 0x90, 1, 0, 26, 1, 256);
+    check("cylinder 1: last sector of the track", st == 0 && same(256));
+    n = sector_want(HDB_2HD, 76, 1, 26, 0, 0);
+    st = call(0x56, 0x90, 76, 1, 26, 1, 256);
+    check("last sector of the image (cylinder 76, head 1, R=26)", st == 0 && same(256));
+    check("beyond the image: E0h", call(0x56, 0x90, 77, 0, 1, 1, 256) == FDB_ST_NOAM);
+
+    fill_both(3, 1);
+    st = call(0x15, 0x90, 0, 0, 5, 0, 128);
+    check("write one FM sector", st == 0 && out.xfer == 128);
+    BUF_SET(XFER_AT(0), 0, 128);
+    st = call(0x16, 0x90, 0, 0, 5, 0, 128);
+    check("read back the FM sector", st == 0 && same(128));
+}
+
+/* D88 (tools/mkimg.py の d88_mix_disk): 単密のトラック、収録時のステータス、削除データ、扱えないトラック */
+static void test_d88(void)
+{
+    u32 n;
+    u8 st;
+
+    fdb_init(&fb, 2);
+    fb.img[0] = &imgs[D88_MIX];
+
+    check("sense: 2HD", call(0x84, 0x90, 0, 0, 0, 0, 0) == 0x09);
+    n = sector_want(D88_MIX, 0, 0, 26, 0, 0);
+    st = call(0x16, 0x90, 0, 0, 26, 0, 128);
+    check("FM sector on track 0 (density 40h)", st == 0 && out.xfer == 128 && same(128));
+    check("FM track: read ID with the MFM bit: E0h", call(0x5A, 0x90, 0, 0, 0, 0, 0) == FDB_ST_NOAM);
+    n = sector_want(D88_MIX, 0, 1, 1, 0, 0);
+    n += sector_want(D88_MIX, 0, 1, 2, 0, n);
+    st = call(0x56, 0x90, 0, 1, 1, 3, 4096);
+    check("recorded status B0h: data of the bad sector is transferred, then B0h", st == FDB_ST_DATACRC && out.xfer == 2048 && same(2048));
+    n = sector_want(D88_MIX, 0, 1, 3, 0, 0);
+    st = call(0x56, 0x90, 0, 1, 3, 3, 1024);
+    check("deleted data with recorded status 10h: read normally (status below 20h)", st == 0 && out.xfer == 1024 && same(n));
+    check("track whose data length does not match N: E0h", call(0x56, 0x90, 1, 0, 1, 3, 1024) == FDB_ST_NOAM);
+    check("track with too many sectors to handle: E0h", call(0x16, 0x90, 1, 1, 1, 0, 128) == FDB_ST_NOAM);
+    check("track absent from the table: E0h", call(0x56, 0x90, 2, 0, 1, 3, 1024) == FDB_ST_NOAM);
+    check("read ID on an absent track: E0h", call(0x5A, 0x90, 2, 1, 0, 0, 0) == FDB_ST_NOAM);
+    n = sector_want(D88_MIX, 3, 0, 8, 0, 0);
+    st = call(0x56, 0x90, 3, 0, 8, 3, 1024);
+    check("track placed first in the file but third in the table is found by the table", st == 0 && same(n));
+    st = call(0x5A, 0x90, 3, 1, 0, 0, 0);
+    check("read ID on a track with mixed N: first ID (N=2)", st == 0 && out.dl == 1 && out.ch == 2);
+    st = call(0x4A, 0x90, 3, 1, 0, 0, 0);
+    check("read ID: second ID (N=1)", st == 0 && out.dl == 2 && out.ch == 1);
+    check("last cylinder of the image (81)", call(0x56, 0x90, 81, 1, 1, 3, 1024) == 0);
+
+    fill_both(11, 2);
+    st = call(0x55, 0x90, 3, 0, 2, 3, 1024);
+    check("write one sector", st == 0 && out.xfer == 1024);
+    BUF_SET(XFER_AT(0), 0, 1024);
+    st = call(0x56, 0x90, 3, 0, 2, 3, 1024);
+    check("read back the written sector", st == 0 && same(1024));
+}
+
 int main(int argc, char **argv)
 {
     int i;
 
     if (argc != NIMG + 1) {
-        fprintf(stderr, "usage: fdbtest <raw_2hd> <raw_640> <nfd0_ro> <nfd1_prot> <vfdd_fill>\n");
+        fprintf(stderr, "usage: fdbtest <raw_2hd> <raw_640> <nfd0_ro> <nfd1_prot> <vfdd_fill> <hdb_2hd> <d88_mix>\n");
         return 1;
     }
 #ifdef __ia16__
@@ -523,11 +609,15 @@ int main(int argc, char **argv)
     test_protected();
     test_nfd1();
     test_vfdd();
+    test_hdb();
+    test_d88();
 #if defined(__ia16__) && defined(IMG_IN_MEMORY)
     check("in memory: the RAW images were served from their copies (still held, no reads from the files)",
           caches[RAW_2HD].have && caches[RAW_2HD].file_reads == 0 && caches[RAW_640].have && caches[RAW_640].file_reads == 0);
     check("in memory: the NFD images too (the ID tables are read from the copies)",
           caches[NFD0_RO].have && caches[NFD0_RO].file_reads == 0 && caches[NFD1_PROT].have && caches[NFD1_PROT].file_reads == 0);
+    check("in memory: the HDB and D88 images too (the D88 sector headers are read from the copy)",
+          caches[HDB_2HD].have && caches[HDB_2HD].file_reads == 0 && caches[D88_MIX].have && caches[D88_MIX].file_reads == 0);
     check("in memory: the write that made the FDD image grow dropped its copy",
           !caches[VFDD_FILL].have);
 #endif

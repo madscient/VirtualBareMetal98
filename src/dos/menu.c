@@ -9,11 +9,13 @@
 #include <dos.h>
 #include <direct.h>
 #include "vbm.h"
+#include "dimg.h"
 #include "ui.h"
 #include "menu.h"
 #include "ui_text.h"
 
 #define MAX_FILES 200
+#define MAX_DISKS 32
 #define LIST_TOP  3
 #define LIST_ROWS 19
 
@@ -26,9 +28,10 @@ static struct entry entries[MAX_FILES];
 static int nentries;
 static char msg[128];
 static char cwd[80];
+static char dnames[MAX_DISKS][DIMG_D88_NAME];   /* 選んだ D88 に連なるディスクの名前 */
 
 /* 一覧に出す拡張子 (spec.md)。MS-DOS のファイル名は大文字 */
-static const char *const image_ext[] = { ".FDI", ".NFD", ".FDD", ".HDM", ".IMG" };
+static const char *const image_ext[] = { ".FDI", ".NFD", ".FDD", ".HDM", ".IMG", ".D88", ".HDB" };
 
 static FARTEXT int __far is_image(const char *name)
 {
@@ -116,11 +119,56 @@ static FARTEXT void __far draw_list(int unit, int all, int cur, int top)
     ui_puts(23, 2, UI_CYAN, all ? T_SEL_HELP_ALL : T_SEL_HELP_IMG);
 }
 
+/*
+ * D88 のファイルに連なるディスク (count 枚。名前は dnames に MAX_DISKS 枚まで) から 1 枚を選ばせる。
+ * 選んだ番号 (1 から)、取り消しなら 0。MAX_DISKS 枚目より後ろはコマンドラインの番号でしか選べない
+ */
+static FARTEXT u16 __far index_select(const char *name, u16 count)
+{
+    u16 shown = count < MAX_DISKS ? count : MAX_DISKS, cur = 0, top = 0, i, k;
+    u8 sc, ch, row, attr;
+
+    for (;;) {
+        if (cur < top)
+            top = cur;
+        if (cur >= top + LIST_ROWS)
+            top = (u16)(cur - LIST_ROWS + 1);
+        ui_fill(0, 0, UI_COLS, UI_ROWS, UI_WHITE);
+        sprintf(msg, T_IDX_TITLE, name, count);
+        ui_puts(0, 2, UI_YELLOW, msg);
+        for (i = top; i < top + LIST_ROWS && i < shown; i++) {
+            attr = (u8)(i == cur ? (UI_WHITE | UI_REV) : UI_WHITE);
+            row = (u8)(LIST_TOP + i - top);
+            sprintf(msg, "%2u. %s", i + 1, dnames[i]);
+            ui_puts(row, 4, attr, msg);
+        }
+        ui_puts(23, 2, UI_CYAN, T_IDX_HELP);
+        k = ui_getkey();
+        sc = UI_KEY_SC(k);
+        ch = UI_KEY_CH(k);
+        if (sc == UI_SC_ESC || ch == 0x1B)
+            return 0;
+        if (sc == UI_SC_UP) {
+            if (cur > 0)
+                cur--;
+        } else if (sc == UI_SC_DOWN) {
+            if (cur + 1 < shown)
+                cur++;
+        } else if (sc == UI_SC_ROLLUP) {
+            cur = (u16)(cur + LIST_ROWS < shown ? cur + LIST_ROWS : shown - 1);
+        } else if (sc == UI_SC_ROLLDOWN) {
+            cur = (u16)(cur >= LIST_ROWS ? cur - LIST_ROWS : 0);
+        } else if (sc == UI_SC_RETURN || ch == 0x0D) {
+            return (u16)(cur + 1);
+        }
+    }
+}
+
 /* ドライブ unit のイメージを選ばせる。入れ替えか取り出しをしたら 1 */
 static FARTEXT int __far disk_select(int unit)
 {
     int all = 0, cur = 0, top = 0, rescan = 1;
-    u16 k;
+    u16 k, count, idx;
     u8 sc, ch;
 
     for (;;) {
@@ -167,8 +215,15 @@ static FARTEXT int __far disk_select(int unit)
                     cur = top = 0;
                     rescan = 1;
                 }
-            } else if (vm_mount(unit, entries[cur - 1].name, 1) == 0) {
-                sprintf(msg, T_MSG_MOUNTED, unit, entries[cur - 1].name);
+                continue;
+            }
+            /* 複数ディスクの D88 は、ファイルのあとにディスクを選ばせる (spec.md) */
+            count = vm_disk_list(entries[cur - 1].name, dnames[0], MAX_DISKS);
+            idx = 1;
+            if (count > 1 && !(idx = index_select(entries[cur - 1].name, count)))
+                continue;
+            if (vm_mount(unit, entries[cur - 1].name, idx, 1) == 0) {
+                sprintf(msg, T_MSG_MOUNTED, unit, vm_drive_name(unit));
                 notice(msg);
                 return 1;
             } else {

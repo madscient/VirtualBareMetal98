@@ -17,6 +17,9 @@ MFM, DDAM, FILL = 1, 2, 4
 NFD0_TRACKS, NFD0_SPT = 163, 26
 NFD1_TRACKS = 164
 VFDD_TRACKS, VFDD_SPT, VFDD_HDR = 160, 26, 0xC3FC
+D88_TRACKS = 164
+D88_TYPE_2D, D88_TYPE_2DD, D88_TYPE_2HD = 0x00, 0x10, 0x20
+HDB_SIZE = 26 * 128 + 153 * 26 * 256
 
 
 def pattern(key, size):
@@ -34,11 +37,12 @@ def crc(data):
 
 class Sect:
     def __init__(self, c, h, r, n, key, mfm=1, ddam=0, status=0, st=(0, 0, 0),
-                 pda=0x90, copies=1, fill=None, nodata_ptr=0xFFFFFFFF, slot=None):
+                 pda=0x90, copies=1, fill=None, nodata_ptr=0xFFFFFFFF, slot=None, dlen=None):
         self.c, self.h, self.r, self.n = c, h, r, n
         self.size = 128 << n
         self.mfm, self.ddam, self.status, self.st, self.pda = mfm, ddam, status, st, pda
         self.fill, self.nodata_ptr, self.slot = fill, nodata_ptr, slot
+        self.dlen = self.size if dlen is None else dlen   # D88 のデータ長の項目 (N と違う値を試すため)
         if fill is None:
             self.copies = [pattern('%s#%d' % (key, i), self.size) for i in range(copies)]
         else:
@@ -106,8 +110,21 @@ def write_raw(disk, cyls, heads, media, fmt='RAW', base=b''):
             lines.append('T %d %d %d 0' % (cyl, head, len(trk.sects)))
             for s in trk.sects:
                 blob += s.copies[0]
-                lines.append(s_line(s, MFM, 0, media, [crc(s.copies[0])]))
+                lines.append(s_line(s, s.mfm * MFM, 0, media, [crc(s.copies[0])]))
     return bytes(blob), lines
+
+
+def hdb_disk(key):
+    """BKDSK の HDB: N88-BASIC の 2HD。トラック 0 (表) だけ単密 128 バイト × 26、ほかは倍密 256 バイト × 26"""
+    disk = uniform(key, 77, 2, 26, 1)
+    disk[0] = Track([Sect(0, 0, r, 0, '%s/0/0/%d' % (key, r), mfm=0) for r in range(1, 27)])
+    return disk
+
+
+def write_hdb(disk):
+    blob, lines = write_raw(disk, 77, 2, 0x90, 'HDB')
+    assert len(blob) == HDB_SIZE
+    return blob, lines
 
 
 def fdi_header(fddtype, hsize, datasize, secsize, spt, heads, cyls):
@@ -228,14 +245,94 @@ def write_vfdd(disk, media, hd=1, protect=0, reverse=True, version=b'VFD1.00'):
     return bytes(blob), lines
 
 
+# ---------------------------------------------------------------- D88
+
+def d88_disk(disk, name, dtype, protect=0, order=None, old_table=False):
+    """1 枚ぶんのバイト列と、読んだときの期待の行。disk の値が None のトラックは位置表に載せない。
+    order はデータを置くトラックの順 (省略時は番号順。位置表の順に頼らないことを見る)。
+    old_table は位置表が 160 個 (ヘッダ 2A0h) の古い版"""
+    ntbl = 160 if old_table else D88_TRACKS
+    hdr_len = 0x20 + ntbl * 4
+    blocks, lines = {}, []
+    for idx, trk in disk.items():
+        if trk is None:
+            continue
+        # セクタのないトラックは表せない (セクタ数はセクタのヘッダの項目)。無いトラックは位置表を 0 にする
+        assert idx < ntbl and trk.sects
+        tb, tl = bytearray(), []
+        for s in trk.sects:
+            tb += bytes([s.c, s.h, s.r, s.n]) + struct.pack('<H', len(trk.sects))
+            tb += bytes([0x40 if not s.mfm else 0x00, 0x10 if s.ddam else 0x00, s.status]) + bytes(5)
+            tb += struct.pack('<H', s.dlen) + s.copies[0][:s.dlen].ljust(s.dlen, b'\0')
+            tl.append(s_line(s, s.mfm * MFM | s.ddam * DDAM, 0, 0, [crc(s.copies[0])]))
+        blocks[idx] = bytes(tb)
+        if not tl:
+            continue
+        if len(trk.sects) > 64 or any(s.dlen != s.size for s in trk.sects):
+            lines.append((idx, ['T %d %d ERROR UNSUPPORTED' % (idx >> 1, idx & 1)]))
+        else:
+            lines.append((idx, ['T %d %d %d 0' % (idx >> 1, idx & 1, len(trk.sects))] + tl))
+    table, data = [0] * ntbl, bytearray()
+    for idx in (order or sorted(blocks)):
+        table[idx] = hdr_len + len(data)
+        data += blocks[idx]
+    size = hdr_len + len(data)
+    hdr = name.encode('ascii').ljust(16, b'\0') + b'\0' + bytes(9) + bytes([protect, dtype]) + struct.pack('<I', size)
+    hdr += struct.pack('<%dI' % ntbl, *table)
+    assert len(hdr) == hdr_len
+    maxidx = max(blocks) if blocks else -1
+    return bytes(hdr + data), maxidx, [l for _, ls in sorted(lines) for l in ls]
+
+
+def write_d88(disks, index=1, media=None):
+    """disks は (disk, 名前, 種別, 書き込み禁止, データの順, 古い位置表) の列。index 番目 (1 から) を読んだ期待を返す。
+    media は読み手が種別と先頭トラックから決める媒体 (省略時は種別から)"""
+    blob, lines = bytearray(), None
+    for i, (disk, name, dtype, protect, order, old) in enumerate(disks, 1):
+        b, maxidx, tl = d88_disk(disk, name, dtype, protect, order, old)
+        blob += b
+        if i == index:
+            m = media or {D88_TYPE_2D: 0x50, D88_TYPE_2DD: 0x10, D88_TYPE_2HD: 0x90}[dtype]
+            tl = [l.replace('PDA=00', 'PDA=%02X' % m) for l in tl]
+            lines = ['DISKS %d %d %s' % (len(disks), index, name),
+                     img_line('D88', m, (maxidx >> 1) + 1, 2, int(bool(protect)))] + tl
+    return bytes(blob), lines
+
+
+def one_d88(disk, name, dtype, protect=0, order=None, old=False, media=None):
+    return write_d88([(disk, name, dtype, protect, order, old)], 1, media)
+
+
+def d88_mix_disk():
+    k = 'dm'
+    return {
+        # トラック 0 (表) は単密 128 バイト × 26 (N88-BASIC の 2HD の形)
+        0: Track([Sect(0, 0, r, 0, '%s/0/%d' % (k, r), mfm=0) for r in range(1, 27)]),
+        1: Track([
+            Sect(0, 1, 1, 3, k + '/1/a'),
+            Sect(0, 1, 2, 3, k + '/1/b', status=0xB0),
+            Sect(0, 1, 3, 3, k + '/1/c', ddam=1, status=0x10),
+            Sect(0, 1, 4, 3, k + '/1/d'),
+        ]),
+        # データ長が N と合わないセクタ: そのトラックは扱わない
+        2: Track([Sect(1, 0, 1, 3, k + '/2/a', dlen=512), Sect(1, 0, 2, 3, k + '/2/b')]),
+        3: Track([Sect(1, 1, r, 0, '%s/3/%d' % (k, r)) for r in range(1, 70)]),
+        # 4 と 5 は位置表が 0 (トラックなし)
+        6: std_track(k, 3, 0, 8, 3),
+        7: Track([Sect(3, 1, 1, 2, k + '/7/a'), Sect(3, 1, 2, 1, k + '/7/b'), Sect(3, 1, 3, 3, k + '/7/c')]),
+        163: Track([Sect(81, 1, 1, 3, k + '/163/a')]),
+    }
+
+
 # ---------------------------------------------------------------- 検証ケース
 
 class Case:
     """rw: 'ok' = 書き込み試験が通る / 'protected' = 書き込み禁止で拒否される / None = 試験しない
     after: 書き込み試験の後に期待するダンプ。None なら試験の前後でファイルが一致すること"""
 
-    def __init__(self, name, blob, lines=None, error=None, rw=None, after=None):
+    def __init__(self, name, blob, lines=None, error=None, rw=None, after=None, index=None):
         self.name, self.blob, self.lines, self.error, self.rw, self.after = name, blob, lines, error, rw, after
+        self.index = index      # D88 のファイルの中のディスクの番号 (1 から)。None なら指定しない
 
 
 def after_rw(lines, fmt):
@@ -388,6 +485,37 @@ def build_cases():
     blob, lines = write_vfdd(uniform('ve', 4, 2, 8, 3), 0x90, version=b'VFD1.01')
     cases.append(Case('vfdd_v101.fdd', blob, lines, rw='ok'))
 
+    blob, lines = one_d88(uniform('d8', 77, 2, 8, 3), 'DOS33C_1', D88_TYPE_2HD)
+    cases.append(Case('d88_2hd.d88', blob, lines, rw='ok'))
+    blob, lines = one_d88(uniform('d8b', 80, 2, 8, 2), 'TWO DD', D88_TYPE_2DD)
+    cases.append(Case('d88_2dd.d88', blob, lines, rw='ok'))
+    blob, lines = one_d88(uniform('d8c', 40, 2, 16, 1), 'SIXTEEN CHARS!!!', D88_TYPE_2D)
+    cases.append(Case('d88_2d.d88', blob, lines, rw='ok'))
+    # 1.44MB を表す種別はないので、2HD で先頭トラックが 512 バイト × 18 以上なら 1.44MB と見なす
+    blob, lines = one_d88(uniform('d8d', 80, 2, 18, 2), '144', D88_TYPE_2HD, media=0x30)
+    cases.append(Case('d88_144.d88', blob, lines, rw='ok'))
+    # 位置表の順と逆にデータを置く。読み手が位置表の値だけを頼ることを見る
+    blob, lines = one_d88(d88_mix_disk(), 'MIX', D88_TYPE_2HD, order=[163, 7, 6, 3, 2, 1, 0])
+    cases.append(Case('d88_mix.d88', blob, lines, rw='ok'))
+    blob, lines = one_d88(uniform('d8r', 4, 2, 8, 3), 'RO', D88_TYPE_2HD, protect=0x10)
+    cases.append(Case('d88_ro.d88', blob, lines, rw='protected'))
+    blob, lines = one_d88(uniform('d8o', 4, 2, 8, 3), 'OLD160', D88_TYPE_2HD, old=True)
+    cases.append(Case('d88_old.d88', blob, lines, rw='ok'))
+    # 3 枚入り。それぞれ中身も種別も違う。番号で 1 枚ずつ開き、4 枚目は無い
+    multi = [(uniform('m1', 4, 2, 8, 3), 'FIRST', D88_TYPE_2HD, 0, None, False),
+             (uniform('m2', 4, 2, 9, 2), 'SECOND', D88_TYPE_2DD, 0x10, None, False),
+             (uniform('m3', 3, 2, 8, 3), 'THIRD', D88_TYPE_2HD, 0, None, False)]
+    blob, lines = write_d88(multi, 1)
+    cases.append(Case('d88_m1.d88', blob, lines, rw='ok'))
+    blob, lines = write_d88(multi, 2)
+    cases.append(Case('d88_m2.d88', blob, lines, rw='protected', index=2))
+    blob, lines = write_d88(multi, 3)
+    cases.append(Case('d88_m3.d88', blob, lines, rw='ok', index=3))
+    cases.append(Case('d88_m4.d88', blob, error='PARAM', index=4))
+
+    blob, lines = write_hdb(hdb_disk('hb'))
+    cases.append(Case('hdb_2hd.hdb', blob, lines, rw='ok'))
+
     # ---- 開けてはいけないもの
     cases.append(Case('bad_empty.bin', b'', error='FORMAT'))
     cases.append(Case('bad_size.bin', pattern('bad', 123456), error='FORMAT'))
@@ -403,6 +531,14 @@ def build_cases():
     cases.append(Case('bad_nfd1_data.nfd', n1[:-1], error='FORMAT'))
     cases.append(Case('bad_vfdd_short.fdd', write_vfdd(uniform('bv', 2, 2, 8, 3), 0x90)[0][:VFDD_HDR - 1],
                       error='FORMAT'))
+    d8 = bytearray(one_d88(uniform('bd', 4, 2, 8, 3), 'BAD', D88_TYPE_2HD)[0])
+    cases.append(Case('bad_d88_size.d88', bytes(d8[:-1]), error='FORMAT'))
+    d8t = bytearray(d8)
+    d8t[0x20 + 3 * 4:0x20 + 4 * 4] = struct.pack('<I', len(d8) + 100)
+    cases.append(Case('bad_d88_tbl.d88', bytes(d8t), error='FORMAT'))
+    d8t = bytearray(d8)
+    d8t[0x1A] = 0x20
+    cases.append(Case('bad_d88_flag.d88', bytes(d8t), error='FORMAT'))
 
     # ---- 形式としては正しいが、扱える範囲の外
     cases.append(Case('unsup_fdi_spt.fdi',

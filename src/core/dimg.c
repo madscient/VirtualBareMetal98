@@ -23,6 +23,18 @@
 
 #define FDI_HDR_FIELDS    32
 
+#define D88_HDR           0x2B0UL
+#define D88_HDR_OLD       0x2A0UL   /* 位置表が 160 個の古い版 (推測。disk-image-formats.md) */
+#define D88_TRACKS        164
+#define D88_TRACKS_OLD    160
+#define D88_TBL           0x20
+#define D88_TBL_HALF      (D88_TRACKS / 2)
+#define D88_OFS_PROTECT   0x1A
+#define D88_OFS_TYPE      0x1B
+#define D88_OFS_SIZE      0x1C
+#define D88_SEC_HDR       16
+#define D88_DENS_FM       0x40
+
 #define CHUNK_IDS         26
 
 /* マウントとトラック読込で使い回す。この層は再入しない前提 */
@@ -46,9 +58,14 @@ static FARTEXT void __far st32(u8 *p, u32 v)
     p[3] = (u8)(v >> 24);
 }
 
+static FARTEXT int __far rdio(const dimg_io *io, u32 off, void *buf, u16 len)
+{
+    return io->read(io->ctx, off, buf, len) ? DIMG_E_IO : DIMG_OK;
+}
+
 static FARTEXT int __far rd(dimg *img, u32 off, void *buf, u16 len)
 {
-    return img->io->read(img->io->ctx, off, buf, len) ? DIMG_E_IO : DIMG_OK;
+    return rdio(img->io, off, buf, len);
 }
 
 static FARTEXT int __far wr(dimg *img, u32 off, const void *buf, u16 len)
@@ -75,15 +92,21 @@ static FARTEXT u8 __far nfd_media(u8 pda)
 
 /* ---------------------------------------------------------------- RAW */
 
+/*
+ * HDB (BKDSK が作る N88-BASIC の 2HD) は、トラック 0 だけ単密 128 バイト × 26 で、残りは倍密 256 バイト × 26。
+ * ほかの RAW と同じく、トラック 0 から順に隙間なく並ぶ (disk-image-formats.md)
+ */
 static const struct {
     u32 size;
-    u8  cyls, spt, n, media;
+    u8  cyls, spt, n, media, fmt;
+    u8  t0_spt, t0_n, t0_mfm;   /* トラック 0 だけ違うとき。t0_spt が 0 なら全トラック同じ */
 } raw_tbl[] = {
-    { 1261568UL, 77,  8, 3, DIMG_MEDIA_2HD },
-    { 1228800UL, 80, 15, 2, DIMG_MEDIA_2HD },
-    { 1474560UL, 80, 18, 2, DIMG_MEDIA_144 },
-    {  737280UL, 80,  9, 2, DIMG_MEDIA_2DD },
-    {  655360UL, 80,  8, 2, DIMG_MEDIA_2DD }
+    { 1261568UL, 77,  8, 3, DIMG_MEDIA_2HD, DIMG_FMT_RAW, 0, 0, 0 },
+    { 1228800UL, 80, 15, 2, DIMG_MEDIA_2HD, DIMG_FMT_RAW, 0, 0, 0 },
+    { 1474560UL, 80, 18, 2, DIMG_MEDIA_144, DIMG_FMT_RAW, 0, 0, 0 },
+    {  737280UL, 80,  9, 2, DIMG_MEDIA_2DD, DIMG_FMT_RAW, 0, 0, 0 },
+    {  655360UL, 80,  8, 2, DIMG_MEDIA_2DD, DIMG_FMT_RAW, 0, 0, 0 },
+    { 1021696UL, 77, 26, 1, DIMG_MEDIA_2HD, DIMG_FMT_HDB, 26, 0, 0 }
 };
 
 static FARTEXT int __far mount_raw(dimg *img)
@@ -92,12 +115,15 @@ static FARTEXT int __far mount_raw(dimg *img)
 
     for (i = 0; i < sizeof raw_tbl / sizeof raw_tbl[0]; i++) {
         if (raw_tbl[i].size == img->fsize) {
-            img->fmt = DIMG_FMT_RAW;
+            img->fmt = raw_tbl[i].fmt;
             img->media = raw_tbl[i].media;
             img->cyls = raw_tbl[i].cyls;
             img->heads = 2;
             img->u_spt = raw_tbl[i].spt;
             img->u_n = raw_tbl[i].n;
+            img->u_t0spt = raw_tbl[i].t0_spt;
+            img->u_t0n = raw_tbl[i].t0_n;
+            img->u_t0mfm = raw_tbl[i].t0_mfm;
             img->u_base = 0;
             return DIMG_OK;
         }
@@ -166,24 +192,35 @@ static FARTEXT int __far mount_fdi(dimg *img)
 static FARTEXT void __far track_uniform(dimg *img, dimg_track *t)
 {
     dimg_sect *s;
-    u32 off;
-    u8  i;
+    u32 off = img->u_base;
+    u16 trk;
+    u8  i, spt = img->u_spt, n = img->u_n, flags = DIMG_SF_MFM;
 
     if (t->cyl >= img->cyls || t->head >= img->heads)
         return;
-    off = ((u32)t->cyl * img->heads + t->head) * img->u_spt;
-    off = img->u_base + (off << (7 + img->u_n));
-    for (i = 0; i < img->u_spt; i++) {
+    trk = (u16)(t->cyl * img->heads + t->head);
+    if (img->u_t0spt) {
+        if (trk == 0) {
+            spt = img->u_t0spt;
+            n = img->u_t0n;
+            flags = img->u_t0mfm ? DIMG_SF_MFM : 0;
+        } else {
+            off += (u32)img->u_t0spt << (7 + img->u_t0n);
+            trk--;
+        }
+    }
+    off += ((u32)trk * img->u_spt) << (7 + img->u_n);
+    for (i = 0; i < spt; i++) {
         s = &t->sect[t->nsect++];
         s->c = t->cyl;
         s->h = t->head;
         s->r = (u8)(i + 1);
-        s->n = img->u_n;
-        s->flags = DIMG_SF_MFM;
+        s->n = n;
+        s->flags = flags;
         s->pda = img->media;
         s->slot = i;
         s->off = off;
-        off += dimg_sect_size(img->u_n);
+        off += dimg_sect_size(n);
     }
 }
 
@@ -561,6 +598,194 @@ static FARTEXT int __far vfdd_materialize(dimg *img, dimg_sect *s, u16 xoff, u16
     return DIMG_OK;
 }
 
+/* ---------------------------------------------------------------- D88 */
+
+struct d88_head {
+    u32 size;
+    u32 hdr_end;        /* 位置表の終わり = データの始まり (2B0h。古い版は 2A0h) */
+    u8  prot, type;
+};
+
+/*
+ * pos から始まるディスクのヘッダを読んで検査する。識別子がないので、フラグの値、ディスクの大きさ、位置表の値
+ * (ヘッダの後ろからディスクの中に収まる)、先頭のトラックの最初のセクタのヘッダで判定する。
+ * name は DIMG_D88_NAME バイト。tbl があれば位置表 (ディスクの先頭からの位置) を入れる
+ */
+static FARTEXT int __far d88_probe(const dimg_io *io, u32 fsize, u32 pos, struct d88_head *hd, char *name, u32 *tbl)
+{
+    u32 p, first = 0;
+    u16 t, i, nsec, dlen;
+    int rc;
+
+    if (pos > fsize || fsize - pos < D88_HDR_OLD)
+        return DIMG_E_FORMAT;
+    rc = rdio(io, pos, scratch, D88_TBL);
+    if (rc)
+        return rc;
+    hd->prot = scratch[D88_OFS_PROTECT];
+    hd->type = scratch[D88_OFS_TYPE];
+    hd->size = ld32(scratch + D88_OFS_SIZE);
+    if ((hd->prot != 0 && hd->prot != 0x10) || (hd->type >> 4) > 2)
+        return DIMG_E_FORMAT;
+    if (hd->size < D88_HDR_OLD || hd->size > fsize - pos)
+        return DIMG_E_FORMAT;
+    if (name) {
+        memcpy(name, scratch, DIMG_D88_NAME - 1);
+        name[DIMG_D88_NAME - 1] = 0;
+    }
+
+    hd->hdr_end = D88_HDR;
+    for (t = 0; t < D88_TRACKS; t = (u16)(t + D88_TBL_HALF)) {
+        rc = rdio(io, pos + D88_TBL + (u32)t * 4, scratch, D88_TBL_HALF * 4);
+        if (rc)
+            return rc;
+        for (i = 0; i < D88_TBL_HALF; i++) {
+            p = ld32(scratch + i * 4);
+            /* 2A0h を指す項目は、位置表が 160 個の版でしか起きない (164 個の版では表の中)。その版では 160 個目から
+               先は最初のセクタのヘッダの中身なので、項目として見ない */
+            if (p == D88_HDR_OLD && t + i < D88_TRACKS_OLD)
+                hd->hdr_end = D88_HDR_OLD;
+            if (hd->hdr_end == D88_HDR_OLD && t + i >= D88_TRACKS_OLD)
+                p = 0;
+            if (tbl)
+                tbl[t + i] = p;
+            if (p == 0)
+                continue;
+            if (p < hd->hdr_end || p > hd->size - D88_SEC_HDR)
+                return DIMG_E_FORMAT;
+            if (!first || p < first)
+                first = p;
+        }
+    }
+    if (first) {
+        rc = rdio(io, pos + first, scratch, D88_SEC_HDR);
+        if (rc)
+            return rc;
+        nsec = ld16(scratch + 4);
+        dlen = ld16(scratch + 14);
+        if (nsec && (u32)D88_SEC_HDR + dlen > hd->size - first)
+            return DIMG_E_FORMAT;
+    }
+    return DIMG_OK;
+}
+
+static FARTEXT int __far mount_d88(dimg *img)
+{
+    struct d88_head hd;
+    int rc, maxtrk = -1;
+    u16 t, nsec = 0;
+    u32 first = 0;
+    u8  n = 0;
+
+    rc = d88_probe(img->io, img->fsize, 0, &hd, 0, img->trk_hdr);
+    if (rc)
+        return rc;
+    for (t = 0; t < D88_TRACKS; t++)
+        if (img->trk_hdr[t]) {
+            maxtrk = (int)t;
+            if (!first)
+                first = img->trk_hdr[t];
+        }
+    if (first) {
+        rc = rd(img, first, scratch, D88_SEC_HDR);
+        if (rc)
+            return rc;
+        nsec = ld16(scratch + 4);
+        n = scratch[3];
+    }
+    img->fmt = DIMG_FMT_D88;
+    img->readonly = hd.prot != 0;
+    img->heads = 2;
+    img->cyls = (u8)(maxtrk < 0 ? 0 : (maxtrk >> 1) + 1);
+    switch (hd.type >> 4) {
+    case 0:
+        img->media = DIMG_MEDIA_2D;
+        break;
+    case 1:
+        img->media = DIMG_MEDIA_2DD;
+        break;
+    default:
+        /* 1.44MB を表す種別がないので、FDD 形式と同じ推定 (disk-image-formats.md) */
+        img->media = (n == 2 && nsec >= 18) ? DIMG_MEDIA_144 : DIMG_MEDIA_2HD;
+        break;
+    }
+    return DIMG_OK;
+}
+
+/* セクタのヘッダ 16 バイトにデータが続く形を、最初のヘッダにあるセクタ数ぶん順にたどる */
+static FARTEXT int __far track_d88(dimg *img, dimg_track *t)
+{
+    const u8 *e = scratch;
+    dimg_sect *s;
+    u32 pos;
+    u16 idx = (u16)(t->cyl * 2 + t->head);
+    u16 k, nsec, dlen;
+    int rc;
+
+    if (idx >= D88_TRACKS || img->trk_hdr[idx] == 0)
+        return DIMG_OK;
+    pos = img->trk_hdr[idx];
+    rc = rd(img, pos, scratch, D88_SEC_HDR);
+    if (rc)
+        return rc;
+    nsec = ld16(scratch + 4);
+    if (nsec > DIMG_MAX_SPT)
+        return DIMG_E_UNSUPPORTED;
+    for (k = 0; k < nsec; k++) {
+        if (k) {
+            if (pos > img->fsize - D88_SEC_HDR)
+                return DIMG_E_FORMAT;
+            rc = rd(img, pos, scratch, D88_SEC_HDR);
+            if (rc)
+                return rc;
+        }
+        dlen = ld16(e + 14);
+        /* データ長が N と合わないセクタの読み書きの長さは決められないので、そのトラックは扱わない */
+        if (e[3] > DIMG_MAX_N || dlen != dimg_sect_size(e[3]))
+            return DIMG_E_UNSUPPORTED;
+        if ((u32)D88_SEC_HDR + dlen > img->fsize - pos)
+            return DIMG_E_FORMAT;
+        s = &t->sect[t->nsect++];
+        s->c = e[0];
+        s->h = e[1];
+        s->r = e[2];
+        s->n = e[3];
+        s->flags = (u8)(((e[6] & D88_DENS_FM) ? 0 : DIMG_SF_MFM) | (e[7] ? DIMG_SF_DDAM : 0));
+        s->status = e[8];
+        s->pda = img->media;
+        s->slot = (u8)k;
+        s->off = pos + D88_SEC_HDR;
+        pos += (u32)D88_SEC_HDR + dlen;
+    }
+    return DIMG_OK;
+}
+
+FARTEXT int __far dimg_d88_find(const dimg_io *io, u32 fsize, u16 index, u32 *off, u32 *len,
+                                char *name, u16 *count)
+{
+    struct d88_head hd;
+    char nm[DIMG_D88_NAME];
+    u32 pos = 0;
+    u16 n = 0;
+
+    *count = 0;
+    while (pos < fsize && n < 0xFFFF) {
+        if (d88_probe(io, fsize, pos, &hd, nm, 0))
+            break;
+        if (n == index) {
+            *off = pos;
+            *len = hd.size;
+            memcpy(name, nm, DIMG_D88_NAME);
+        }
+        n++;
+        pos += hd.size;
+    }
+    *count = n;
+    if (n == 0)
+        return DIMG_E_FORMAT;
+    return index < n ? DIMG_OK : DIMG_E_PARAM;
+}
+
 /* ------------------------------------------------------------- 共通部 */
 
 FARTEXT int __far dimg_mount(dimg *img, const dimg_io *io, u32 fsize)
@@ -582,6 +807,13 @@ FARTEXT int __far dimg_mount(dimg *img, const dimg_io *io, u32 fsize)
         return mount_nfd1(img);
     if (memcmp(scratch, "VFD1.", 5) == 0)
         return mount_vfdd(img);
+    /* D88 と FDI は識別子がなく、中身の整合で判定する。RAW は大きさだけなので最後 */
+    rc = mount_d88(img);
+    if (rc != DIMG_E_FORMAT)
+        return rc;
+    rc = rd(img, 0, scratch, FDI_HDR_FIELDS);
+    if (rc)
+        return rc;
     rc = mount_fdi(img);
     if (rc != DIMG_E_FORMAT)
         return rc;
@@ -606,7 +838,11 @@ FARTEXT int __far dimg_get_track(dimg *img, u8 cyl, u8 head, const dimg_track **
         switch (img->fmt) {
         case DIMG_FMT_RAW:
         case DIMG_FMT_FDI:
+        case DIMG_FMT_HDB:
             track_uniform(img, t);
+            break;
+        case DIMG_FMT_D88:
+            rc = track_d88(img, t);
             break;
         case DIMG_FMT_NFD0:
             rc = track_nfd0(img, t);

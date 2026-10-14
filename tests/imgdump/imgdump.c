@@ -1,10 +1,12 @@
 /*
  * dimg (ディスクイメージ層) の試験プログラム。ホスト OS と DOS の両方でビルドする。
- *   imgdump dump <image>    マウントして全トラックの内容を正規形で出力する
- *   imgdump rwtest <image>  全セクタを反転して書き、読み戻して確かめ、元に戻す
+ *   imgdump dump <image> [<n>]    マウントして全トラックの内容を正規形で出力する
+ *   imgdump rwtest <image> [<n>]  全セクタを反転して書き、読み戻して確かめ、元に戻す
+ * <n> は D88 のファイルに連なるディスクの番号 (1 から。省略時は 1)。D88 なら先頭に "DISKS <枚数> <n> <名前>" を出す。
  * 出力の最終行は "END <終了コード>"。
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "dimg.h"
 #include "plat.h"
@@ -36,7 +38,7 @@ static u32 xcrc(u32 len)
 
 static const char *fmt_name(u8 fmt)
 {
-    static const char *const names[] = { "NONE", "RAW", "FDI", "NFD0", "NFD1", "VFDD" };
+    static const char *const names[] = { "NONE", "RAW", "FDI", "NFD0", "NFD1", "VFDD", "D88", "HDB" };
 
     return fmt < sizeof names / sizeof names[0] ? names[fmt] : "?";
 }
@@ -175,11 +177,14 @@ int main(int argc, char **argv)
 {
     static dimg img;
     dimg_io io;
-    u32 fsize;
-    int rc, rw;
+    char name[DIMG_D88_NAME];
+    u32 fsize, off = 0, len = 0;
+    u16 count;
+    int rc, rw, index = 1, k;
 
-    if (argc != 3 || (strcmp(argv[1], "dump") && strcmp(argv[1], "rwtest"))) {
-        fprintf(stderr, "usage: imgdump dump|rwtest <image>\n");
+    if (argc < 3 || argc > 4 || (strcmp(argv[1], "dump") && strcmp(argv[1], "rwtest")) ||
+        (argc == 4 && (index = atoi(argv[3])) < 1)) {
+        fprintf(stderr, "usage: imgdump dump|rwtest <image> [<disk number from 1>]\n");
         return 1;
     }
     rw = strcmp(argv[1], "rwtest") == 0;
@@ -189,7 +194,26 @@ int main(int argc, char **argv)
     }
     crc_init();
 
-    rc = dimg_mount(&img, &io, fsize);
+    rc = dimg_d88_find(&io, fsize, (u16)(index - 1), &off, &len, name, &count);
+    if (rc == DIMG_OK) {
+        for (k = 0; name[k]; k++)
+            if ((u8)name[k] < 0x20 || (u8)name[k] >= 0x7F)
+                name[k] = '?';
+        printf("DISKS %u %d %s\n", count, index, name);
+    } else if (rc == DIMG_E_PARAM) {
+        printf("MOUNT_ERROR %s\n", err_name(rc));
+        printf("END 2\n");
+        plat_close();
+        return 2;
+    } else {
+        off = 0;
+        len = 0;
+    }
+    if (plat_window(&io, off, len)) {
+        fprintf(stderr, "cannot prepare the image\n");
+        return 1;
+    }
+    rc = dimg_mount(&img, &io, len ? len : fsize);
     if (rc) {
         printf("MOUNT_ERROR %s\n", err_name(rc));
         rc = 2;
