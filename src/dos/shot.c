@@ -375,10 +375,13 @@ static FARTEXT void __far ank_store(void)
 }
 
 /*
- * 1 行ぶんの文字コードからパターンを集める。桁の 2 バイトは、偶数バイトが ANK のコードか漢字の
- * JIS 第 1 バイト − 20h (bit 7 が立っていれば右半分で、左の桁で描いてある)、奇数バイトが ANK なら 0、
- * 漢字なら JIS 第 2 バイト (jis.h)。偶数バイトが 09h〜0Bh なら 8 ドット幅の文字 (JIS の 29h〜2Bh 区)、
- * それ以外の漢字は 16 ドット幅で右半分は次の桁に入れる
+ * 1 行ぶんの文字コードからパターンを集める。桁の 2 バイトは、奇数バイトが 0 なら偶数バイトが ANK のコード
+ * (80h 以上も)。0 でなければ漢字で、偶数バイトが JIS 第 1 バイト − 20h、奇数バイトが第 2 バイト (jis.h。どちらも
+ * bit 7 は右半分の印に使われるので除く)。偶数バイトが 09h〜0Bh なら 8 ドット幅の文字 (JIS の 29h〜2Bh 区)、
+ * それ以外の漢字は 16 ドット幅で右半分を次の桁に描く。
+ * 漢字の次の桁は中身を見ずに右半分にする: ゲームは右の桁の印を偶数バイトの bit 7 でも奇数バイトの bit 7 でも
+ * 付け、別の値 (0087h) を置くこともあり、実機はどれも正しく表示する (design.md §12)。外字 (56h・57h 区) は
+ * 次の桁が同じコードのときだけ右半分とみなす (推測。参考実装は左右を交互に描くが、実機での確認がない)
  */
 static FARTEXT void __far gather_patterns(void)
 {
@@ -391,14 +394,23 @@ static FARTEXT void __far gather_patterns(void)
     for (c = 0; c < COLS; c++) {
         even = tcode[c * 2];
         odd = tcode[c * 2 + 1];
-        if (even & 0x80)
-            continue;
-        if (odd == 0)
+        if (odd == 0) {
             ank_read(even, cellpat[c]);
-        else if (even >= 0x09 && even <= 0x0B)
+            continue;
+        }
+        even &= 0x7F;
+        odd &= 0x7F;
+        if (even >= 0x09 && even <= 0x0B) {
             cg_read(odd, even, cellpat[c], 0);
-        else
-            cg_read(odd, even, cellpat[c], c + 1 < COLS ? cellpat[c + 1] : spill);
+            continue;
+        }
+        cg_read(odd, even, cellpat[c], c + 1 < COLS ? cellpat[c + 1] : spill);
+        if (c + 1 >= COLS)
+            continue;
+        if (even != 0x56 && even != 0x57)
+            c++;
+        else if ((tcode[c * 2 + 2] & 0x7F) == even && (tcode[c * 2 + 3] & 0x7F) == odd)
+            c++;
     }
 }
 

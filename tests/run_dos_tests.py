@@ -729,6 +729,13 @@ def test_shot(work):
     def count(rows, r, c, idx):
         return sum(1 for y in range(r * 16, r * 16 + 16) for x in range(c * 8, c * 8 + 8) if rows[y][x] == idx)
 
+    def same_glyphs(rows, r):
+        """r 行 0〜3 桁の画素が 1 行目 (漢字の右の桁を偶数バイトの bit 7 で印した形) と一致し、右の桁が左の桁と違う
+        (左半分を 2 回描いていない)"""
+        def pix(rr, c):
+            return [rows[y][c * 8:c * 8 + 8] for y in range(rr * 16, rr * 16 + 16)]
+        return all(pix(r, c) == pix(1, c) for c in range(4)) and pix(1, 0) != pix(1, 1) and pix(1, 2) != pix(1, 3)
+
     bars = ((0, 1), (8, 2), (16, 4), (24, 7))
     g4a = read_png4(os.path.join(work, 'S4A001G.PNG'))
     g4b = read_png4(os.path.join(work, 'S4B001G.PNG'))
@@ -834,6 +841,11 @@ def test_shot(work):
         ('text: "V" at row 0 col 0 has white pixels and nothing else', t is not None and cell(t, 0, 0) == {7}),
         ('text: kanji at row 1 cols 0-3 are red (16-dot wide glyphs span two cells)',
          t is not None and all(cell(t, 1, c) == {2} for c in range(4))),
+        ('text: the same kanji with the right cell marked by bit 7 of the odd byte (row 5), not marked (row 6), '
+         'or holding 0087h (row 7) are drawn exactly as in row 1',
+         t is not None and all(same_glyphs(t, r) for r in (5, 6, 7))),
+        ('text: half-width katakana (ANK B1h, DDh) at row 8 are drawn in white',
+         t is not None and cell(t, 8, 0) == {7} and cell(t, 8, 1) == {7}),
         ('text: reversed "R" at row 2 is mostly white', t is not None and count(t, 2, 0, 7) >= 64),
         ('text: underlined "U" at row 3 has a yellow bottom line', t is not None and all(t[3 * 16 + 15][x] == 6 for x in range(8))),
         ('text: secret "S" at row 4 is transparent', t is not None and cell(t, 4, 0) == set()),

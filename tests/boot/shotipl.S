@@ -132,6 +132,36 @@ start:
         mov     di, 640
         mov     word ptr es:[di], 0x0053
         mov     byte ptr es:[di + 0x2000], 0xE0
+        /*
+         * 5〜7 行目: 1 行目と同じ 漢字 を、右の桁の書き方を変えて赤で。5 行目は奇数バイトの bit 7 で印を付ける、
+         * 6 行目は印を付けずに左の桁と同じ値、7 行目は 0087h (実物のゲームがこの 3 つと 1 行目の形を使う)。
+         * どれも 1 行目と同じ絵に撮れるはず
+         */
+        mov     di, 800
+        mov     word ptr es:[di], 0x4114
+        mov     word ptr es:[di + 2], 0xC114
+        mov     word ptr es:[di + 4], 0x7A1B
+        mov     word ptr es:[di + 6], 0xFA1B
+        mov     word ptr es:[di + 160], 0x4114
+        mov     word ptr es:[di + 162], 0x4114
+        mov     word ptr es:[di + 164], 0x7A1B
+        mov     word ptr es:[di + 166], 0x7A1B
+        mov     word ptr es:[di + 320], 0x4114
+        mov     word ptr es:[di + 322], 0x0087
+        mov     word ptr es:[di + 324], 0x7A1B
+        mov     word ptr es:[di + 326], 0x0087
+        mov     cx, 4
+13:     mov     byte ptr es:[di + 0x2000], 0x41
+        mov     byte ptr es:[di + 0x2000 + 160], 0x41
+        mov     byte ptr es:[di + 0x2000 + 320], 0x41
+        add     di, 2
+        loop    13b
+        /* 8 行目: 半角カナ ｱ (B1h) と ﾝ (DDh) 白 */
+        mov     di, 1280
+        mov     word ptr es:[di], 0x00B1
+        mov     word ptr es:[di + 2], 0x00DD
+        mov     byte ptr es:[di + 0x2000], 0xE1
+        mov     byte ptr es:[di + 0x2002], 0xE1
 
 #ifdef DIRECT400
         /*
