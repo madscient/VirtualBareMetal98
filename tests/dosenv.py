@@ -9,6 +9,7 @@
 どちらも PC-98。試験のファイルは workdir() の返すディレクトリに置く。DOS 側ではそれがカレントドライブになる。
 """
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -149,7 +150,30 @@ def _msdos_floppy(src_image, share, dst, emm, config_tail=None):
     return path
 
 
-def _np21w(src, share, timeout, core, emm=False, msdos=False, msdos_config=None, during=None):
+def np21w_ini_get(key):
+    """NP21/W のスターターセットの設定ファイルの項目の値。NP21/W でなければ None"""
+    env, src = _select()
+    if env != 'np21w':
+        return None
+    exe = next((n for n in ('np21x64w.exe', 'np21w.exe') if os.path.exists(os.path.join(src, n))), None)
+    with open(os.path.join(src, os.path.splitext(exe)[0] + '.ini'), 'r', encoding='utf-16', newline='') as f:
+        m = re.search(r'(?m)^' + re.escape(key) + r'=([^\r\n]*)', f.read())
+    return m.group(1) if m else None
+
+
+def _set_ini(path, keys):
+    """NP21/W の設定ファイル (BOM 付きの UTF-16) の、KEY=VALUE の行を書き換える。キーは 1 行ずつあるはず"""
+    with open(path, 'r', encoding='utf-16', newline='') as f:
+        data = f.read()
+    for k, v in keys.items():
+        data, n = re.subn(r'(?m)^' + re.escape(k) + r'=[^\r\n]*', lambda m: k + '=' + v, data)
+        if n != 1:
+            raise RuntimeError('%s が設定ファイルに %d 箇所ある (1 箇所のはず)' % (k, n))
+    with open(path, 'w', encoding='utf-16', newline='') as f:
+        f.write(data)
+
+
+def _np21w(src, share, timeout, core, emm=False, msdos=False, msdos_config=None, during=None, ini=None):
     """スターターセット一式を build/np2 に複製し、その share をバッチの置き場にして走らせる。
 
     利用者の一式には書き込まない。起動イメージと設定ファイルは実行のたびに複製し直す
@@ -159,6 +183,7 @@ def _np21w(src, share, timeout, core, emm=False, msdos=False, msdos_config=None,
     起動する (emm なら MS-DOS の EMM386.EXE も読み込む。msdos_config は _msdos_floppy の config_tail)。
     窓は出るが操作は要らない。core は使わない。
     during があれば、エミュレータを起動したあと別のスレッドで during(プロセス番号) を呼ぶ (窓を操作する試験)。
+    ini があれば、複製した設定ファイルのその項目 ({キー: 値}) をこの実行の間だけ書き換える (DIP スイッチなど)。
     """
     dst = os.path.dirname(share)
     exe = next((n for n in ('np21x64w.exe', 'np21w.exe') if os.path.exists(os.path.join(src, n))), None)
@@ -169,6 +194,8 @@ def _np21w(src, share, timeout, core, emm=False, msdos=False, msdos_config=None,
         s = os.path.join(src, n)
         if os.path.exists(s):
             shutil.copy2(s, os.path.join(dst, n))
+    if ini:
+        _set_ini(os.path.join(dst, os.path.splitext(exe)[0] + '.ini'), ini)
     if emm and not msdos:
         _patch_emm(os.path.join(dst, 'fdosboot.hdi'))
     if not os.path.isdir(os.path.join(share, 'NP2TOOLS')):
@@ -195,7 +222,7 @@ def _np21w(src, share, timeout, core, emm=False, msdos=False, msdos_config=None,
         th.join(timeout=30)
 
 
-def run_batch(commands, timeout, core='auto', emm=False, msdos=False, msdos_config=None, during=None):
+def run_batch(commands, timeout, core='auto', emm=False, msdos=False, msdos_config=None, during=None, np21w_ini=None):
     """commands を順に実行する。最後まで走ったら True。
 
     core は DOSBox-X の CPU の再現方式 ('auto' なら 'normal' = 命令を逐次解釈する方式にする。NP21/W では使わない)。
@@ -203,6 +230,7 @@ def run_batch(commands, timeout, core='auto', emm=False, msdos=False, msdos_conf
     msdos は NP21/W だけ: 実物の MS-DOS の起動ディスク (VBM_MSDOS) から起動した DOS で走らせる。
     msdos_config は msdos のときだけ: CONFIG.SYS の HIMEM.SYS の行のあとに置く行の並び (EMM386.EXE のオプションや DOS=)。
     during は NP21/W だけ: 走っている間に別のスレッドで呼ぶ関数 (引数はエミュレータのプロセス番号)。
+    np21w_ini は NP21/W だけ: この実行の間だけ書き換える設定ファイルの項目 ({キー: 値})。DOSBox-X では使わない。
     """
     env, target = _select()
     if not env:
@@ -222,7 +250,7 @@ def run_batch(commands, timeout, core='auto', emm=False, msdos=False, msdos_conf
         if env == 'dosboxx':
             _dosboxx(target, wd, timeout, core)
         else:
-            _np21w(target, wd, timeout, core, emm, msdos, msdos_config, during)
+            _np21w(target, wd, timeout, core, emm, msdos, msdos_config, during, np21w_ini)
     except subprocess.TimeoutExpired:
         pass
     return os.path.exists(done)

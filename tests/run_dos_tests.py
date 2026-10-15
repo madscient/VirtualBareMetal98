@@ -533,7 +533,73 @@ def test_boot(work):
         print('%s %s' % ('ok  ' if c else 'FAIL', name))
         ok = ok and c
     ok = vram_cleared(work) and ok
+    ok = gdc_clock_restored(work) and ok
     print('起動: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
+def gdc_clock_restored(work):
+    """終了時に、グラフィック GDC のクロックがホストの値へ戻ること (design.md §16)。先に CLKRD.COM でホストのクロック
+    (09A0h) を読み、clkipl.S にその反対を書き込んで起動する。IPL はゲストの中でクロックを切り替えて止まり、VBM98 の
+    あとにもう一度読む。IPL は切り替える前と後の値を -peek で残すので、ゲストがホストと反対のクロックで終わったこと
+    (同じなら、戻さなくても前後が同じになる) も見る。参考実装の BIOS の AH=42h は、ワークエリアの bit 2 が望む状態と
+    合っていればクロックを書かないので、内蔵 BIOS でも見分けになる。ただしホストが 5MHz (DIP SW2-8 ON) だと、ゲストの
+    起動時に内蔵 BIOS がワークエリアの bit 2 を落とし、終了時の AH=42h が 5MHz に切り替え直すので、VBM98 が戻さなくても
+    戻ってしまう (直す前の版で通った)。NP21/W では SW2-8 を OFF (2.5MHz) にして走らせる (実機の報告と同じ条件)。
+    09A0h はクロックを読めない機種やエミュレータがある (資料 io_disp.txt) ので、切り替えが見えない環境では飛ばす。
+    NP21/W では見えることを求める"""
+    shutil.copy2(os.path.join(BUILT, 'CLKRD.COM'), os.path.join(work, 'CLKRD.COM'))
+    for name in ('CK0.OUT', 'CK1.OUT', 'CK.OUT', 'CK.LOG'):
+        if os.path.exists(os.path.join(work, name)):
+            os.remove(os.path.join(work, name))
+    ini = None
+    dip = dosenv.np21w_ini_get('DIPswtch')
+    if dip:
+        sw = dip.split()
+        sw[1] = '%02x' % (int(sw[1], 16) | 0x80)
+        ini = {'DIPswtch': ' '.join(sw)}
+    first = dosenv.run_batch(['CLKRD.COM > CK0.OUT'], 120, core='normal', np21w_ini=ini)
+
+    def clk(name):
+        """CLKRD.COM の出力 'CLK xx yy' の (09A0h, 054Dh)。無ければ None"""
+        for line in imgtests.read_lines(work, name) or []:
+            m = re.match(r'CLK ([0-9A-F]{2}) ([0-9A-F]{2})', line)
+            if m:
+                return int(m.group(1), 16), int(m.group(2), 16)
+        return None
+
+    before = clk('CK0.OUT')
+    with open(os.path.join(BUILT, 'CLKIPL.BIN'), 'rb') as f:
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = f.read().ljust(1024, b'\0')
+    img[2] = 0 if before is not None and before[0] & 2 else 1     # clkipl.S の target: ホストと反対のクロック
+    with open(os.path.join(work, 'CK.IMG'), 'wb') as f:
+        f.write(img)
+    finished = first and dosenv.run_batch(['VBM98.EXE -fdd0 CK.IMG -peek 00710 -menukeys 04,15 -log CK.LOG > CK.OUT',
+                                           'CLKRD.COM > CK1.OUT'], 180, core='normal', np21w_ini=ini)
+    after = clk('CK1.OUT')
+    log = imgtests.read_lines(work, 'CK.LOG') or []
+    peek = [l for l in log if l.startswith('VBM98: guest 00710:')]
+    seen = [int(h, 16) for h in peek[0].split(':', 2)[2].split()] if peek else []
+    print('  GDC clock: before %s, guest %s, after %s' % (before, seen[:3], after))
+    opposite = (before is not None and len(seen) >= 3 and seen[2] == 0x5A and
+                seen[1] == (0 if before[0] & 2 else 3))
+    if not opposite and dosenv._select()[0] != 'np21w':
+        print('skip GDC clock: the clock the IPL set cannot be seen through port 09A0h here')
+        return finished
+    checks = (
+        ('GDC clock: batches finished', finished),
+        ('GDC clock: the guest ended with the clock opposite to the host (both 2.5MHz or both 5MHz, read by the IPL)',
+         opposite),
+        ('GDC clock: back in DOS, the clock is what it was before VBM98 (09A0h bits 1-0)',
+         before is not None and after is not None and (before[0] & 3) == (after[0] & 3)),
+        ('GDC clock: and the BIOS work area 054Dh bit 2 is as before',
+         before is not None and after is not None and (before[1] & 4) == (after[1] & 4)),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
     return ok
 
 

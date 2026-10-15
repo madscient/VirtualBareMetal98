@@ -895,7 +895,8 @@ static FARTEXT void __far print_memsw(const char *label, const u8 __far *base)
  * BIOS ワークエリアのうち表示系の状態 (番地は NP2 系の BIOS 実装 bios/biosmem.h と一致。design.md §16)
  *   053Ch CRT_STS_FLAG  INT 18h AH=0Ah で設定した CRT モード (bit 7 は 24kHz の印)
  *   054Ch PRXCRT        bit 7: グラフィック表示中
- *   054Dh PRXDUPD       bit 2: グラフィックが 400 ライン
+ *   054Dh PRXDUPD       bit 2: いまのグラフィック GDC のクロック (1 = 5MHz。5MHz なのは 640×400 のときだけ。
+ *                       資料 memsys.txt の 054Dh の項)
  */
 #define WA_CRT_MODE 0x053C
 #define WA_PRXCRT   0x054C
@@ -1105,7 +1106,23 @@ static FARTEXT void __far video_host(void)
     /* 054Dh の bit 5 (5MHz を使う) をゲスト用に落としていたら戻す (guest_memory)。BIOS に戻させる前に */
     *(u8 __far *)MK_FP(0, WA_PRXDUPD) = (u8)((*(u8 __far *)MK_FP(0, WA_PRXDUPD) & ~0x20) | (host_prxdupd & 0x20));
     text_mode((u8)(host_crt_mode & 0x0F));
+    /*
+     * グラフィック GDC をホストのクロックの設定 (クロック・SYNC・PITCH) に戻すのは BIOS にさせる。AH=42h は、054Dh の
+     * bit 2 (いまのクロック) が望む状態と食い違うときだけ切り替えるので、ゲストが 5MHz にしたまま終わっても、bit 2 が
+     * 2.5MHz を示していれば何もしない (実機の ROM を入れた NP21/W で確認。参考実装 bios18.c も同じ判断)。そこで
+     * 「5MHz を使える (bit 5)」と「いまはホストと反対のクロック (bit 2)」を見せてから呼び、切り替えを起こさせる。
+     * 済んだら bit 5 と bit 2 をホストの値に戻す (design.md §16)
+     */
+    *(u8 __far *)MK_FP(0, WA_PRXDUPD) =
+        (u8)((*(u8 __far *)MK_FP(0, WA_PRXDUPD) & ~0x24) | 0x20 | ((host_prxdupd & 0x04) ^ 0x04));
     int18(0x42, 0, (u8)((host_prxdupd & 0x04) ? 0xC0 : 0x80));
+    /*
+     * クロックだけは、BIOS が切り替えなかった場合に備えて直接も書く (6Ah ← 82h・84h で 2.5MHz、83h・85h で 5MHz。
+     * 資料 io_disp.txt の 6Ah の項)。ワークエリアの bit 2・5 もホストの値にそろえる
+     */
+    pio_out8(0x6A, (u8)((host_prxdupd & 0x04) ? 0x83 : 0x82));
+    pio_out8(0x6A, (u8)((host_prxdupd & 0x04) ? 0x85 : 0x84));
+    *(u8 __far *)MK_FP(0, WA_PRXDUPD) = (u8)((*(u8 __far *)MK_FP(0, WA_PRXDUPD) & ~0x24) | (host_prxdupd & 0x24));
     int18((u8)((host_prxcrt & 0x80) ? 0x40 : 0x41), 0, 0);
     int18(0x0C, 0, 0);
     int18(0x11, 0, 0);
