@@ -124,6 +124,10 @@ DOS 向けにビルドして DOS 上で走らせる。ビルドは `ia16-elf-gcc
 - `kdefer`: ゲストが割り込み禁止のままホスト世界へ行き、そのあとホスト世界へ戻らないときに、その間のキーがあとで
   届くことを確かめる（design.md §7。ゲストへ渡す割り込みのハンドラの戻り先を差し替えて機会を作る仕組み）。
   `vbm_r0.c` の割り込みの渡し方や `feed_keys` を変えたら走らせる
+- `hotmod`: `-hotkey` で選んだ修飾キー（CTRL か SHIFT）と GRPH の組み合わせだけがホットキーになり、もう一方はゲストへ
+  渡ることを、開発用の `-feedkeys` で渡した符号で確かめる（ゲストが止まったときのログの `keys taken` の行で数える）。
+  起動時の `VBM98: hotkeys:` の行と、不正な値で止まることも見る。`vbm_r0.c` の `kbd_note`、`-hotkey` の読み取りを
+  変えたら走らせる。実物のキーで SHIFT + GRPH を押す試験は無い（NP21/W の窓のメニューからは送れない。`tests/np2win.py`）
 - `keys`: ホスト世界にいる間（INT 1Bh の処理中）に押されたキーが、順番どおりにゲストへ届くことを確かめる。キーは
   DOSBox-X の AUTOTYPE で送るので、DOSBox-X だけ。`src/dos/kbdtap.S`、`vbm98.c` のキーの注入（`feed_keys`）、
   世界の切替を変えたら走らせる。DOSBox-X はキーを送っている間にまれに本体が止まるので（design.md §12）、時間切れで
@@ -131,8 +135,8 @@ DOS 向けにビルドして DOS 上で走らせる。ビルドは `ia16-elf-gcc
   ここで見る（ホストの BIOS がキーボード割り込みで受け取ったキーを待つ経路は、ほかの試験では通らない）。開発用の
   `-kbdprobe`（design.md §19）でキーボードの 8251 を立て直したあとも、キーが届くことも見る。
   メニューのキー待ち（`ui.c` の `ui_getkey`、`vbm98.c` の `vm_kbd_watch`）を変えたら走らせる
-- `hotkey`: 実物のキーで押したホットキー。NP21/W の窓のメニュー（Device → Keyboard の mechanical CTRL・mechanical GRPH と
-  Send Ctrl+Alt+Del。キーボード割り込みとして届く）から CTRL + GRPH + DEL を 2 回送り（`tests/np2win.py`）、2 回とも
+- `hotkey`: 実物のキーで押したホットキー。NP21/W の窓のメニュー（Device → Keyboard の Send Ctrl+Alt+Del。それだけで
+  CTRL・GRPH・DEL の符号がキーボード割り込みとして届く）から CTRL + GRPH + DEL を 2 回送り（`tests/np2win.py`）、2 回とも
   `reset (hotkey)` になること、モニタが 12 個のスキャンコードを受けて 8251 のコマンドを 8 回書き直したこと（1 回につき
   DEL と離した符号 3 つを読み捨てる）を、リアルモードと EMM386 の下で確かめる。2 回目が届くことで、読み捨てのあとに
   キーボード割り込みが止まっていないことも見る。モニタがスキャンコードを読み捨てる経路（`vbm_r0.c` の `kbd_irq`・

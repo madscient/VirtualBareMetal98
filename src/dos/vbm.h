@@ -187,7 +187,15 @@ extern u8 iotrap_n;
 extern u16 vec_hits[HOOK_VEC_MAX];
 /* 開発用: ハードウェア割り込み (ベクタ 08h〜17h) がモニタに届いた回数 */
 extern u16 irq_hits[16];
-/* 開発用: STOP の代わりに CTRL+GRPH と組み合わせて終了にするスキャンコード (0 なら無し)。試験環境の都合 */
+/*
+ * ホットキーで GRPH と組み合わせる修飾キーのスキャンコード (-hotkey。spec.md)。既定は CTRL。本体の BIOS やキーボードが
+ * CTRL+GRPH+HELP を先に取る機種 (design.md §12 の PC-486NAS) のために SHIFT を選べる。値は memsys.txt の
+ * 0000:0408〜040Fh (シフトキーコードテーブルの初期値: CTRL 74h、SHIFT 70h)
+ */
+#define HOTKEY_MOD_CTRL  0x74
+#define HOTKEY_MOD_SHIFT 0x70
+extern u8 kbd_mod_sc;
+/* 開発用: STOP の代わりに修飾キー+GRPH と組み合わせて終了にするスキャンコード (0 なら無し)。試験環境の都合 */
 extern u8 kbd_stop_alt;
 /*
  * 開発用 (-tick): ゲストが IRQ0 を閉じていてもハードウェアでは開けておき、モニタが受けて数えるだけにする。

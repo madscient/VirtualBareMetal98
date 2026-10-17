@@ -69,7 +69,6 @@ static void pop_iret(struct mon_vframe *f)
 #define KBD_STAT  0x43
 #define KBD_RXRDY 0x02
 #define SC_BREAK  0x80
-#define SC_CTRL   0x74
 #define SC_GRPH   0x73
 #define SC_STOP   0x60
 #define SC_DEL    0x39
@@ -78,7 +77,8 @@ static void pop_iret(struct mon_vframe *f)
 #define SC_PAD1   0x4A
 #define SC_COPY   0x61
 
-static u8 kbd_ctrl, kbd_grph;   /* 押されている修飾キー */
+static u8 kbd_mod, kbd_grph;    /* 押されている修飾キー (kbd_mod_sc と GRPH) */
+u8 kbd_mod_sc = HOTKEY_MOD_CTRL;
 static u8 prog_i, prog_k;
 u8 kbd_pending;                 /* ゲストがまだ読んでいないスキャンコードがある (ホストの注入でも使う。vbm.h) */
 u8 kbd_code;
@@ -196,7 +196,7 @@ static void kbd_read_delay(void)
 }
 
 /*
- * ホットキーを拾ったら、CTRL・GRPH・そのキーが全部離されるまでここで待つ (離した符号をここで読み捨てる)。
+ * ホットキーを拾ったら、修飾キー (CTRL か SHIFT)・GRPH・そのキーが全部離されるまでここで待つ (離した符号をここで読み捨てる)。
  * 待たずにホストへ戻ると、押した符号はゲストに、離した符号だけがホストに届く。ホストの BIOS によっては、押して
  * いないキーが離されるとシフト状態が反転したままになる (実機の報告: PC-9801RA2。design.md §9)。
  * 離した符号は、キーボード割り込みとして受けてから読む: 割り込みマスクをキーボード (IR1) だけ開けた形にして、
@@ -215,7 +215,7 @@ static void kbd_wait_release(u8 key)
 
     imr = mon_in8(PIC_M_IMR);
     mon_out8(PIC_M_IMR, (u8)~0x02);
-    while ((kbd_ctrl || kbd_grph || down) && frames < 170 && n < 3000000UL) {
+    while ((kbd_mod || kbd_grph || down) && frames < 170 && n < 3000000UL) {
         n++;
         vec = mon_irq_window();
         if (vec == IRQ_FIRST + 1) {
@@ -227,8 +227,8 @@ static void kbd_wait_release(u8 key)
             kbd_ack();
             eoi(IRQ_FIRST + 1);
             k = (u8)(sc & 0x7F);
-            if (k == SC_CTRL)
-                kbd_ctrl = (u8)!(sc & SC_BREAK);
+            if (k == kbd_mod_sc)
+                kbd_mod = (u8)!(sc & SC_BREAK);
             else if (k == SC_GRPH)
                 kbd_grph = (u8)!(sc & SC_BREAK);
             else if (k == key)
@@ -242,12 +242,12 @@ static void kbd_wait_release(u8 key)
     mon_out8(PIC_M_IMR, imr);
     kbd_rel_bytes = bytes;
     kbd_rel_frames = frames;
-    kbd_rel_left = (u8)((kbd_ctrl ? 1 : 0) | (kbd_grph ? 2 : 0) | (down ? 4 : 0));
+    kbd_rel_left = (u8)((kbd_mod ? 1 : 0) | (kbd_grph ? 2 : 0) | (down ? 4 : 0));
     kbd_rel_stat = mon_in8(KBD_STAT);
 }
 
 /*
- * スキャンコードを 1 つ見て、CTRL と GRPH の押下状態を追う。その 2 つを押したままホットキーのキーが押されたら
+ * スキャンコードを 1 つ見て、修飾キー (kbd_mod_sc) と GRPH の押下状態を追う。その 2 つを押したままホットキーのキーが押されたら
  * X_HOTKEY_* を、そうでなければ 0 を返す。ポートには触らないので、ホスト世界で控えたキー (vbm98.c の feed_keys) に
  * ついても同じものを呼ぶ (そこで押された修飾キーを見落とすと、ホットキーが効かなくなる)
  */
@@ -255,11 +255,11 @@ u16 kbd_note(u8 sc)
 {
     u8 key = (u8)(sc & ~SC_BREAK);
 
-    if (key == SC_CTRL)
-        kbd_ctrl = (u8)!(sc & SC_BREAK);
+    if (key == kbd_mod_sc)
+        kbd_mod = (u8)!(sc & SC_BREAK);
     else if (key == SC_GRPH)
         kbd_grph = (u8)!(sc & SC_BREAK);
-    else if (kbd_ctrl && kbd_grph && !(sc & SC_BREAK))
+    else if (kbd_mod && kbd_grph && !(sc & SC_BREAK))
         return (key == SC_STOP || (kbd_stop_alt && key == kbd_stop_alt)) ? X_HOTKEY_STOP :
                (key == SC_COPY || (kbd_shot_alt && key == kbd_shot_alt)) ? X_HOTKEY_SHOT :
                key == SC_DEL ? X_HOTKEY_RESET : key == SC_HELP ? X_HOTKEY_MENU :

@@ -3,9 +3,13 @@
 前面化もキー入力の注入も使わないので、利用者が別の窓を操作していても届く。項目の ID は NP21/W の版で変わり
 うるので、項目の文字列 (アクセラレータの & を除いたもの、大文字小文字を区別しない) で探す。
 
-Device → Keyboard の mechanical CTRL・mechanical GRPH・Send Ctrl+Alt+Del は、ゲストにはキーボード割り込み
-(ハードウェアの段のキー) として届く。確認済み: VBM98 のリセットのホットキーがこの 3 つで成立した (NP21/W の
-スターターセット)。クリップボードの貼り付けは BIOS 経由なのでこの用途には使えない。
+Device → Keyboard の Send Ctrl+Alt+Del は、ゲストにはキーボード割り込み (ハードウェアの段のキー) として届き、
+それだけで CTRL・GRPH・DEL の押下と離した符号の 6 つを送る (押下は GRPH・CTRL・DEL の順。離した符号の順は回に
+よって違う)。mechanical CTRL・GRPH・SHIFT の項目からは、符号が 1 つも届かなかった。確認済み (NP21/W のスターター
+セット): 終了時のログの keyboard の行に出る最後に受けた符号で、mechanical の項目を挟んでも 1 回につき 6 つ。
+mechanical SHIFT を挟むと 70h は無く、-hotkey shift のリセットは成立しなかった。だから、この窓からは SHIFT + GRPH の
+ホットキーは送れない。
+クリップボードの貼り付けは BIOS 経由なのでこの用途には使えない。
 """
 import ctypes
 import time
@@ -87,19 +91,11 @@ def command(hwnd, mid):
         raise OSError(ctypes.get_last_error(), 'PostMessageW')
 
 
-CTRL, GRPH, CAD = 'mechanical CTRL', 'mechanical GRPH', 'Send Ctrl+Alt+Del'
+CAD = 'Send Ctrl+Alt+Del'
 
 
 def ctrl_grph_del(hwnd, ids):
-    """CTRL と GRPH を押したまま DEL を押して、全部離す。CTRL・GRPH は切り替えの項目なので、押すのと離すのに
-    同じ項目を 2 回選ぶ。間隔は手作業で通ったときのもの (DEL のあと GRPH を離すまで 1.2 秒、ほかは 0.4 秒)。
-    どれも VBM98 がホットキーのキーが離されるのを待つ上限 (約 3 秒) より短い"""
-    command(hwnd, ids[CTRL])
-    time.sleep(0.4)
-    command(hwnd, ids[GRPH])
-    time.sleep(0.4)
+    """CTRL と GRPH を押したまま DEL を押して、全部離す (Send Ctrl+Alt+Del の 1 項目で、上の説明)。そのあと 2 秒
+    待つのは、VBM98 がホットキーのキーが離されるのを待つ間に次の操作を重ねないため"""
     command(hwnd, ids[CAD])
-    time.sleep(1.2)
-    command(hwnd, ids[GRPH])
-    time.sleep(0.4)
-    command(hwnd, ids[CTRL])
+    time.sleep(2.0)

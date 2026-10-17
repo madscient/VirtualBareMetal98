@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DOS 向けにビルドした試験プログラムを DOS 上で走らせる。
 
-    python tests/run_dos_tests.py [img] [fdb] [fdmem] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [d88] [blank] [profile] [shot] [con] [isr] [menu] [page0] [kdefer] [keys] [hotkey] [v86]
+    python tests/run_dos_tests.py [img] [fdb] [fdmem] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [d88] [blank] [profile] [shot] [con] [isr] [menu] [page0] [kdefer] [hotmod] [keys] [hotkey] [v86]
 
     img      ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
     fdb      INT 1Bh の意味論 (fdbios)。同上
@@ -21,6 +21,7 @@
     menu     VM メニュー。-menuat で開き -menukeys で操作して、画面の復元とゲストの再開を見る
     page0    ゲストが BIOS のワークエリアに書いたものを BIOS が使うか (ゲストの 0 番ページの置き場)
     kdefer   ゲストが割り込み禁止のままホスト世界へ行った間のキーが、あとで届くか
+    hotmod   -hotkey で選んだ修飾キー (CTRL か SHIFT) だけがホットキーになるか
     keys     ホスト世界にいる間 (INT 1Bh の処理中) に押されたキーがゲストに届くか、VM メニューが実物のキーで閉じるか (DOSBox-X だけ)
     hotkey   実物のキーで押したホットキー (CTRL + GRPH + DEL を NP21/W の窓のメニューから送る。NP21/W だけ)
     v86      EMM386 (VCPI) の下での起動 (NP21/W だけ)
@@ -1246,6 +1247,61 @@ def test_kdefer(work):
     return ok
 
 
+def test_hotmod(work):
+    """-hotkey で選んだ修飾キーだけがホットキーになるか。開発用の -feedkeys で、修飾キー + GRPH + DEL を押して離す
+    6 つのスキャンコードを渡す。ホスト世界で控えたキーと同じ道 (vbm98.c の feed_keys → vbm_r0.c の kbd_note) を通り、
+    ホットキーと判定したものはゲストへ渡さずに数える (ゲストが止まったときのログの keys taken の行)。どの組み合わせでも
+    6 つは必ずどちらかに数えられるので、0 件のときの値 (届いていない) は期待値と違う。試験用の IPL は page0 と同じもの
+    (キーを 1 つ受けて止まる)。実物のキーで SHIFT + GRPH を押す試験は無い (tests/np2win.py の説明)"""
+    with open(os.path.join(BUILT, 'PAGE0IPL.BIN'), 'rb') as f:
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = f.read()
+    with open(os.path.join(work, 'HM.IMG'), 'wb') as f:
+        f.write(img)
+    shift_del, ctrl_del = '70,73,39,B9,F3,F0', '74,73,39,B9,F3,F4'
+    runs = (('HM1', '-hotkey shift -feedkeys ' + shift_del), ('HM2', '-feedkeys ' + shift_del),
+            ('HM3', '-hotkey SHIFT -feedkeys ' + ctrl_del), ('HM4', '-hotkey ctrl -feedkeys ' + ctrl_del))
+    for tag, _ in runs + (('HM5', ''),):
+        for ext in ('.OUT', '.LOG'):
+            if os.path.exists(os.path.join(work, tag + ext)):
+                os.remove(os.path.join(work, tag + ext))
+    cmds = ['VBM98.EXE -fdd0 HM.IMG %s -menukeys 04,15 -log %s.LOG > %s.OUT' % (opt, tag, tag) for tag, opt in runs]
+    cmds.append('VBM98.EXE -fdd0 HM.IMG -hotkey alt > HM5.OUT')
+    finished = dosenv.run_batch(cmds, 240, core='normal')
+    taken = {}
+    for tag, _ in runs:
+        log = imgtests.read_lines(work, tag + '.LOG') or []
+        line = [l for l in log if 'keys taken in the host world' in l]
+        head = [l for l in log if l.startswith('VBM98: hotkeys:')]
+        for l in head[:1] + line[:1]:
+            print('  (%s) %s' % (tag, l))
+        taken[tag] = (line[0] if line else '', head[0] if head else '')
+    bad = imgtests.read_lines(work, 'HM5.OUT') or []
+    for l in bad:
+        print('  (HM5) ' + l)
+
+    def counted(tag, passed, hot):
+        return '%u passed to the guest, 0 dropped (queue full), %u hotkeys ignored' % (passed, hot) in taken[tag][0]
+
+    checks = (
+        ('batch finished', finished),
+        ('-hotkey shift: SHIFT + GRPH + DEL is a hotkey (5 passed, 1 hotkey)', counted('HM1', 5, 1)),
+        ('-hotkey shift: the startup line names SHIFT', 'SHIFT+GRPH+HELP' in taken['HM1'][1]),
+        ('default: SHIFT + GRPH + DEL goes to the guest (6 passed, 0 hotkeys)', counted('HM2', 6, 0)),
+        ('default: the startup line names CTRL', 'CTRL+GRPH+HELP' in taken['HM2'][1]),
+        ('-hotkey SHIFT (upper case): CTRL + GRPH + DEL goes to the guest', counted('HM3', 6, 0)),
+        ('-hotkey ctrl: CTRL + GRPH + DEL is a hotkey', counted('HM4', 5, 1)),
+        ('-hotkey alt is refused before starting', any('bad argument: -hotkey' in l for l in bad)
+         and not any('VBM98: hotkeys:' in l for l in bad)),
+    )
+    ok = True
+    for name, c in checks:
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and c
+    print('ホットキーの修飾キー: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
 def test_keys(work):
     """ホスト世界にいる間に押されたキーがゲストに届くか。試験用の IPL (tests/boot/keyipl.S) は INT 1Bh でディスクを
     読み続けながら、キーボード割り込みで届いたスキャンコードを記録し、12 個で止まる。読み続ける間はほとんどの時間が
@@ -1415,10 +1471,9 @@ def hotkey_run(work, emm):
             hwnd = np2win.main_window(pid)
             if not hwnd:
                 raise RuntimeError('NP21/W の窓が見つからない')
-            ids = np2win.find_ids(hwnd, (np2win.CTRL, np2win.GRPH, np2win.CAD))
-            if len(ids) != 3:
-                raise RuntimeError('メニューの項目が見つからない: %s' % ', '.join(
-                    l for l in (np2win.CTRL, np2win.GRPH, np2win.CAD) if l not in ids))
+            ids = np2win.find_ids(hwnd, (np2win.CAD,))
+            if np2win.CAD not in ids:
+                raise RuntimeError('メニューの項目が見つからない: %s' % np2win.CAD)
             # HOSTDRV の上で DOS が開いているファイルは中身を読めないが、できたことは分かる
             end = time.monotonic() + 170
             while not os.path.exists(os.path.join(work, 'HK.LOG')):
@@ -1905,6 +1960,7 @@ TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('f
          ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos), ('nfdid', 'VBM98.EXE', test_nfdid),
          ('boot2dd', 'VBM98.EXE', test_boot2dd), ('d88', 'VBM98.EXE', test_d88), ('blank', 'VBM98.EXE', test_blank), ('profile', 'VBM98.EXE', test_profile),
          ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('isr', 'VBM98.EXE', test_isr), ('menu', 'VBM98.EXE', test_menu), ('page0', 'VBM98.EXE', test_page0), ('kdefer', 'VBM98.EXE', test_kdefer),
+         ('hotmod', 'VBM98.EXE', test_hotmod),
          ('keys', 'VBM98.EXE', test_keys), ('hotkey', 'VBM98.EXE', test_hotkey),
          ('v86', 'VBM98.EXE', test_v86))
 

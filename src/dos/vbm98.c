@@ -42,6 +42,7 @@
 #define WA_EXTMEM       0x0401      /* 拡張メモリ量 (16MB 未満、128KB 単位) */
 #define WA_EXTMEM16     0x0594      /* 拡張メモリ量 (16MB 以上、1MB 単位の語) */
 #define WA_SCSI_EQUIP   0x0482      /* SCSI の HDD の接続フラグ (bit n = ID n。実機の報告から。design.md §12) */
+#define HOTKEY_MOD_NAME (kbd_mod_sc == HOTKEY_MOD_SHIFT ? "SHIFT" : "CTRL")
 
 u8 pio_in8(u16 port);
 void pio_out8(u16 port, u8 val);
@@ -275,6 +276,9 @@ static FARTEXT int __far parse_one(int argc, char **argv, struct opts *o)
             i++;
         } else if (eq(a, "-v30") && v && (eq(v, "on") || eq(v, "off"))) {
             o->v30 = eq(v, "on");
+            i++;
+        } else if (eq(a, "-hotkey") && v && (eq(v, "ctrl") || eq(v, "shift"))) {
+            kbd_mod_sc = eq(v, "shift") ? HOTKEY_MOD_SHIFT : HOTKEY_MOD_CTRL;
             i++;
         } else if (eq(a, "-dipsw") && v && !optval_hexmask(v, o->dipsw, o->dipsw_hm, 3)) {
             o->have_dipsw = 1;
@@ -1707,7 +1711,7 @@ static FARTEXT void __far print_hits(void)
 /* ---------------------------------------------------------------- メニューからの再開 */
 
 /*
- * メニューのあいだに離された CTRL と GRPH の break コードをゲストに届ける (design.md §9)。
+ * メニューのあいだに離された修飾キー (CTRL か SHIFT) と GRPH の break コードをゲストに届ける (design.md §9)。
  * ゲストのキーボード割り込みのハンドラを、IRET の戻り先を横取り印 (HOOK_KBD) にして呼ぶ。
  * ハンドラが 41h を読むとモニタが kbd_code を返す。IRET で横取り印に来たら (X_KBD_DONE) 次を
  * 注入するか、控えておいた本来の CS:IP に戻す。FLAGS は注入時に積んだ元の値を IRET が戻している
@@ -1749,7 +1753,7 @@ static void resume_keys(struct mon_guest *g)
 {
     if (!(g->eflags & EFL_IF) || inject_busy)
         return;
-    inject_queue[0] = 0xF4;     /* CTRL の break (make 74h + 80h) */
+    inject_queue[0] = (u8)(kbd_mod_sc | 0x80);     /* 修飾キーの break (make + 80h) */
     inject_queue[1] = 0xF3;     /* GRPH の break */
     inject_n = 2;
     inject_i = 0;
@@ -2314,7 +2318,7 @@ static FARTEXT void __far kbd_guest_note(void)
     kbd_ring_text(kbd_rx_last, kbd_rx_n, text[2]);
     log_line("VBM98: key wait: guest writes to port 43h: %u, last:%s; to port 41h: %u, last:%s. Scancodes received: %u, last:%s\n",
              kbd_wr_n[0], text[0], kbd_wr_n[1], text[1], kbd_rx_n, text[2]);
-    log_line("VBM98: key wait: hotkey release wait: %u bytes read in %u frames, still down %X (1 CTRL, 2 GRPH, 4 the key), "
+    log_line("VBM98: key wait: hotkey release wait: %u bytes read in %u frames, still down %X (1 CTRL or SHIFT, 2 GRPH, 4 the key), "
              "8251 %02X after it. Command rewritten by the monitor: %u times (%02X%s). "
              "Keys taken in the host world: %u passed, %u dropped\n",
              kbd_rel_bytes, kbd_rel_frames, kbd_rel_left, kbd_rel_stat, kbd_ack_n, kbd_cmd,
@@ -2486,6 +2490,7 @@ static FARTEXT void __far dump_guest(const struct mon_guest *g, int fault)
 {
     const char *const *kinds = ev_kinds;
     u8 code[FAULT_BYTES];
+    char rx_text[KBD_WR_KEEP * 3 + 1];
     u32 at = lin(g->cs, g->ip);
     u16 i, n;
     u8 before = 1;
@@ -2534,7 +2539,9 @@ static FARTEXT void __far dump_guest(const struct mon_guest *g, int fault)
             say(" %02X=%u", i + 8, irq_hits[i]);
     say("\nVBM98: keys taken in the host world: %u passed to the guest, %u dropped (queue full), %u hotkeys ignored",
         tap_fed, tap_dropped, tap_hot);
-    say("\nVBM98: keyboard: %u scancodes received, command rewritten by the monitor %u times", kbd_rx_n, kbd_ack_n);
+    kbd_ring_text(kbd_rx_last, kbd_rx_n, rx_text);
+    say("\nVBM98: keyboard: %u scancodes received, command rewritten by the monitor %u times, last received:%s",
+        kbd_rx_n, kbd_ack_n, rx_text);
     say("\nVBM98: V30 instructions emulated: %u", v30_emul_n);
     if (v30_emul_n)
         say(" (first at %04X:%04X: %02X %02X %02X %02X)", (unsigned)(v30_emul_first >> 16), (unsigned)(u16)v30_emul_first,
@@ -2800,6 +2807,7 @@ static FARTEXT NOINLINE int __far vm_setup(int argc, char **argv, struct opts *o
     say("VBM98 " VBM98_VERSION "\n");
     if (o->log)
         say("VBM98: log: %s (heartbeat %u s)\n", o->log, o->log_sec);
+    say("VBM98: hotkeys: %s+GRPH+HELP (menu), +STOP (exit), +COPY (screenshot), +DEL (reset)\n", HOTKEY_MOD_NAME);
     if (check_v86())
         return 1;
     if (!v86) {
@@ -3059,10 +3067,10 @@ int main(int argc, char **argv)
             isr_note("the exit confirmation was opened");
             if (menu_confirm_exit()) {
                 keep_on();
-                say("VBM98: exit by the hotkey (CTRL+GRPH+STOP)\n");
+                say("VBM98: exit by the hotkey (%s+GRPH+STOP)\n", HOTKEY_MOD_NAME);
                 running = 0;
             } else {
-                log_line("VBM98: CTRL+GRPH+STOP: cancelled\n");
+                log_line("VBM98: %s+GRPH+STOP: cancelled\n", HOTKEY_MOD_NAME);
                 resume_keys(&g);
             }
             break;
