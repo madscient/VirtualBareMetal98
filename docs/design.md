@@ -1281,7 +1281,7 @@ MS-DOS 5.00A（NEC）の EMM386.EXE は、引数なしでは VCPI を提供し�
 `run_dos_tests.py msdos`）。MS-DOS 6.20 の EMM386.EXE（`/UMB /HIGHSCAN /DPMI`、`DOS=HIGH,UMB`）の下では、E9000h からの
 UMB に入れた試験用の常駐プログラムが割り込みを横取りしている状態で、起動試験の IPL が最後まで動く（確認済み:
 NP21/W。同じ試験を 6.20 の起動ディスクで走らせたとき）。実機の EMM ドライバの下での結果は、利用者の報告による
-（README の開発状況）。
+（STATUS.md）。
 
 ## 19. 診断ログ（-log）
 

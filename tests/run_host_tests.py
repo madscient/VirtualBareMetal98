@@ -160,7 +160,8 @@ def convert_doc(src, name):
 
 
 def run_doc():
-    """README.md から作る VBM98.DOC と、CHANGELOG.md から作る CHANGES.DOC (どちらもリリースの zip に入る)"""
+    """README.md から作る VBM98.DOC、STATUS.md から作る STATUS.DOC、CHANGELOG.md から作る CHANGES.DOC
+    (どれもリリースの zip に入る)"""
     err, text, head = convert_doc('README.md', 'VBM98.DOC')
     if err is None:
         if not head.startswith('VirtualBareMetal98  (VBM98.EXE '.encode('shift_jis')):
@@ -169,8 +170,18 @@ def run_doc():
             err = '使い方の内容が欠けている'
         elif any(s in text for s in ('ビルドと試験', 'docs/', 'tools/build16.sh')):
             err = 'zip に入らないものへの案内が残っている'
+        elif any(s in text for s in ('まだ動かないもの:', '実機での結果（')):
+            err = '開発状況 (STATUS.md に置くもの) が残っている'
     failed = 0 if err is None else 1
     print('PC-98 用の文書: %s' % ('通過' if err is None else '失敗 (%s)' % err))
+    err, text, head = convert_doc('STATUS.md', 'STATUS.DOC')
+    if err is None:
+        if not head.startswith('開発状況  (VBM98.EXE '.encode('shift_jis')):
+            err = '先頭の行に版がない'
+        elif any(s not in text for s in ('実機での結果（', 'まだ動かないもの:')):
+            err = '開発状況の内容が欠けている'
+    failed += 0 if err is None else 1
+    print('PC-98 用の開発状況: %s' % ('通過' if err is None else '失敗 (%s)' % err))
     err, text, head = convert_doc('CHANGELOG.md', 'CHANGES.DOC')
     if err is None:
         if not head.startswith('変更履歴  (VBM98.EXE '.encode('shift_jis')):
