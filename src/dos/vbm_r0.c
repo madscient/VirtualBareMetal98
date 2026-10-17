@@ -418,13 +418,29 @@ u32 v30_emul_first;
 u8 v30_emul_op[4];
 u16 fault_refl_n[2];
 u32 fault_refl_first[2];
+u16 rdtsc_rom_n;
 
 u16 mon_on_fault(u8 vec, u32 err, struct mon_vframe *f, struct mon_gregs *r)
 {
     u16 len, i;
     u32 at = mon_lin((u16)f->cs, (u16)f->eip);
     u32 csip = ((u32)(u16)f->cs << 16) | (u16)f->eip;
+    u32 tsc[2];
 
+    /*
+     * CR4 の TSD を立てている間は、ホストの BIOS がゲストの世界で RDTSC を実行しても一般保護例外になる。ゲストの
+     * プログラムはメモリ (A0000h 未満) にしか置かれないので、A0000h 以上の 0F 31 は V30 の INS ではなく RDTSC として
+     * 実行する。PC-98 の BIOS が RDTSC を使うかどうかは分かっていない (design.md §14)
+     */
+    if (mon_cr4_set && vec == 13 && err == 0 && at >= 0xA0000UL && mon_peek8(at) == 0x0F && mon_peek8(at + 1) == 0x31) {
+        mon_rdtsc(tsc);
+        r->eax = tsc[0];
+        r->edx = tsc[1];
+        f->eip = (f->eip & 0xFFFF0000UL) | (u16)((u16)f->eip + 2);
+        if (rdtsc_rom_n != 0xFFFF)
+            rdtsc_rom_n++;
+        return 0;
+    }
     if (v30_on && (vec == 6 || (vec == 13 && err == 0)) && mon_v30_emulate(f, r)) {
         if (!v30_emul_n) {
             v30_emul_first = csip;

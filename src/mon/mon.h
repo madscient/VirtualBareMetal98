@@ -146,6 +146,20 @@ FARTEXT void __far mon_init(const struct mon_paging *pg);
 FARTEXT int __far mon_vcpi_setup(u32 pt0_phys);
 
 extern u8 mon_rmfix;
+
+/*
+ * CR4 (design.md §14)。mon_cr4_set が 0 でなければ、モニタの世界に入るたびに CR4 にこのビットを OR し、出るときに
+ * 入る前の値へ戻す。0 なら CR4 には触らない (CR4 の無い CPU では、読むだけで未定義命令例外になる)。
+ * mon_cr4_host は入る前の値、mon_cr4_run は書いたあとに読み返した値 (最後に入ったときのもの。試験と報告に使う)
+ */
+#define MON_CR4_TSD 0x00000004UL
+extern u32 mon_cr4_set, mon_cr4_host, mon_cr4_run;
+/*
+ * CPUID の 1 番。リアルモードと仮想86モードのどちらからでも呼べる。CPUID が無いか、1 番が無ければ 0 を返す。
+ * あれば out[0] = EAX (bit 11〜8 がファミリ)、out[1] = EDX (機能のビット。bit 4 が TSC) を入れて 1 を返す
+ */
+u16 mon_cpuid1(u32 *out);
+
 /*
  * リアルモード専用 (仮想86モードでは呼ばない: 限界を越える読み出しで確かめるので、EMM の下では例外が EMM に届く)。
  * out[0] = DS・ES・FS・GS のうち限界が 64KB を越えているもの (bit 0〜3)、out[1] = FS、out[2] = GS。
@@ -205,6 +219,8 @@ void mon_on_halt_wake(void);
 int mon_v30_emulate(struct mon_vframe *f, struct mon_gregs *r);
 /* ゼロ除算 (ベクタ 0) の戻り番地を V30 と同じ「命令の次」にするための、CS:IP の除算命令の長さ。読み解けなければ 0 */
 u16 mon_v30_div_len(const struct mon_vframe *f);
+/* RDTSC を実行し、out[0] = EAX、out[1] = EDX を入れる。CPU が TSC を持つときだけ呼ぶ */
+void mon_rdtsc(u32 *out);
 
 /*
  * 割り込みを一瞬だけ許可し、その間に来た割り込みのベクタ番号を返す (来なければ 0)。割り込みは取り込まない

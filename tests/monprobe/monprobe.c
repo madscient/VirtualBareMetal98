@@ -18,11 +18,15 @@ extern void g_remap(void), g_reset(void), g_priv(void), g_priv_at(void);
 extern void g_io(void), g_io_native(void), g_ios(void), g_irq98(void), g_sep(void), g_sep_end(void);
 extern void g_v30_bitc(void), g_v30_biti(void), g_v30_bcd(void), g_v30_cmp4s(void), g_v30_rot(void);
 static int no_tr;   /* 引数 notr: 0F 26 (386 の MOV TR) を実行すると止まるエミュレータでは CMP4S の試験を飛ばす */
+static int no_tsd;  /* 引数 notsd: CR4 に TSD を書くとダイアログを出して止まるエミュレータでは CR4 の試験を飛ばす */
 extern void g_v30_ins(void), g_v30_insi(void), g_v30_ext(void), g_v30_exti(void);
 extern u8 probe_v30;
 extern void g_bios(void), g_bios_end(void);
 extern void probe_mark(void), probe_unmark(void), probe_sgdt(u8 *out), probe_lgdt(const u8 *in);
 extern u16 probe_marks(void);
+extern u32 probe_cr4(void);
+extern void probe_set_cr4(u32 v);
+#define CR4_PSE 0x00000010UL
 extern u8 rm_inb(u16 port);
 extern void rm_isr08(void), rm_isr17(void);
 extern u8 rm_old08[], rm_old17[], rm_cnt08[], rm_cnt17[];
@@ -309,6 +313,52 @@ static void survey_bios_workarea(u16 handle, u32 guest_off, u32 phys)
  * セグメントの限界と、PE を落とした直後の far JMP は、エミュレータでは違いが見えないので、ここでは見ていない
  * (限界を調べた結果は参考に出す)
  */
+/*
+ * CR4 (mon.h の mon_cr4_set)。TSC を持つ CPU では、ゲストの実行中だけ TSD を立て、リアルモードへ戻ったら元の値に
+ * 戻す。TSD で RDTSC が一般保護例外になることはどちらのエミュレータも再現しない (design.md §12) ので、見るのは CR4 の
+ * 値だけ
+ */
+static void test_cr4(void)
+{
+    u32 id[2], host, before, after;
+    u16 rc;
+
+    if (no_tsd) {
+        printf("# cr4: not run (notsd: this emulator stops with a dialog when TSD is written)\n");
+        return;
+    }
+    if (!mon_cpuid1(id)) {
+        printf("# cr4: no CPUID on this host, not run\n");
+        return;
+    }
+    printf("# cr4: CPUID family %u, EDX=%08lX\n", (unsigned)(id[0] >> 8) & 15, (unsigned long)id[1]);
+    if (!(id[1] & 0x10)) {
+        printf("# cr4: no TSC on this host, not run\n");
+        return;
+    }
+    /*
+     * ホストの値が 0 のままだと、控えた値を戻すのと 0 を書くのとが見分けられない。PSE を持つ CPU では、この間だけ
+     * ホストの CR4 に PSE を立てておく (ページ表の項に PS を立てない限り、ページングの結果は変わらない)
+     */
+    host = probe_cr4();
+    if (id[1] & 0x08)
+        probe_set_cr4(host | CR4_PSE);
+    before = probe_cr4();
+    mon_cr4_set = MON_CR4_TSD;
+    rc = run(g_exit, 0);
+    mon_cr4_set = 0;
+    after = probe_cr4();
+    probe_set_cr4(host);
+    printf("# cr4: before %08lX, while the guest ran %08lX (saved %08lX), after %08lX\n", (unsigned long)before,
+           (unsigned long)mon_cr4_run, (unsigned long)mon_cr4_host, (unsigned long)after);
+    check("cr4: the host value has no TSD and is not zero (otherwise the checks below prove nothing)",
+          !(before & MON_CR4_TSD) && before != 0);
+    check("cr4: the guest ran and returned", rc == X_DONE);
+    check("cr4: TSD is set while the guest runs, on top of the host value",
+          mon_cr4_host == before && mon_cr4_run == (before | MON_CR4_TSD));
+    check("cr4: the host value is put back after returning to real mode", after == before);
+}
+
 static void test_rm_state(void)
 {
     u8 gdt0[6], gdt1[6];
@@ -428,7 +478,10 @@ int main(int argc, char **argv)
     u8 orig;
 
     /* PC-98 の上で走らせる前提 (割り込みコントローラとタイマのポート、INT 18h) */
-    no_tr = argc > 1 && strcmp(argv[1], "notr") == 0;
+    for (i = 1; i < (u16)argc; i++) {
+        no_tr |= strcmp(argv[i], "notr") == 0;
+        no_tsd |= strcmp(argv[i], "notsd") == 0;
+    }
     tables = alloc_pages(MONMEM_TABLE_PAGES);
     pa = alloc_pages(3);
     if (!tables || !pa) {
@@ -605,6 +658,7 @@ int main(int argc, char **argv)
 
     test_separation();
     test_rm_state();
+    test_cr4();
 
     check("error code: the tests above ran with a non-zero upper half (A5A5)", mon_errhi_seen == 0xA5A5);
 

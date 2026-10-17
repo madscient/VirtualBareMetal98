@@ -23,6 +23,7 @@
         .global mon_rm_cs, mon_panic_vec, mon_panic_stack
         .global mon_vcpi_on, mon_vcpi_entry, mon_vcpi_sw, mon_pm_start
         .global mon_page0_on
+        .global mon_cr4_set, mon_cr4_host, mon_cr4_run
 
 mon_stack:      .skip   MON_STACK_SIZE
 mon_stack_top:
@@ -62,6 +63,12 @@ mon_halt_vec:   .skip   2
 /* 0 番ページの入れ替え (page0_in / page0_out)。mon_page0_on は組み込む側が立てる。page0_swapped は入れ替えてある間 1 */
 mon_page0_on:   .skip   2
 page0_swapped:  .skip   2
+/* CR4 (mon.h)。cr4_swapped は、入る前の値を控えてから戻すまでの間 1 */
+        .balign 4
+mon_cr4_set:    .skip   4
+mon_cr4_host:   .skip   4
+mon_cr4_run:    .skip   4
+cr4_swapped:    .skip   2
 /*
  * VCPI (EMM の下)。mon_vcpi_on が 0 以外なら、モード切替を自分で CR0 を触らずにサーバに頼む。
  * mon_vcpi_sw は AX=DE0Ch に渡す構造体 (CR3、GDTR と IDTR の線形番地、LDTR、TR、CS:EIP の PWORD。22 バイト)、
@@ -282,7 +289,21 @@ mon_pm_start:
         mov     fs:[edx], eax
         mov     eax, [mon_pd_phys]
         mov     cr3, eax
-        call    page0_in
+        /*
+         * CR4 は、EMM の下ではサーバの値のまま来る。入る前の値を控えてから mon_cr4_set を OR する。控えたあとに
+         * モニタの例外で抜けても、leave_pm が戻す
+         */
+        mov     edx, [mon_cr4_set]
+        test    edx, edx
+        jz      1f
+        mov     eax, cr4
+        mov     [mon_cr4_host], eax
+        mov     word ptr [cr4_swapped], 1
+        or      eax, edx
+        mov     cr4, eax
+        mov     eax, cr4
+        mov     [mon_cr4_run], eax
+1:      call    page0_in
         xor     ax, ax
         lldt    ax
         mov     gs, ax
@@ -392,7 +413,12 @@ trap_in_monitor:
 leave_pm:
         mov     [exit_code], ax
         call    page0_out
-        mov     ax, MON_SEL_FLAT
+        cmp     word ptr [cr4_swapped], 0
+        je      1f
+        mov     eax, [mon_cr4_host]
+        mov     cr4, eax
+        mov     word ptr [cr4_swapped], 0
+1:      mov     ax, MON_SEL_FLAT
         mov     fs, ax
         mov     edx, [mon_pd_lin]
         mov     eax, [mon_pde0_host]
@@ -634,6 +660,63 @@ mon_lin:
         add     eax, edx
         mov     edx, eax
         shr     edx, 16
+        pop     bp
+        ret
+
+/*
+ * u16 mon_cpuid1(u32 *out)  リアルモード・仮想86モード (mon.h)
+ * CPUID の有無は、EFLAGS の bit 21 (ID) を反転して書き、読み返して変わるかで見る (design.md §12)。EFLAGS は元に戻す。
+ * 出口: AX = 1 なら out[0] = 1 番の EAX、out[1] = EDX。0 なら CPUID が無いか、1 番が無い。
+ * 保存: SI, DI, ES と EBX。壊す: AX, CX, DX と EAX・ECX・EDX の上位
+ */
+        .global mon_cpuid1
+mon_cpuid1:
+        push    bp
+        mov     bp, sp
+        push    ebx
+        pushfd
+        pop     eax
+        mov     ecx, eax
+        xor     eax, 0x00200000
+        push    eax
+        popfd
+        pushfd
+        pop     eax
+        push    ecx
+        popfd
+        xor     eax, ecx
+        test    eax, 0x00200000
+        jz      1f
+        xor     eax, eax
+        .byte   0x0F, 0xA2                      /* cpuid */
+        cmp     eax, 1
+        jb      1f
+        mov     eax, 1
+        .byte   0x0F, 0xA2                      /* cpuid */
+        mov     bx, [bp + 4]
+        mov     [bx], eax
+        mov     [bx + 4], edx
+        mov     ax, 1
+        jmp     2f
+1:      xor     ax, ax
+2:      pop     ebx
+        pop     bp
+        ret
+
+/*
+ * void mon_rdtsc(u32 *out)  ring 0 専用 (mon.h)
+ * 出口: out[0] = EAX、out[1] = EDX。壊す: AX, DX と EAX・EDX の上位
+ */
+        .global mon_rdtsc
+mon_rdtsc:
+        push    bp
+        mov     bp, sp
+        push    bx
+        .byte   0x0F, 0x31                      /* rdtsc */
+        mov     bx, [bp + 4]
+        mov     [bx], eax
+        mov     [bx + 4], edx
+        pop     bx
         pop     bp
         ret
 

@@ -21,9 +21,10 @@ DONE = 'DONE.TXT'
 ENVS = (('dosboxx', 'VBM_DOSBOXX'), ('np21w', 'VBM_NP21W'))
 
 # DOSBox-X を PC-98 として。EMS を切るのは、内蔵の EMM が CPU を仮想86 にする設定があり、リアルモードの DOS として
-# 試験したいため (EMM の下の試験は NP21/W の v86 で行う)。cputype を 486 に固定するのは、後の世代の命令 (SSE の
+# 試験したいため (EMM の下の試験は NP21/W の v86 で行う)。cputype を既定で 486 にするのは、後の世代の命令 (SSE の
 # 0F 10〜1F・28・2A、RDTSC の 0F 31) を未定義命令例外にして、同じバイト列の V30 の命令の代行を試験できるように
-# するため (auto だと実行されてしまう。src/cpu/core_normal/prefix_0f.h、prefix_0f_mmx.h)
+# するため (auto だと実行されてしまう。src/cpu/core_normal/prefix_0f.h、prefix_0f_mmx.h)。ホストの CPU の世代で
+# 振る舞いを変える箇所の試験 (run_dos_tests.py の cpu) だけ、別の世代にする
 DOSBOXX_CONF = """[sdl]
 output=surface
 [dosbox]
@@ -31,7 +32,7 @@ machine=pc98
 memsize=16
 [cpu]
 core=%s
-cputype=486
+cputype=%s
 cycles=max
 [dos]
 xms=true
@@ -79,13 +80,13 @@ def workdir():
     return os.path.join(ROOT, 'build', 'dbx')
 
 
-def _dosboxx(target, wd, timeout, core):
+def _dosboxx(target, wd, timeout, core, cputype):
     # 実行ファイルが無いと、試験は 1 項目も出さずに終わる。起動の失敗としてではなく、理由が分かる形で止める
     if not os.path.isfile(target):
         raise RuntimeError('DOSBox-X の実行ファイルが無い (環境変数 VBM_DOSBOXX の指す先を確かめる)')
     conf = os.path.join(wd, 'dosboxx.conf')
     with open(conf, 'w') as f:
-        f.write(DOSBOXX_CONF % (core if core != 'auto' else 'normal', wd, BATCH))
+        f.write(DOSBOXX_CONF % (core if core != 'auto' else 'normal', cputype, wd, BATCH))
     # -conf を渡すので利用者の設定ファイルには左右されない。-silent は映像と音声を dummy にして窓を出さず、
     # AUTOEXEC が終わると終了する。-nopromptfolder は、初回起動で作業フォルダを尋ねるダイアログを出させないため。
     # 内蔵の DOS が要るので、OSFREE 版 (ゲスト OS の起動しかできない) では走らない (docs/setup.md)
@@ -222,10 +223,27 @@ def _np21w(src, share, timeout, core, emm=False, msdos=False, msdos_config=None,
         th.join(timeout=30)
 
 
-def run_batch(commands, timeout, core='auto', emm=False, msdos=False, msdos_config=None, during=None, np21w_ini=None):
+# NP21/W の CPU コアは、CR4 に TSD を書くたびにメッセージボックスを出して止まる (TSD を書いてよいビットに入れていない。
+# i386c/ia32/instructions/system_inst.c の MOV_CdRd と ia32_warning)。VBM98 は -v30 on で、TSC のある CPU なら TSD を
+# 立てる (design.md §14) ので、NP21/W では -v30 off を付けて走らせる。DOS のコマンド行は 126 文字までで、越えると
+# 黙って実行されないので、越えたら止める
+def _np21w_command(cmd):
+    m = re.match(r'(?i)VBM98(\.EXE)?(?=\s|$)', cmd)
+    if not m:
+        return cmd
+    cmd = m.group(0) + ' -v30 off' + cmd[m.end():]
+    if len(cmd) > 126:
+        raise RuntimeError('-v30 off を足すと DOS のコマンド行の 126 文字を越える: ' + cmd)
+    return cmd
+
+
+def run_batch(commands, timeout, core='auto', emm=False, msdos=False, msdos_config=None, during=None, np21w_ini=None,
+              cputype='486'):
     """commands を順に実行する。最後まで走ったら True。
 
     core は DOSBox-X の CPU の再現方式 ('auto' なら 'normal' = 命令を逐次解釈する方式にする。NP21/W では使わない)。
+    cputype は DOSBox-X だけ: 再現する CPU の世代 (DOSBox-X の cputype の値)。
+    NP21/W では、VBM98.EXE の行に -v30 off を足す (_np21w_command)。
     emm は NP21/W だけ: EMM386 (VCPI あり) を読み込んだ DOS で走らせる。
     msdos は NP21/W だけ: 実物の MS-DOS の起動ディスク (VBM_MSDOS) から起動した DOS で走らせる。
     msdos_config は msdos のときだけ: CONFIG.SYS の HIMEM.SYS の行のあとに置く行の並び (EMM386.EXE のオプションや DOS=)。
@@ -239,6 +257,8 @@ def run_batch(commands, timeout, core='auto', emm=False, msdos=False, msdos_conf
         raise RuntimeError('EMM 環境と MS-DOS の試験、窓を操作する試験は NP21/W だけ')
     if msdos and not msdos_image():
         raise RuntimeError('MS-DOS の起動ディスクが未指定: VBM_MSDOS')
+    if env == 'np21w':
+        commands = [_np21w_command(c) for c in commands]
     wd = workdir()
     os.makedirs(wd, exist_ok=True)
     done = os.path.join(wd, DONE)
@@ -248,7 +268,7 @@ def run_batch(commands, timeout, core='auto', emm=False, msdos=False, msdos_conf
         f.write('\n'.join(['@ECHO OFF'] + list(commands) + ['ECHO done > ' + DONE]) + '\n')
     try:
         if env == 'dosboxx':
-            _dosboxx(target, wd, timeout, core)
+            _dosboxx(target, wd, timeout, core, cputype)
         else:
             _np21w(target, wd, timeout, core, emm, msdos, msdos_config, during, np21w_ini)
     except subprocess.TimeoutExpired:

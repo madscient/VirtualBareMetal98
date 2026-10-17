@@ -126,3 +126,21 @@ probe_sgdt:
         pop     bx
         pop     bp
         ret
+
+/* u32 probe_cr4(void): DX:AX = CR4 (リアルモードで。CR4 のある CPU でだけ呼ぶ)。壊す: EAX, EDX */
+        .global probe_cr4
+probe_cr4:
+        mov     eax, cr4
+        mov     edx, eax
+        shr     edx, 16
+        ret
+
+/* void probe_set_cr4(u32 v): CR4 = v (リアルモードで。CR4 のある CPU でだけ呼ぶ)。壊す: EAX */
+        .global probe_set_cr4
+probe_set_cr4:
+        push    bp
+        mov     bp, sp
+        mov     eax, [bp + 4]
+        mov     cr4, eax
+        pop     bp
+        ret

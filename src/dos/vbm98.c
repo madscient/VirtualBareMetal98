@@ -81,6 +81,30 @@ static FARTEXT int __far check_v86(void)
     return 0;
 }
 
+/*
+ * ホストの CPU の世代で、V30 の命令の代行が届く範囲が変わる (design.md §14)。TSC を持つ CPU では 0F 31 (V30 の
+ * INS reg,reg) が RDTSC として実行されるので、-v30 on ならゲストの実行中だけ CR4 の TSD を立てて一般保護例外にする。
+ * ファミリ 6 と 15 (Pentium Pro 以降) では 0F 18〜1F が無動作命令として実行され、届かない (§12)
+ */
+static FARTEXT NOINLINE void __far cpu_setup(int v30)
+{
+    u32 id[2];
+    unsigned fam;
+
+    if (!mon_cpuid1(id)) {
+        say("VBM98: CPU: no CPUID\n");
+        return;
+    }
+    fam = (unsigned)(id[0] >> 8) & 15;
+    if (v30 && (id[1] & 0x10))
+        mon_cr4_set = MON_CR4_TSD;
+    say("VBM98: CPU: family %u, %s\n", fam, !(id[1] & 0x10) ? "no TSC"
+        : mon_cr4_set ? "TSC; CR4.TSD is set while the guest runs" : "TSC; CR4 is left alone (-v30 off)");
+    if (v30 && (fam == 6 || fam == 15))
+        say("VBM98: warning: on this CPU, the V30 instructions TEST1/CLR1/SET1/NOT1 with an immediate bit number "
+            "(0F 18-1F) run as no-ops and are not emulated\n");
+}
+
 struct opts {
     const char *fdd[DRIVES];
     u16 fdd_idx[DRIVES];            /* -fddN の ",<番号>" (D88 の中のディスク。1 から)。0 なら省略 */
@@ -2546,6 +2570,9 @@ static FARTEXT void __far dump_guest(const struct mon_guest *g, int fault)
     if (v30_emul_n)
         say(" (first at %04X:%04X: %02X %02X %02X %02X)", (unsigned)(v30_emul_first >> 16), (unsigned)(u16)v30_emul_first,
             v30_emul_op[0], v30_emul_op[1], v30_emul_op[2], v30_emul_op[3]);
+    if (mon_cr4_set)
+        say("; RDTSC in ROM: %u; CR4 %08lX before entering, %08lX while the guest runs", rdtsc_rom_n,
+            (unsigned long)mon_cr4_host, (unsigned long)mon_cr4_run);
     say("; exceptions reflected to the guest: INT 0 x%u, INT 6 x%u", fault_refl_n[0], fault_refl_n[1]);
     for (i = 0; i < 2; i++)
         if (fault_refl_n[i])
@@ -2823,6 +2850,7 @@ static FARTEXT NOINLINE int __far vm_setup(int argc, char **argv, struct opts *o
             st[0] ? "" : " none", st[1], st[2], mon_rmfix);
     }
     v30_on = (u8)o->v30;
+    cpu_setup(o->v30);
     if (o->have_dipsw) {
         u8 hsw[3];
 

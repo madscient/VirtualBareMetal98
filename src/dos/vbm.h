@@ -175,6 +175,8 @@ extern u32 v30_emul_first;
 extern u8 v30_emul_op[4];
 extern u16 fault_refl_n[2];
 extern u32 fault_refl_first[2];
+/* 同じ報告: ホストの ROM の中で RDTSC として実行した 0F 31 の数 (CR4 の TSD を立てたとき。vbm_r0.c の mon_on_fault) */
+extern u16 rdtsc_rom_n;
 /*
  * -iotrap (design.md §15)。ゲストのポート iotrap_guest[i] への I/O を、ホストのポート iotrap_host[i] に
  * 読み替える。表は ring 0 側が持ち、ホスト側が起動時に埋めてそのポートをトラップする

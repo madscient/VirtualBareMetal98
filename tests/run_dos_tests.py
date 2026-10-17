@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DOS 向けにビルドした試験プログラムを DOS 上で走らせる。
 
-    python tests/run_dos_tests.py [img] [fdb] [fdmem] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [d88] [blank] [profile] [shot] [con] [isr] [menu] [page0] [kdefer] [hotmod] [keys] [hotkey] [v86]
+    python tests/run_dos_tests.py [img] [fdb] [fdmem] [mon] [boot] [hook] [msdos] [nfdid] [boot2dd] [d88] [blank] [profile] [shot] [con] [isr] [cpu] [menu] [page0] [kdefer] [hotmod] [keys] [hotkey] [v86]
 
     img      ディスクイメージ層。int が 16 ビットの環境でもホスト OS 上と同じ結果になるか
     fdb      INT 1Bh の意味論 (fdbios)。同上
@@ -18,6 +18,7 @@
     shot     スクリーンショット。試験用の IPL が書いた文字と色の帯が、-shotat で撮った PNG に写るか
     con      出力をファイルに向けずに走らせたとき、DOS に戻ったあとの画面に残る表示
     isr      ゲストが割り込みの処理の途中のまま離れたとき、割り込みコントローラを片付けて DOS に戻るか
+    cpu      ホストの CPU の世代 (CPUID、TSC) による判定と、ゲストの実行中だけ CR4 の TSD を立てること (DOSBox-X だけ)
     menu     VM メニュー。-menuat で開き -menukeys で操作して、画面の復元とゲストの再開を見る
     page0    ゲストが BIOS のワークエリアに書いたものを BIOS が使うか (ゲストの 0 番ページの置き場)
     kdefer   ゲストが割り込み禁止のままホスト世界へ行った間のキーが、あとで届くか
@@ -82,8 +83,9 @@ def test_mon(work):
     out = os.path.join(work, 'MON.OUT')
     if os.path.exists(out):
         os.remove(out)
-    # NP21/W の CPU コアは 0F 26 (386 の MOV TR) で止まる (ia32_panic) ので、その並びを使う V30 の試験 (CMP4S) を飛ばす
-    args = 'notr' if dosenv.name() == 'np21w' else ''
+    # NP21/W の CPU コアは 0F 26 (386 の MOV TR) で止まる (ia32_panic) ので、その並びを使う V30 の試験 (CMP4S) を飛ばす。
+    # CR4 に TSD を書くとダイアログを出して止まる (dosenv._np21w_command) ので、CR4 の試験も飛ばす
+    args = 'notr notsd' if dosenv.name() == 'np21w' else ''
     finished = dosenv.run_batch(['MONPROBE.EXE %s > MON.OUT' % args], 300, core='normal')
     lines = imgtests.read_lines(work, 'MON.OUT') or []
     for line in lines:
@@ -443,7 +445,10 @@ def test_boot(work):
     # 「5. リセット」→ Y (3 回目の実行) → HLT → 「4. 終了」→ Y と操作する。
     # -dipsw は NP21/W の既定 (3E 73 7B) と、見ているビット全部で違う値にする。SW2-3 を OFF (20 行) にし、
     # SW2-4 は ON のまま (80 桁。40 桁だとメニューの表示が崩れる)。SW1 の下位 4 桁は '*' (ホストの値: SW1-1 と SW1-3)
-    # -memsw は SW4 だけ 08h、他は '*'。コマンド行は DOS の 126 文字の制限に収める
+    # -memsw は SW4 だけ 08h、他は '*'。コマンド行は DOS の 126 文字の制限に収める (NP21/W では -v30 off が足される
+    # ので、-iotrap と -sbrom はプロファイル B.PRO に置く)
+    with open(os.path.join(work, 'B.PRO'), 'w') as f:
+        f.write('-iotrap I.TXT -sbrom S.ROM\n')
     log = os.path.join(work, 'B.LOG')
     if os.path.exists(log):
         os.remove(log)
@@ -454,7 +459,7 @@ def test_boot(work):
             os.remove(os.path.join(work, name))
     finished = dosenv.run_batch(['DMARD.COM > DMA0.OUT',
                                  'VBM98.EXE -fdd0 B.IMG -trace -menukeys 05,15,04,15 -dipsw 0*F4FB -memsw ******08******** '
-                                 '-iotrap I.TXT -sbrom S.ROM -log B.LOG > BOOT.OUT',
+                                 '@B.PRO -log B.LOG > BOOT.OUT',
                                  'DMARD.COM > DMA1.OUT'], 180, core='normal')
     dma0 = ' '.join(imgtests.read_lines(work, 'DMA0.OUT') or []).strip()
     dma1 = ' '.join(imgtests.read_lines(work, 'DMA1.OUT') or []).strip()
@@ -1082,6 +1087,86 @@ def test_isr(work):
         print('%s %s' % ('ok  ' if c else 'FAIL', name))
         ok = ok and c
     print('処理中の割り込みの後始末: %s' % ('通過' if ok else '失敗'))
+    return ok
+
+
+def test_cpu(work):
+    """ホストの CPU の世代で振る舞いを変える箇所 (design.md §14)。DOSBox-X の cputype を 386 (CPUID なし)、486 (TSC なし)、
+    pentium (ファミリ 5、TSC あり)、ppro_slow (ファミリ 6) にして、本体の起動時の判定と、ゲストの実行中だけ CR4 の TSD が
+    立つこと、-v30 off では CR4 に触らないことを見る。pentium ではモニタ核の試験も走らせ、CR4 が戻ることを見る
+    (cr4 の項目)。TSD で RDTSC が例外になることは DOSBox-X が再現しないので見ない。試験用の IPL は isr と同じ
+    (VSYNC 割り込みのハンドラの中で回り続け、-stopafter で止まる)。DOSBox-X だけ (NP21/W は CR4 に TSD を書くと止まる)"""
+    if dosenv.name() != 'dosboxx':
+        print('CPU の世代: DOSBox-X でだけ走らせる (CPU の世代を選べるのは DOSBox-X)')
+        return True
+    with open(os.path.join(BUILT, 'ISRIPL.BIN'), 'rb') as f:
+        img = bytearray(77 * 2 * 8 * 1024)
+        img[0:1024] = f.read()
+    with open(os.path.join(work, 'C.IMG'), 'wb') as f:
+        f.write(img)
+    shutil.copy2(os.path.join(BUILT, 'MONPROBE.EXE'), os.path.join(work, 'MONPROBE.EXE'))
+    run = 'VBM98.EXE -fdd0 C.IMG -tick -stopafter 50'
+    plan = (('386', [run + ' > CPU3.OUT']),
+            ('486', [run + ' > CPU4.OUT']),
+            ('pentium', ['MONPROBE.EXE > CPUMON.OUT', run + ' > CPU5.OUT', run + ' -v30 off > CPU5OFF.OUT']),
+            ('ppro_slow', [run + ' > CPU6.OUT', run + ' -v30 off > CPU6OFF.OUT']))
+    finished = True
+    for cputype, cmds in plan:
+        for c in cmds:
+            out = os.path.join(work, c.split('> ')[1])
+            if os.path.exists(out):
+                os.remove(out)
+        finished = dosenv.run_batch(cmds, 180, core='normal', cputype=cputype) and finished
+    out = {}
+    for name in ('CPU3', 'CPU4', 'CPU5', 'CPU5OFF', 'CPU6', 'CPU6OFF', 'CPUMON'):
+        out[name] = imgtests.read_lines(work, name + '.OUT') or []
+
+    def cpu_line(name):
+        return next((l for l in out[name] if l.startswith('VBM98: CPU:')), '')
+
+    def cr4(name):
+        """終了時の報告の 'CR4 <入る前> before entering, <実行中> while the guest runs' の 2 つの値。なければ None"""
+        for l in out[name]:
+            m = re.search(r'CR4 ([0-9A-F]{8}) before entering, ([0-9A-F]{8}) while the guest runs', l)
+            if m:
+                return int(m.group(1), 16), int(m.group(2), 16)
+        return None
+
+    def stopped(name):
+        return any('stopped after' in l for l in out[name])
+
+    warn = 'TEST1/CLR1/SET1/NOT1 with an immediate bit number'
+    for name in ('CPU3', 'CPU4', 'CPU5', 'CPU5OFF', 'CPU6', 'CPU6OFF'):
+        print('  %s: %s' % (name, cpu_line(name)))
+        print('  %s: CR4 %s' % (name, cr4(name)))
+    mon = [l for l in out['CPUMON'] if 'cr4' in l]
+    for l in mon:
+        print('  ' + l)
+    c5, c6 = cr4('CPU5'), cr4('CPU6')
+    ok = True
+    for name, c in (
+        ('batches finished', finished),
+        ('the guest ran on each CPU (stopped by -stopafter)', all(stopped(n) for n in ('CPU3', 'CPU4', 'CPU5', 'CPU5OFF', 'CPU6', 'CPU6OFF'))),
+        ('386: no CPUID, CR4 left alone', cpu_line('CPU3') == 'VBM98: CPU: no CPUID' and cr4('CPU3') is None),
+        ('486: family 4 without TSC, CR4 left alone', cpu_line('CPU4') == 'VBM98: CPU: family 4, no TSC' and cr4('CPU4') is None),
+        ('pentium: family 5 with TSC, TSD is set while the guest runs',
+         cpu_line('CPU5') == 'VBM98: CPU: family 5, TSC; CR4.TSD is set while the guest runs'
+         and c5 is not None and not (c5[0] & 4) and c5[1] == c5[0] | 4),
+        ('pentium, -v30 off: CR4 left alone',
+         cpu_line('CPU5OFF') == 'VBM98: CPU: family 5, TSC; CR4 is left alone (-v30 off)' and cr4('CPU5OFF') is None),
+        ('pentium: no warning about 0F 18-1F', not any(warn in l for l in out['CPU5'])),
+        ('ppro_slow: family 6, TSD is set and the warning about 0F 18-1F is shown',
+         cpu_line('CPU6') == 'VBM98: CPU: family 6, TSC; CR4.TSD is set while the guest runs'
+         and c6 is not None and c6[1] == c6[0] | 4 and any(warn in l for l in out['CPU6'])),
+        ('ppro_slow, -v30 off: no warning, CR4 left alone',
+         not any(warn in l for l in out['CPU6OFF']) and cr4('CPU6OFF') is None),
+        ('monitor core on pentium: the cr4 checks ran and passed',
+         len([l for l in mon if l.startswith('ok   cr4:')]) == 4 and not any(l.startswith('FAIL') for l in out['CPUMON'])
+         and out['CPUMON'][-1:] and out['CPUMON'][-1].startswith('END 0 ')),
+    ):
+        print('%s %s' % ('ok  ' if c else 'FAIL', name))
+        ok = ok and bool(c)
+    print('CPU の世代: %s' % ('通過' if ok else '失敗'))
     return ok
 
 
@@ -1959,7 +2044,7 @@ def test_fdmem(work):
 TESTS = (('img', 'IMGDUMP.EXE', test_img), ('fdb', 'FDBTEST.EXE', test_fdb), ('fdmem', 'VBM98.EXE', test_fdmem), ('mon', 'MONPROBE.EXE', test_mon), ('boot', 'VBM98.EXE', test_boot),
          ('hook', 'VBM98.EXE', test_hook), ('msdos', 'VBM98.EXE', test_msdos), ('nfdid', 'VBM98.EXE', test_nfdid),
          ('boot2dd', 'VBM98.EXE', test_boot2dd), ('d88', 'VBM98.EXE', test_d88), ('blank', 'VBM98.EXE', test_blank), ('profile', 'VBM98.EXE', test_profile),
-         ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('isr', 'VBM98.EXE', test_isr), ('menu', 'VBM98.EXE', test_menu), ('page0', 'VBM98.EXE', test_page0), ('kdefer', 'VBM98.EXE', test_kdefer),
+         ('shot', 'VBM98.EXE', test_shot), ('con', 'VBM98.EXE', test_con), ('isr', 'VBM98.EXE', test_isr), ('cpu', 'VBM98.EXE', test_cpu), ('menu', 'VBM98.EXE', test_menu), ('page0', 'VBM98.EXE', test_page0), ('kdefer', 'VBM98.EXE', test_kdefer),
          ('hotmod', 'VBM98.EXE', test_hotmod),
          ('keys', 'VBM98.EXE', test_keys), ('hotkey', 'VBM98.EXE', test_hotkey),
          ('v86', 'VBM98.EXE', test_v86))
