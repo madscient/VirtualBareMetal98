@@ -403,7 +403,8 @@ VRAM は消える（ITF が消す）。ソフトウェアで再起動する道�
    全試験のやり直しは要らない（利用者の判断、2026-10-11・2026-10-12）。ビルドと、ホスト OS 上の試験（README から作る
    文書の変換を見る）は行う
 3. `vx.y.z` の題でコミットし、同じ名前のタグを打って、ブランチとタグを push する
-4. `build/dos/` の `VBM98.EXE` と `VBM98.DOC`、リポジトリの `README.md` と `LICENSE` を `build/release/` に写し、zip にする。
+4. `build/dos/` の `VBM98.EXE` と `VBM98.DOC` と `CHANGES.DOC`、リポジトリの `README.md` と `CHANGELOG.md` と `LICENSE` を
+   `build/release/` に写し、zip にする。
    zip は Windows の `tar.exe`（`%SystemRoot%\System32`）の `-a -c -f` で作る。Git Bash の `tar` は同じ引数で tar 形式の
    ファイルを作るので使わない。上げる前に、zip として開けることと、中の `VBM98.EXE` と `VBM98.DOC` の版を確かめる
 5. `gh release create vx.y.z --verify-tag` で、zip と `VBM98.EXE` を付けて公開する。リリースノートには、v 前回からの変更、
@@ -2206,7 +2207,10 @@ VRAM は消える（ITF が消す）。ソフトウェアで再起動する道�
   - README.md の「開発状況」は、機種ごとに動くものと、未解決の問題の 2 つに書き直した。解決した不具合の記述は、動くもの
     の側の現状の文に置き換えた。うまく動かないときの節の「v0.1.13 から」も外した
   - CLAUDE.md の文書の表と README の規則、上のリリースの手順を直した
-  - 未決: CHANGELOG.md をリリースの zip に入れるか、PC-98 用に変換するか（利用者に確認中）
+  - 利用者の判断: CHANGELOG.md をリリースの zip に入れ、PC-98 用に変換した `CHANGES.DOC` も入れる（名前も利用者が選んだ。
+    候補は HISTORY.DOC・CHANGES.DOC・VBM98CHG.DOC）。変換は README.md と同じ `tools/mkdoc.py` で、そのまま通った。
+    `tools/build16.sh` で作り、ホスト OS 上の試験（`run_host_tests.py` の `run_doc`）に 1 件足した。その検査は、v0.1.0 の
+    見出しを崩した CHANGELOG.md で落ちることを確かめた
 
 ## 見送った提案
 

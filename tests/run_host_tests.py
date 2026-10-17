@@ -140,33 +140,45 @@ def run(exes, verbose=True):
     return failed
 
 
-def run_doc():
-    """README.md から作る PC-98 用の文書 (tools/mkdoc.py)。変換そのものが、JIS X 0208 にない文字と桁あふれと
-    記法の残りで止まる。ここでは出来たファイルを読み直して、DOS で読める形になっているかを見る"""
-    out = os.path.join(BUILD, 'VBM98.DOC')
-    p = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'mkdoc.py'), os.path.join(ROOT, 'README.md'),
+def convert_doc(src, name):
+    """tools/mkdoc.py で src を変換し、(失敗の理由, 本文, 先頭の行) を返す。変換そのものが、JIS X 0208 にない文字と
+    桁あふれと記法の残りで止まる。ここでは出来たファイルを読み直して、DOS で読める形になっているかを見る"""
+    out = os.path.join(BUILD, name)
+    p = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'mkdoc.py'), os.path.join(ROOT, src),
                         os.path.join(ROOT, 'src', 'dos', 'vbm98.c'), out],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
-    err = None
     if p.returncode != 0:
-        err = '変換: %s' % p.stdout.strip()
-    else:
-        with open(out, 'rb') as f:
-            raw = f.read()
-        lines = raw.split(b'\r\n')
-        text = raw.decode('shift_jis')
-        if b'\n' in raw.replace(b'\r\n', b'') or b'\r' in raw.replace(b'\r\n', b''):
-            err = '行末が CR LF でない'
-        elif max(len(l) for l in lines) > 78:
-            err = '78 桁を越える行がある'
-        elif not lines[0].startswith(b'VirtualBareMetal98  (VBM98.EXE '):
+        return '変換: %s' % p.stdout.strip(), '', b''
+    with open(out, 'rb') as f:
+        raw = f.read()
+    lines = raw.split(b'\r\n')
+    if b'\n' in raw.replace(b'\r\n', b'') or b'\r' in raw.replace(b'\r\n', b''):
+        return '行末が CR LF でない', '', b''
+    if max(len(l) for l in lines) > 78:
+        return '78 桁を越える行がある', '', b''
+    return None, raw.decode('shift_jis'), lines[0]
+
+
+def run_doc():
+    """README.md から作る VBM98.DOC と、CHANGELOG.md から作る CHANGES.DOC (どちらもリリースの zip に入る)"""
+    err, text, head = convert_doc('README.md', 'VBM98.DOC')
+    if err is None:
+        if not head.startswith('VirtualBareMetal98  (VBM98.EXE '.encode('shift_jis')):
             err = '先頭の行に版がない'
         elif any(s not in text for s in ('-fdd0 <ファイル>', 'CTRL + GRPH + HELP', 'うまく動かないとき', '-dipsw ******')):
             err = '使い方の内容が欠けている'
         elif any(s in text for s in ('ビルドと試験', 'docs/', 'tools/build16.sh')):
             err = 'zip に入らないものへの案内が残っている'
+    failed = 0 if err is None else 1
     print('PC-98 用の文書: %s' % ('通過' if err is None else '失敗 (%s)' % err))
-    return 0 if err is None else 1
+    err, text, head = convert_doc('CHANGELOG.md', 'CHANGES.DOC')
+    if err is None:
+        if not head.startswith('変更履歴  (VBM98.EXE '.encode('shift_jis')):
+            err = '先頭の行に版がない'
+        elif 'v0.1.0（' not in text:
+            err = '最初の版の項が欠けている'
+    print('PC-98 用の変更履歴: %s' % ('通過' if err is None else '失敗 (%s)' % err))
+    return failed + (0 if err is None else 1)
 
 
 def main():

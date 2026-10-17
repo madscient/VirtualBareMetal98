@@ -256,3 +256,5 @@ ia16-elf-ld -Ttext=0x100 --oformat=binary -o "$out/CLKRD.COM" "$out/clkrd.o"
 ls -l "$out/CLKRD.COM" | awk '{print $5, "bytes  CLKRD.COM"}'
 python3 "$root/tools/mkdoc.py" "$root/README.md" "$root/src/dos/vbm98.c" "$out/VBM98.DOC"
 ls -l "$out/VBM98.DOC" | awk '{print $5, "bytes  VBM98.DOC"}'
+python3 "$root/tools/mkdoc.py" "$root/CHANGELOG.md" "$root/src/dos/vbm98.c" "$out/CHANGES.DOC"
+ls -l "$out/CHANGES.DOC" | awk '{print $5, "bytes  CHANGES.DOC"}'

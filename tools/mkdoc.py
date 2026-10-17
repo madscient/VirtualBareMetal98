@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""README.md から、PC-98 の MS-DOS で読める利用者向けの文書 (Shift-JIS、CRLF、半角 78 桁以内) を作る。
+"""README.md と CHANGELOG.md から、PC-98 の MS-DOS で読める利用者向けの文書 (Shift-JIS、CRLF、半角 78 桁以内) を作る。
 
     python tools/mkdoc.py README.md src/dos/vbm98.c build/dos/VBM98.DOC
+    python tools/mkdoc.py CHANGELOG.md src/dos/vbm98.c build/dos/CHANGES.DOC
 
-利用者向けの説明は README.md だけに書き、こちらは毎回そこから作る (2 つを手で合わせない)。
+利用者向けの説明は Markdown の側だけに書き、こちらは毎回そこから作る (2 つを手で合わせない)。
 リリースの zip に入れる文書なので、zip に入らないものへの案内 (ビルド、開発用の文書) の節は落とす。
 
 Markdown は README.md が使っている範囲だけを扱う: 見出し、段落、箇条書き、表、コードブロック、

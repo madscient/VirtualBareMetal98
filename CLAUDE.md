@@ -16,10 +16,10 @@
 | [README.md](README.md) | 利用者向け。紹介、開発状況（動くもの・まだ動かないもの）、動作環境、使い方。ビルドと文書の案内は末尾の節だけ | 不可（版の番号で語らない） |
 | [CHANGELOG.md](CHANGELOG.md) | 利用者向け。版ごとの変更と、その直しが実機で確かめられたか | 可（版ごとの変更だけ） |
 
-リリースの zip には、README.md から作る PC-98 用の文書 `VBM98.DOC`（Shift-JIS、78 桁）も入れる。`tools/mkdoc.py` が
-ビルドのたびに作るので、利用者向けの説明は README.md にだけ書く。JIS X 0208 にない文字や、変換が扱えない Markdown の
-書き方（README.md がいま使っている見出し・段落・箇条書き・表・コードブロック・行内のコードと強調とリンク以外）を
-README.md に入れると、変換が止まる（ホスト OS 上の試験で分かる）。
+リリースの zip には、README.md から作る PC-98 用の文書 `VBM98.DOC` と、CHANGELOG.md から作る `CHANGES.DOC`（どちらも
+Shift-JIS、78 桁）も入れる。`tools/mkdoc.py` がビルドのたびに作るので、利用者向けの説明は README.md と CHANGELOG.md に
+だけ書く。JIS X 0208 にない文字や、変換が扱えない Markdown の書き方（README.md がいま使っている見出し・段落・箇条書き・
+表・コードブロック・行内のコードと強調とリンク以外）を入れると、変換が止まる（ホスト OS 上の試験で分かる）。
 
 作業を始めるときは worklog.md の「再開するとき」から読む。
 仕様が確定したら spec.md の確定事項へ、見送った提案は worklog.md へ書く。
