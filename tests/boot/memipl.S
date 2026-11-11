@@ -6,7 +6,9 @@
  *   3. R=5 を 1023 バイトだけ読む (奇数長。直前の読み込みで転送バッファに残っている中身は別のもの)
  *   4. R=6 に 1023 バイトだけ書き、1024 バイトを読み返す (最後の 1 バイトは元のまま残るはず)
  *   5. R=2 を、和が変わるまで読み続ける。この間に試験が VM メニューからドライブ 0 を B に入れ替える
- *      (前の写しが残っていれば、いつまでも変わらない)
+ *      (前の写しが残っていれば、いつまでも変わらない)。毎回、読む前に BIOS ワークエリアの結果領域の ST0 を見て
+ *      OR で積む。入れ替えのあと最初の 1 回だけ、VBM98 が書いた「準備の変化」(C0h + ユニット) が見える
+ *      (読み込みが ST0 を書き直すので、それより後には残らない)
  *   6. 入れ替わったら R=4 を読む (A に書いた中身ではなく、B のものが読めるか)
  *   7. 記録を含む自分自身を R=3 に書き (入れ替わっていれば B に入る)、割り込み禁止で HLT する
  */
@@ -87,9 +89,22 @@ start:
         call    wsum
         mov     [rec_orbsum], ax
 
+        movzx   bx, byte ptr [rec_al]
+        and     bl, 3
+        shl     bx, 3
+        add     bx, 0x564
+        mov     [st0_at], bx
+
         mov     ax, 0x2000
         mov     es, ax
 poll:
+        push    es
+        xor     ax, ax
+        mov     es, ax
+        mov     bx, [st0_at]
+        mov     al, es:[bx]
+        pop     es
+        or      [rec_st0], al
         mov     bx, 1024
         mov     dl, 2
         call    rd
@@ -153,6 +168,8 @@ wsum:
         loop    1b
         ret
 
+st0_at:         .word   0
+
         .org    0x300
 rec_marker:     .ascii  "VBM98MEM"
 rec_al:         .byte   0
@@ -172,4 +189,5 @@ rec_st4:        .byte   0
 rec_tries:      .word   0
 rec_sum2:       .word   0
 rec_sum4:       .word   0
+rec_st0:        .byte   0
         .org    1024

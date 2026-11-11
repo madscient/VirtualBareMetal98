@@ -355,11 +355,13 @@ FARTEXT int __far menu_main(void)
         ch = UI_KEY_CH(k);
         if (sc == UI_SC_ESC || ch == 0x1B)
             break;
-        if (sc == UI_SC_1 || ch == '1')
-            disk_select(0);
-        else if (sc == UI_SC_2 || ch == '2')
-            disk_select(1);
-        else if (sc == UI_SC_3 || ch == '3')
+        if (sc == UI_SC_1 || ch == '1') {
+            if (disk_select(0))
+                vm_media_changed(0);
+        } else if (sc == UI_SC_2 || ch == '2') {
+            if (disk_select(1))
+                vm_media_changed(1);
+        } else if (sc == UI_SC_3 || ch == '3')
             do_shot();
         else if ((sc == UI_SC_4 || ch == '4') && confirm(T_CONFIRM_EXIT)) {
             rc = MENU_EXIT;
@@ -377,7 +379,8 @@ FARTEXT void __far menu_disk(int unit)
 {
     ui_open();
     ui_flush_keys();
-    disk_select(unit);
+    if (disk_select(unit))
+        vm_media_changed(unit);
     ui_close();
 }
 

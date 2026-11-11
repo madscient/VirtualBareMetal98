@@ -703,6 +703,20 @@ FARTEXT int __far vm_mount(int unit, const char *path, u16 index, int quiet)
     return 0;
 }
 
+/*
+ * 実物では媒体を入れ替えると FDC が準備の変化の割り込みを上げ、BIOS がその ST0 を結果領域に書く。ゲームのディスクに
+ * 入っている IO.SYS のメディアチェックはこの ST0 だけを見て、変わっていなければ INT 1Bh を呼ばずに前の媒体の
+ * バッファを使い続ける (design.md §12)。VBM98 は割り込みを起こさないので、ST0 だけを同じ値にする。
+ * 取り出しの C8h (NR も立つ) は参考実装の値で、IO.SYS はどちらでも見分け直す
+ */
+FARTEXT void __far vm_media_changed(int unit)
+{
+    u8 st0 = (u8)((fb.img[unit] ? 0xC0 : 0xC8) | unit);
+
+    g_rmw8((u32)FDB_WA_RESULT + (u32)unit * 8, st0, 0xFF);
+    log_line("VBM98: drive %d: ST0 %02X put in the guest's disk BIOS result area (the media changed)\n", unit, st0);
+}
+
 FARTEXT int __far vm_blank(int unit, const char *path, u8 kind)
 {
     static const u32 sizes[] = { 1261568UL, 655360UL, 1474560UL };

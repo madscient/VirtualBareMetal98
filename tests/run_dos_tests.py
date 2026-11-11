@@ -1970,7 +1970,7 @@ def fdmem_run(work, sub, extra, keys='01,3D,3D,3D,1C,1C,00,04,15'):
     def w(off):
         return int.from_bytes(rec[off:off + 2], 'little')
 
-    print('  %s: record %s' % (sub, rec[0x300:0x320].hex(' ')))
+    print('  %s: record %s' % (sub, rec[0x300:0x321].hex(' ')))
     checks = [
         ('batch finished, and the IPL halted and VBM98 returned to DOS',
          finished and any('halted' in l for l in log) and any('back to DOS' in l for l in log)),
@@ -1983,6 +1983,10 @@ def fdmem_run(work, sub, extra, keys='01,3D,3D,3D,1C,1C,00,04,15'):
         ('the same odd length write is in the image file', fa[5120:6144] == odd),
         ('after the image was changed from the menu, sector 2 reads as image B', rec[0x318] == 1 and w(0x31C) == word_sum(pat_b)),
         ('and the sector the guest wrote to image A reads as image B', rec[0x319] == 0 and w(0x31E) == word_sum(pat_c)),
+        # IO.SYS のメディアチェックは、この ST0 の上位 2 ビットが 11 のときだけ見分け直す (design.md §12)。
+        # 入れ替えの前の読み込みは ST0 = ユニット (0) を残すので、OR で積んだ値は C0h + ユニットちょうどになるはず
+        ("after the change, the guest saw ST0 = C0h + unit (ready changed) in the disk BIOS's result area before its next read",
+         rec[0x318] == 1 and rec[0x320] == 0xC0 | (rec[0x308] & 3)),
         ('the record went to image B, not to image A', fa[2048:3072] == bytes(1024)),
     ]
     return log, checks

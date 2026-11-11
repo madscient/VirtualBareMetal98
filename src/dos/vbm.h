@@ -259,6 +259,7 @@ u16 kbd_note(u8 sc);
 /* ---- ホスト世界の仮想マシン操作 (vbm98.c)。メニュー (menu.c) から呼ぶ ---- */
 FARTEXT int __far vm_mount(int unit, const char *path, u16 index, int quiet);   /* 0 で成功。前に入っていたイメージは閉じる。index は D88 の中のディスク (1 から。0 は 1) */
 FARTEXT void __far vm_eject(int unit);
+FARTEXT void __far vm_media_changed(int unit);   /* ゲストが動いている間にドライブの中身を変えたあとで呼ぶ */
 FARTEXT const char * __far vm_drive_name(int unit);                   /* 入っているイメージのパス (複数ディスクの D88 なら ",<番号>" 付き)。空なら "" */
 /* path の D88 に連なるディスクの名前を names (DIMG_D88_NAME バイト × max) に入れ、枚数を返す。D88 でなければ 1、開けなければ 0 */
 FARTEXT u16 __far vm_disk_list(const char *path, char *names, u16 max);
